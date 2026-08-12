@@ -199,7 +199,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {/* Screen preview */}
         <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
           <span>{bot.name}'s screen</span>
-          {phase === "local" && <span className="text-[11px]">this Mac</span>}
+          {phase === "local" && <span className="text-[11px]">this computer</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
@@ -270,19 +270,19 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
         {/* Computer source */}
         <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="text-[15px] font-medium text-ink">Runs on</div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac. "}Pick where this bot's
-            computer lives.
-          </div>
-          <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
-            {(
-              [
-                ["cloud", "Cloud box"],
-                ["local", "This Mac"],
-                ["off", "Off"],
-              ] as const
-            ).map(([mode, label], i) => (
+              <div className="text-[15px] font-medium text-ink">Runs on</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                {bot.computer ? "" : "Auto: the cloud box when one exists, else this computer. "}Pick where this
+                bot's computer lives.
+              </div>
+              <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
+                {(
+                  [
+                    ["cloud", "Cloud box"],
+                    ["local", "This computer"],
+                    ["off", "Off"],
+                  ] as const
+                ).map(([mode, label], i) => (
               <button
                 key={mode}
                 onClick={() => dispatch({ type: "updateBot", botId: bot.id, patch: { computer: mode } })}

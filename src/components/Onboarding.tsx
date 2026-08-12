@@ -15,6 +15,9 @@ type InstanceRow = {
 };
 
 const isElectron = navigator.userAgent.includes("Electron");
+// TCC permissions (the step-2 screen) only exist on macOS — Windows/Linux
+// have no equivalent grant and skip straight past it.
+const isMac = /Mac/i.test(navigator.userAgent);
 
 function StatusRow({
   ok,
@@ -59,7 +62,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .then((d) => setInstances(d.instances ?? []))
         .catch(() => setInstances([]));
     }
-    if (step === 2 && isElectron) {
+    if (step === 2 && isElectron && isMac) {
       const poll = () => window.ogb?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
@@ -128,7 +131,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="flex flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on the AI tools already on this computer — here&rsquo;s what we found.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (
@@ -163,7 +166,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
+              onClick={() => (isElectron && isMac ? setStep(2) : finish())}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue

@@ -4,6 +4,8 @@ export {};
 declare global {
   interface Window {
     ogb?: {
+      /** Renderer platform hints (darwin | win32 | linux | browser). */
+      platform?: string;
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
       speechStop(): Promise<void>;

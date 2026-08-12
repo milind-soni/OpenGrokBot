@@ -39,7 +39,9 @@ export function Composer({ bot }: { bot: Bot }) {
       setRecording(false);
       if (code === 1) {
         setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
+          bridge.platform === "win32"
+            ? "Dictation isn't available here — enable Windows Speech Recognition in Settings → Privacy & speech."
+            : "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
         );
       }
     });

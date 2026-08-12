@@ -20,11 +20,13 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
-const STANDALONE_SOCKET = path.join(
-  app.getPath("home"),
-  "Library/Caches/cua-driver/cua-driver.sock",
-);
+const IS_MAC = process.platform === "darwin";
+const INSTALLED_DRIVER = IS_MAC
+  ? "/Applications/CuaDriver.app/Contents/MacOS/cua-driver"
+  : process.env.CUA_DRIVER_PATH || "";
+const STANDALONE_SOCKET = IS_MAC
+  ? path.join(app.getPath("home"), "Library/Caches/cua-driver/cua-driver.sock")
+  : `\\\\.\\pipe\\openmausbot-cua`;
 const HOST_BUNDLE_ID = "com.openmausbot.app";
 
 let embeddedHost = null; // EmbeddedCuaDriverHost | null
@@ -36,12 +38,24 @@ export function resolveDriverBinary() {
     const bundled = path.join(process.resourcesPath, "cua-driver");
     if (fs.existsSync(bundled)) return bundled;
   }
-  if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
+  if (IS_MAC && fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
+  // Windows/Linux: try the CLI on PATH (`where cua-driver` / `which`)
+  if (!IS_MAC) {
+    const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["cua-driver"], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if (probe.status === 0 && probe.stdout.trim()) {
+      const first = probe.stdout.trim().split(/\r?\n/)[0].trim();
+      return first;
+    }
+  }
   return null;
 }
 
 function socketAlive(sockPath) {
   return new Promise((resolve) => {
+    if (!IS_MAC) return resolve(false); // named-pipe daemon support on win is niche
     if (!fs.existsSync(sockPath)) return resolve(false);
     const s = net.createConnection(sockPath);
     const done = (ok) => {
@@ -118,6 +132,7 @@ export function cuaPermissionsStatus() {
   const out = spawnSync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
   });
   try {
     return { available: true, ...JSON.parse(out.stdout) };

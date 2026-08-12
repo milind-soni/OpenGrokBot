@@ -6,6 +6,8 @@ import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IS_MAC = process.platform === "darwin";
+const IS_WIN = process.platform === "win32";
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
@@ -78,7 +80,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 function createWindow() {
@@ -89,8 +91,13 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    // macOS traffic lights / inset title bar are macOS-only concepts;
+    // Windows/Linux get the standard frame (or hidden + custom controls)
+    ...(IS_MAC
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
+      : IS_WIN
+        ? { titleBarStyle: "hidden", titleBarOverlay: { color: "#070707", symbolColor: "#fcfcfc", height: 40 } }
+        : {}),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -120,13 +127,20 @@ ipcMain.handle("screen:frame", async () => {
 });
 
 // Onboarding permission checks. Status reads are free; the mic request
-// pops the real TCC prompt attributed to the app. Screen Recording has no
-// programmatic request — the first desktopCapturer call prompts.
-ipcMain.handle("perm:status", () => ({
-  mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
-  screen: systemPreferences.getMediaAccessStatus?.("screen") ?? "unknown",
-}));
+// pops the real TCC prompt attributed to the app (macOS). Screen Recording
+// has no programmatic request — the first desktopCapturer call prompts.
+// On Windows there is no TCC — these resolve to "unknown"/no-op so the
+// renderer's permission step simply collapses to "not applicable".
+ipcMain.handle("perm:status", () => {
+  if (!IS_MAC) return { mic: "unknown", screen: "unknown", platform: process.platform };
+  return {
+    mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
+    screen: systemPreferences.getMediaAccessStatus?.("screen") ?? "unknown",
+    platform: process.platform,
+  };
+});
 ipcMain.handle("perm:request-mic", async () => {
+  if (!IS_MAC) return true; // Windows: mic is granted implicitly at getUserMedia time
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch {
@@ -142,6 +156,7 @@ const PERM_HELPER = app.isPackaged
   ? path.join(process.resourcesPath, "perm-helper")
   : path.join(__dirname, "resources", "perm-helper");
 ipcMain.handle("perm:request-screen", async () => {
+  if (!IS_MAC) return "unknown"; // desktopCapturer on Windows needs no grant
   // CGRequestScreenCaptureAccess via the helper — registers the app in the
   // pane and shows the system dialog; child inherits the app's TCC identity
   await new Promise((resolve) => {
@@ -151,16 +166,28 @@ ipcMain.handle("perm:request-screen", async () => {
 });
 
 // macOS never re-prompts a denied permission — the only path is System
-// Settings; deep-link straight to the right privacy pane.
+// Settings; deep-link straight to the right privacy pane. On Windows we
+// open the equivalent Settings page (or no-op — there's no TCC).
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  const panes = {
-    mic: "Privacy_Microphone",
-    screen: "Privacy_ScreenCapture",
-    speech: "Privacy_SpeechRecognition",
-  };
-  return shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
-  );
+  if (IS_MAC) {
+    const panes = {
+      mic: "Privacy_Microphone",
+      screen: "Privacy_ScreenCapture",
+      speech: "Privacy_SpeechRecognition",
+    };
+    return shell.openExternal(
+      `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
+    );
+  }
+  if (IS_WIN) {
+    const pages = {
+      mic: "ms-settings:privacy-microphone",
+      screen: "ms-settings:privacy-broadcasting",
+      speech: "ms-settings:privacy-speechtyping",
+    };
+    return shell.openExternal(pages[pane] ?? "ms-settings:privacy");
+  }
+  return null;
 });
 
 ipcMain.handle("speech:start", (event) => {
@@ -171,10 +198,11 @@ ipcMain.handle("speech:stop", () => stopSpeech());
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
-  // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
-  // inside the app's own processes — the one capture path macOS reliably
-  // attributes to the app (registers it in the Screen Recording pane and
-  // prompts). Used by the onboarding "Enable screen preview" button.
+  // getDisplayMedia in the renderer → this handler → ScreenCaptureKit (mac)
+  // or the equivalent capture path (win), all inside the app's own
+  // processes — the capture path macOS reliably attributes to the app
+  // (registers it in the Screen Recording pane and prompts). Used by the
+  // onboarding "Enable screen preview" button.
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       desktopCapturer

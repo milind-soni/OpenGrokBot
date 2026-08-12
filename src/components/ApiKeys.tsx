@@ -6,18 +6,34 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "composio" | "composioApi" | "box" | "ollamaUrl" | "ollamaApiKey";
 
-const SECTIONS: Record<
-  ConfigSection,
-  { body: (value: string) => unknown; flag: (config: ConfigStatus) => boolean }
-> = {
+interface SectionDef {
+  body: (value: string) => unknown;
+  flag: (config: ConfigStatus) => boolean;
+  /** When true, the input is a plain text field (URL), not a password. */
+  plaintext?: boolean;
+  /** A non-secret value echoed back by the server (e.g. the URL). */
+  displayValue?: (config: ConfigStatus) => string | undefined;
+}
+
+const SECTIONS: Record<ConfigSection, SectionDef> = {
   composio: { body: (v) => ({ composio: { key: v } }), flag: (c) => c.composio.configured },
   composioApi: {
     body: (v) => ({ composio: { apiKey: v } }),
     flag: (c) => c.composio.apiKeyConfigured ?? false,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
+  ollamaUrl: {
+    body: (v) => ({ ollama: { url: v } }),
+    flag: (c) => c.ollama?.configured ?? false,
+    plaintext: true,
+    displayValue: (c) => c.ollama?.url,
+  },
+  ollamaApiKey: {
+    body: (v) => ({ ollama: { apiKey: v } }),
+    flag: (c) => Boolean(c.ollama?.configured && c.ollama?.url && c.ollama?.url !== "http://127.0.0.1:11434"),
+  },
 };
 
 export function ApiKeyRow({
@@ -33,11 +49,13 @@ export function ApiKeyRow({
   onSaved?: (configured: boolean) => void;
 }) {
   const { state, dispatch } = useStore();
+  const def = SECTIONS[section];
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const configured = state.config ? SECTIONS[section].flag(state.config) : false;
+  const configured = state.config ? def.flag(state.config) : false;
+  const displayVal = def.displayValue?.(state.config ?? {} as ConfigStatus);
   const clearing = !value.trim() && configured;
 
   const save = () => {
@@ -46,12 +64,12 @@ export function ApiKeyRow({
     setError(null);
     api("/api/config", {
       method: "PUT",
-      body: JSON.stringify(SECTIONS[section].body(value.trim())),
+      body: JSON.stringify(def.body(value.trim())),
     })
       .then((status: ConfigStatus) => {
         dispatch({ type: "configStatus", config: status });
         setValue("");
-        onSaved?.(SECTIONS[section].flag(status));
+        onSaved?.(def.flag(status));
       })
       .catch((e) => setError(e.message))
       .finally(() => setSaving(false));
@@ -63,14 +81,23 @@ export function ApiKeyRow({
         <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
         {label}
         {configured && <span className="text-[11px] text-success">Connected</span>}
+        {def.plaintext && displayVal && (
+          <span className="text-[11px] text-ink-secondary/70 truncate">{displayVal}</span>
+        )}
       </div>
       <div className="flex gap-2">
         <input
-          type="password"
+          type={def.plaintext ? "text" : "password"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && save()}
-          placeholder={configured ? "••••••••  (paste to replace)" : placeholder}
+          placeholder={
+            def.plaintext && displayVal
+              ? displayVal
+              : configured
+                ? "••••••••  (paste to replace)"
+                : placeholder
+          }
           autoComplete="off"
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />

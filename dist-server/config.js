@@ -1,5 +1,6 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//     "ollama": {"url":"http://127.0.0.1:11434"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -33,6 +34,7 @@ export function loadConfig() {
     cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
     cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
     cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+    cfg.ollama = { url: process.env.OLLAMA_URL, apiKey: process.env.OLLAMA_API_KEY, ...cfg.ollama };
     return cfg;
 }
 /** Merge a partial config into ~/.openmausbot/config.json (secrets never
@@ -46,7 +48,7 @@ export function saveConfig(patch) {
     catch {
         /* first write */
     }
-    for (const key of ["xai", "composio", "box", "profile"]) {
+    for (const key of ["xai", "composio", "box", "ollama", "profile"]) {
         if (patch[key] && typeof patch[key] === "object") {
             disk[key] = { ...disk[key], ...patch[key] };
         }
@@ -68,6 +70,7 @@ export function instanceConfigs(cfg) {
     const map = cfg.instances && Object.keys(cfg.instances).length
         ? cfg.instances
         : {
+            ollama: { driver: "ollama" },
             grok: { driver: "grokAgent" },
             gemini: { driver: "geminiAgent" },
             claude: { driver: "claudeAgent" },
@@ -78,8 +81,13 @@ export function instanceConfigs(cfg) {
         entry.environment = {
             ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
             ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
+            ...(cfg.ollama?.apiKey ? { OLLAMA_API_KEY: cfg.ollama.apiKey } : {}),
             ...entry.environment,
         };
+        // Inject Ollama URL into the ollama instance's config
+        if (entry.driver === "ollama" && cfg.ollama?.url) {
+            entry.config = { ...(entry.config ?? {}), url: cfg.ollama.url };
+        }
     }
     return map;
 }

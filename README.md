@@ -14,7 +14,7 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![Electron](https://img.shields.io/badge/Electron-macOS-2B2E3A?logo=electron&logoColor=9FEAF9)
+![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
 ![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
 
@@ -175,7 +175,10 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
+Requirements: **macOS** or **Windows**, **Node 24+**, **pnpm**, and at least one provider —
+local **[Ollama](https://ollama.com)** (`ollama serve`), or the [`claude`](https://claude.com/claude-code),
+[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) CLIs — installed and logged in. They appear
+in the model picker automatically. — [`claude`](https://claude.com/claude-code),
 [`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
 in the model picker automatically.
 
@@ -183,6 +186,7 @@ Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
 | Key | Unlocks |
 |---|---|
+| Ollama URL (default `http://127.0.0.1:11434`) | Local LLM models — anything you've pulled with `ollama pull` |
 | Composio Connect key (`ck_…`) | The connected-apps marketplace |
 | Composio API key (`ak_…`) | The full 500+ app catalog with official logos |
 | Box token ([box.ascii.dev](https://box.ascii.dev)) | Cloud computers for your bots |

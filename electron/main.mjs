@@ -5,11 +5,13 @@ import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isMac = process.platform === "darwin";
+const isWin = process.platform === "win32";
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
-const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+const APP_ICON = path.join(__dirname, "resources", "app-icon.png");
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -77,7 +79,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 function createWindow() {
@@ -88,8 +90,11 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    // macOS: hidden traffic lights for a clean look; other platforms use
+    // the standard OS title bar
+    ...(isMac
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
+      : { titleBarStyle: "default" }),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -108,8 +113,8 @@ function createWindow() {
   }
 }
 
-// "This Mac" screen preview — served from the main process so the Screen
-// Recording permission prompt attributes to the app, never the server
+// "This machine" screen preview — served from the main process so the
+// permission prompt attributes to the app, never the server
 ipcMain.handle("screen:frame", async () => {
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
@@ -118,43 +123,46 @@ ipcMain.handle("screen:frame", async () => {
   return sources[0]?.thumbnail.toDataURL() ?? null;
 });
 
-// Onboarding permission checks. Status reads are free; the mic request
-// pops the real TCC prompt attributed to the app.
-//
-// Screen Recording deliberately has NO request path here. On macOS 15+
-// every pre-grant mechanism is broken: getMediaAccessStatus("screen")
-// wraps CGPreflightScreenCaptureAccess, which caches per-process (stays
-// "denied" for the whole session after the user grants); a helper child
-// binary gets TCC-attributed to ITSELF on macOS 26, not the app, and
-// plain executables no longer appear in the Settings pane at all; and
-// Sequoia+ re-prompts periodically regardless, so a pre-grant expires.
-// The one reliable path is the first real in-process capture
-// (screen:frame above / getDisplayMedia via the handler below) — macOS
-// prompts then, attributed correctly, at the moment of actual use. The
-// perm:open-settings deep link stays as the repair path for denials.
-ipcMain.handle("perm:status", () => ({
-  mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
-}));
-ipcMain.handle("perm:request-mic", async () => {
-  try {
-    return await systemPreferences.askForMediaAccess("microphone");
-  } catch {
-    return false;
-  }
-});
-
-// macOS never re-prompts a denied permission — the only path is System
-// Settings; deep-link straight to the right privacy pane.
-ipcMain.handle("perm:open-settings", (_event, pane) => {
-  const panes = {
-    mic: "Privacy_Microphone",
-    screen: "Privacy_ScreenCapture",
-    speech: "Privacy_SpeechRecognition",
-  };
-  return shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
-  );
-});
+// ── Platform-specific permission handling ──────────────────────────────
+// Onboarding permission checks. On macOS, status reads are free; the mic
+// request pops the real TCC prompt attributed to the app.
+// On Windows/Linux these are no-ops (no TCC equivalent).
+if (isMac) {
+  ipcMain.handle("perm:status", () => ({
+    mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
+  }));
+  ipcMain.handle("perm:request-mic", async () => {
+    try {
+      return await systemPreferences.askForMediaAccess("microphone");
+    } catch {
+      return false;
+    }
+  });
+  // macOS never re-prompts a denied permission — the only path is System
+  // Settings; deep-link straight to the right privacy pane.
+  ipcMain.handle("perm:open-settings", (_event, pane) => {
+    const panes = {
+      mic: "Privacy_Microphone",
+      screen: "Privacy_ScreenCapture",
+      speech: "Privacy_SpeechRecognition",
+    };
+    return shell.openExternal(
+      `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
+    );
+  });
+} else {
+  // Windows / Linux: no TCC prompts; always report "granted" so onboarding
+  // doesn't block. Screen capture works without special permission on
+  // Windows; on Linux it depends on the compositor but we don't gate it.
+  ipcMain.handle("perm:status", () => ({ mic: "granted" }));
+  ipcMain.handle("perm:request-mic", async () => true);
+  ipcMain.handle("perm:open-settings", async (_event, _pane) => {
+    // Open Windows Settings privacy section
+    if (isWin) {
+      shell.openExternal("ms-settings:privacy-microphone");
+    }
+  });
+}
 
 ipcMain.handle("speech:start", (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -163,20 +171,22 @@ ipcMain.handle("speech:start", (event) => {
 ipcMain.handle("speech:stop", () => stopSpeech());
 
 app.whenReady().then(async () => {
-  if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
-  // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
-  // inside the app's own processes — the one capture path macOS reliably
-  // attributes to the app (registers it in the Screen Recording pane and
-  // prompts). Used by the onboarding "Enable screen preview" button.
-  session.defaultSession.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      desktopCapturer
-        .getSources({ types: ["screen"] })
-        .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
-        .catch(() => callback({}));
-    },
-    { useSystemPicker: false },
-  );
+  if (isMac) app.dock.setIcon(APP_ICON);
+  // getDisplayMedia in the renderer → this handler → screen capture, all
+  // inside the app's own processes. On macOS this uses ScreenCaptureKit
+  // (the one capture path macOS reliably attributes to the app). On
+  // Windows this uses desktopCapturer directly.
+  if (isMac) {
+    session.defaultSession.setDisplayMediaRequestHandler(
+      (_request, callback) => {
+        desktopCapturer
+          .getSources({ types: ["screen"] })
+          .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
+          .catch(() => callback({}));
+      },
+      { useSystemPicker: false },
+    );
+  }
   registerCuaIpc();
   // Start the CUA daemon before the window so the harness can pick up the
   // connection descriptor on first render. Never blocks window creation on
@@ -190,6 +200,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // macOS: keep running; Windows/Linux: quit
   if (process.platform !== "darwin") app.quit();
 });
 

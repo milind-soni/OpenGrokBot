@@ -2,11 +2,17 @@
 // from HERE (never the harness server) so the Microphone + Speech
 // Recognition permission prompts attribute to the app. Compiled lazily on
 // first use; each recording session is one helper process.
+//
+// On non-macOS platforms this is a no-op — the Swift SFSpeechRecognizer
+// API only exists on macOS. Windows could use the Web Speech API in the
+// renderer instead, but that's a future enhancement.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+
+const isMac = process.platform === "darwin";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, "resources", "speech-helper.swift");
@@ -20,6 +26,7 @@ let child = null;
 
 function ensureBuilt() {
   if (app.isPackaged) return; // pre-built at package time
+  if (!isMac) return; // Swift helper only exists on macOS
   const stale = !existsSync(BIN) || statSync(BIN).mtimeMs < statSync(SRC).mtimeMs;
   if (!stale) return;
   // Xcode CLT required; ~2s once, then cached until the source changes
@@ -27,8 +34,21 @@ function ensureBuilt() {
 }
 
 export function startSpeech(win) {
+  if (!isMac) {
+    // No native speech recognition on this platform — inform the renderer
+    if (!win.isDestroyed()) {
+      win.webContents.send("speech:end", { code: 0, reason: "Speech recognition is only available on macOS" });
+    }
+    return;
+  }
   stopSpeech();
   ensureBuilt();
+  if (!existsSync(BIN)) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("speech:end", { code: 1, error: "Speech helper not built — requires Xcode Command Line Tools" });
+    }
+    return;
+  }
   const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
   child = proc;
 

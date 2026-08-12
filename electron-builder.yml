@@ -26,6 +26,7 @@ extraResources:
     to: server
   - from: electron/resources/speech-helper
     to: speech-helper
+    filter: ["**"]  # only exists on macOS builds; harmless if absent
 
 mac:
   target:
@@ -49,3 +50,19 @@ mac:
 dmg:
   sign: true
   artifactName: OpenMausBot-${version}.dmg
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+  icon: build/icon-1024.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: OpenMausBot-Setup-${version}-${arch}.${ext}
+  shortcutName: OpenMausBot
+  uninstallDisplayName: OpenMausBot

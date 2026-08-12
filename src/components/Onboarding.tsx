@@ -91,9 +91,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   };
 
   const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
+  const ollama = byKind("ollama");
   const claude = byKind("claudeAgent");
   const codex = byKind("codex");
   const grok = byKind("grokAgent");
+  const isMac = navigator.platform.toLowerCase().includes("mac");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
@@ -145,7 +147,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="flex flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on the AI tools already on this machine — here&rsquo;s what we found.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (
@@ -154,6 +156,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 </div>
               ) : (
                 <>
+                  <StatusRow
+                    ok={ollama?.snapshot.state === "available"}
+                    warn
+                    title={`Ollama ${ollama?.snapshot.version ? `· ${ollama.snapshot.version}` : ""}`}
+                    detail={
+                      ollama?.snapshot.state === "available"
+                        ? "Running — local models available for your bots."
+                        : "Not running. Start it with `ollama serve` or download from ollama.com"
+                    }
+                  />
                   <StatusRow
                     ok={claude?.snapshot.state === "available"}
                     warn
@@ -192,7 +204,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
+              onClick={() => (isElectron && isMac ? setStep(2) : finish())}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue

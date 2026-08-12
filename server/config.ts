@@ -1,5 +1,6 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//     "ollama": {"url":"http://127.0.0.1:11434"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,6 +15,9 @@ export interface AppConfig {
    * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
+  /** Ollama endpoint — defaults to http://127.0.0.1:11434. An optional
+   * apiKey supports remote/proxied Ollama instances. */
+  ollama?: { url?: string; apiKey?: string };
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
@@ -48,6 +52,7 @@ export function loadConfig(): AppConfig {
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+  cfg.ollama = { url: process.env.OLLAMA_URL, apiKey: process.env.OLLAMA_API_KEY, ...cfg.ollama };
   return cfg;
 }
 
@@ -61,7 +66,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "ollama", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -85,6 +90,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances
       : {
+          ollama: { driver: "ollama" },
           grok: { driver: "grokAgent" },
           gemini: { driver: "geminiAgent" },
           claude: { driver: "claudeAgent" },
@@ -95,8 +101,13 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
+      ...(cfg.ollama?.apiKey ? { OLLAMA_API_KEY: cfg.ollama.apiKey } : {}),
       ...entry.environment,
     };
+    // Inject Ollama URL into the ollama instance's config
+    if (entry.driver === "ollama" && cfg.ollama?.url) {
+      entry.config = { ...((entry.config as object) ?? {}), url: cfg.ollama.url };
+    }
   }
   return map;
 }

@@ -1,6 +1,6 @@
 // The bot's computer, in the right-side slot. Where it runs decides the
 // whole flow: cloud → provision the box on open (idempotent) and preview
-// via SSE frames or a ~4s screenshot poll; local ("This Mac") → frames
+// via SSE frames or a ~4s screenshot poll; local ("This computer") → frames
 // come from the Electron main process (desktopCapturer over the preload
 // bridge — box endpoints are never touched); off → parked. Auto (unset)
 // prefers the cloud box when one exists, else local inside the app.
@@ -205,7 +205,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {/* Screen preview */}
         <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
           <span>{bot.name}'s screen</span>
-          {phase === "local" && <span className="text-[11px]">this Mac</span>}
+          {phase === "local" && <span className="text-[11px]">this computer</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
@@ -225,7 +225,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   : phase === "local"
                     ? localMisses >= 3
                       ? "No frames yet — the preview needs Screen Recording permission. After granting, relaunch the app (macOS applies it on next launch)."
-                      : "Capturing this Mac's screen…"
+                      : "Capturing this computer's screen…"
                     : emptyState[phase]}
               </span>
               {phase === "local" && localMisses >= 3 && (
@@ -288,14 +288,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Runs on</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac. "}Pick where this bot's
+            {bot.computer ? "" : "Auto: the cloud box when one exists, else this computer. "}Pick where this bot's
             computer lives.
           </div>
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
             {(
               [
                 ["cloud", "Cloud box"],
-                ["local", "This Mac"],
+                ["local", "This computer"],
                 ["off", "Off"],
               ] as const
             ).map(([mode, label], i) => (

@@ -92,6 +92,10 @@ function askSummary(ask: Ask): string {
 
 function permissionSocketPath(threadId: string) {
   const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
+  if (process.platform === "win32") {
+    // Windows named pipes use the \\.\pipe\ namespace
+    return `\\\\.\\pipe\\openmausbot-perm-${tag}`;
+  }
   return join(DATA_DIR, `perm-${tag}.sock`);
 }
 

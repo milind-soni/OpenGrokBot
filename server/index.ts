@@ -105,7 +105,8 @@ function askBotAndWait(targetBotId: string, message: string, depth: number): Pro
 async function defaultSelection() {
   const described = await registry.describe();
   const available = described.filter((d) => d.snapshot.state === "available");
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0] ?? described[0];
+  const pick = available.find((d) => d.driverKind === "ollama") ??
+    available.find((d) => d.driverKind === "claudeAgent") ?? available[0] ?? described[0];
   return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
@@ -263,14 +264,25 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
-// Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/OpenMausBot/cua-connection.json). Read
-// fresh each turn — Electron may restart or permissions may change.
+// Local computer-use contract written by Electron main on startup.
+// On macOS: ~/Library/Application Support/OpenMausBot/cua-connection.json
+// On Windows: %APPDATA%/OpenMausBot/cua-connection.json
+// Read fresh each turn — Electron may restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
-  // new name first; pre-rename desktop builds used the old directory
-  for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+  const appDataDirs: string[] = [];
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
+    for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+      appDataDirs.push(join(appData, dir));
+    }
+  } else {
+    for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+      appDataDirs.push(join(homedir(), "Library", "Application Support", dir));
+    }
+  }
+  for (const dir of appDataDirs) {
     try {
-      const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
+      const p = join(dir, "cua-connection.json");
       const conn = JSON.parse(readFileSync(p, "utf8"));
       if (!conn || conn.mode === "unavailable" || !conn.mcpCommand) continue;
       return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
@@ -410,6 +422,7 @@ function configStatus() {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
+    ollama: { configured: Boolean(cfg.ollama?.url), url: cfg.ollama?.url ?? "http://127.0.0.1:11434" },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
   };
@@ -627,7 +640,7 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "profile"] as const) {
+      for (const key of ["xai", "composio", "box", "ollama", "profile"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });

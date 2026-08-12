@@ -13,12 +13,18 @@
 //
 // The resulting connection descriptor is written to
 // <userData>/cua-connection.json for the harness server to hand to drivers.
+//
+// On non-macOS platforms (Windows/Linux) the CUA driver is not available —
+// local computer use degrades to "unavailable" and the rest of the app
+// works normally.
 
 import { app, ipcMain } from "electron";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+
+const isMac = process.platform === "darwin";
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -36,7 +42,7 @@ export function resolveDriverBinary() {
     const bundled = path.join(process.resourcesPath, "cua-driver");
     if (fs.existsSync(bundled)) return bundled;
   }
-  if (fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
+  if (isMac && fs.existsSync(INSTALLED_DRIVER)) return INSTALLED_DRIVER;
   return null;
 }
 
@@ -70,6 +76,19 @@ async function startEmbedded(binary) {
 }
 
 export async function startCua() {
+  // Non-macOS: CUA driver is macOS-only (TCC, ScreenCaptureKit, etc.)
+  if (!isMac) {
+    connection = {
+      mode: "unavailable",
+      reason: "Local computer use (CUA) is currently only available on macOS",
+    };
+    fs.writeFileSync(
+      path.join(app.getPath("userData"), "cua-connection.json"),
+      JSON.stringify(connection, null, 2),
+    );
+    return connection;
+  }
+
   const binary = resolveDriverBinary();
   if (!binary) {
     connection = { mode: "unavailable", reason: "cua-driver binary not found" };
@@ -140,5 +159,8 @@ export async function stopCua() {
 
 export function registerCuaIpc() {
   ipcMain.handle("cua:connection", () => connection);
-  ipcMain.handle("cua:permissions", () => cuaPermissionsStatus());
+  ipcMain.handle("cua:permissions", () => {
+    if (!isMac) return { available: false };
+    return cuaPermissionsStatus();
+  });
 }

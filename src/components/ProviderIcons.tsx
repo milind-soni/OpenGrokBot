@@ -36,6 +36,16 @@ export function ComputerMark({ size = 16, className }: IconProps) {
   return <Monitor size={size} className={cn("text-ink-secondary", className)} />;
 }
 
+
+export function OllamaMark({ size = 16, className }: IconProps) {
+  // Stylized llama silhouette — represents local LLMs
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={cn("fill-[#c2a782]", className)} aria-label="Ollama">
+      <path d="M12 2C8.5 2 6 4.5 6 8c0 1.5.5 2.8 1.3 3.8L6 14c-1.5 0-3 1.5-3 3.5S4.5 21 6 21s2-1 2-2.5V17l1.5-1c.8.5 1.6.8 2.5.8s1.7-.3 2.5-.8L16 17v1.5c0 1.5.5 2.5 2 2.5s3-1.5 3-3.5S19.5 14 18 14l-1.3-2.2C17.5 10.8 18 9.5 18 8c0-3.5-2.5-6-6-6zm0 2c2.2 0 4 1.8 4 4 0 .8-.2 1.5-.6 2.1l-.4.6.3.5L16.5 12c-.7-.6-1.5-1-2.5-1s-1.8.4-2.5 1l-1.2-2.8.3-.5-.4-.6C10.2 9.5 10 8.8 10 8c0-2.2 1.8-4 4-4zm-1.5 3.5c-.3 0-.5.2-.5.5s.2.5.5.5.5-.2.5-.5-.2-.5-.5-.5zm3 0c-.3 0-.5.2-.5.5s.2.5.5.5.5-.2.5-.5-.2-.5-.5-.5z"/>
+    </svg>
+  );
+}
+
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
     case "grok":
@@ -45,6 +55,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <ClaudeMark size={size} className={className} />;
     case "codex":
       return <CodexMark size={size} className={className} />;
+    case "ollama":
+      return <OllamaMark size={size} className={className} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
     default:

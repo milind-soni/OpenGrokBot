@@ -38,8 +38,7 @@ function ProfileFields() {
       <input
         type="email"
         value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        onBlur={save}
+        onChange={(e) => setEmail(e.target.value)} onBlur={save}
         placeholder="you@example.com"
         className={inputClass}
       />
@@ -69,6 +68,23 @@ export function AppSettingsPanel() {
           <div className="mt-0.5 text-[13px] text-ink-secondary">Shown in the sidebar. Saved as you go.</div>
           <div className="mt-4">
             <ProfileFields />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl bg-card p-4">
+          <div className="text-[15px] font-medium text-ink">Ollama (Local LLM)</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            Connect to a local or remote Ollama instance. Default is{" "}
+            <code className="text-[12px] text-ink-secondary/80">http://127.0.0.1:11434</code>.
+            Models you've pulled appear automatically in the model picker.
+          </div>
+          <div className="mt-4 flex flex-col gap-4">
+            <ApiKeyRow section="ollamaUrl" label="Ollama URL" placeholder="http://127.0.0.1:11434" />
+            <ApiKeyRow
+              section="ollamaApiKey"
+              label="Ollama API key (optional, for remote instances)"
+              placeholder="Bearer token for proxied Ollama"
+            />
           </div>
         </div>
 

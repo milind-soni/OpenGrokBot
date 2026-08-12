@@ -8,14 +8,13 @@
 //   - Composio Connect (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isWindows, execFileCli, killProcessTree, spawnCli } from "../cli-util.ts";
 import { DATA_DIR } from "../config.ts";
 
 import type {
@@ -91,7 +90,10 @@ function askSummary(ask: Ask): string {
 
 function permissionSocketPath(threadId: string) {
   const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-  return join(DATA_DIR, `perm-${tag}.sock`);
+  // Windows can't bind a unix socket at a filesystem path — named pipes it is
+  return isWindows
+    ? `\\\\.\\pipe\\openmausbot-perm-${tag}`
+    : join(DATA_DIR, `perm-${tag}.sock`);
 }
 
 function createPermissionBroker(opts: {
@@ -310,7 +312,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       delete env.CLAUDECODE;
       delete env.CLAUDE_CODE_ENTRYPOINT;
 
-      const child = spawn(config.cli, args, {
+      const child = spawnCli(config.cli, args, {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
@@ -412,7 +414,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
 
       const stop = () => {
         try {
-          process.kill(-child.pid!, "SIGTERM");
+          if (child.pid) killProcessTree(child.pid);
         } catch {
           try {
             child.kill("SIGTERM");
@@ -433,7 +435,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
       const version = await new Promise<string | null>((resolve) => {
-        execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) =>
+        execFileCli(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
@@ -473,10 +475,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       },
       generateText: (prompt: string) =>
         new Promise((resolve, reject) => {
-          execFile(
+          execFileCli(
             config.cli,
             ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"],
-            { timeout: 60_000, env: { ...process.env } },
+            { timeout: 60_000 },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
           );
         }),

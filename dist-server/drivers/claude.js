@@ -8,13 +8,12 @@
 //   - Composio Connect (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isWindows, execFileCli, killProcessTree, spawnCli } from "../cli-util.js";
 import { DATA_DIR } from "../config.js";
 import { newEventId, newId } from "../contracts.js";
 import { appendNative } from "./native.js";
@@ -56,7 +55,10 @@ function askSummary(ask) {
 }
 function permissionSocketPath(threadId) {
     const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-    return join(DATA_DIR, `perm-${tag}.sock`);
+    // Windows can't bind a unix socket at a filesystem path — named pipes it is
+    return isWindows
+        ? `\\\\.\\pipe\\openmausbot-perm-${tag}`
+        : join(DATA_DIR, `perm-${tag}.sock`);
 }
 function createPermissionBroker(opts) {
     const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
@@ -272,7 +274,7 @@ export const ClaudeDriver = {
             delete env.ANTHROPIC_API_KEY;
             delete env.CLAUDECODE;
             delete env.CLAUDE_CODE_ENTRYPOINT;
-            const child = spawn(config.cli, args, {
+            const child = spawnCli(config.cli, args, {
                 cwd: turn.cwd ?? homedir(),
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -372,7 +374,8 @@ export const ClaudeDriver = {
             });
             const stop = () => {
                 try {
-                    process.kill(-child.pid, "SIGTERM");
+                    if (child.pid)
+                        killProcessTree(child.pid);
                 }
                 catch {
                     try {
@@ -392,7 +395,7 @@ export const ClaudeDriver = {
         };
         const snapshot = async () => {
             const version = await new Promise((resolve) => {
-                execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
+                execFileCli(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
             });
             if (!version)
                 return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
@@ -431,7 +434,7 @@ export const ClaudeDriver = {
                 },
             },
             generateText: (prompt) => new Promise((resolve, reject) => {
-                execFile(config.cli, ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"], { timeout: 60_000, env: { ...process.env } }, (err, stdout) => (err ? reject(err) : resolve(stdout.trim())));
+                execFileCli(config.cli, ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"], { timeout: 60_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout.trim())));
             }),
             dispose: async () => {
                 for (const { stop } of active.values())

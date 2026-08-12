@@ -9,8 +9,9 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
+
+import { execFileCli, killProcessTree, spawnCli } from "../cli-util.ts";
 
 import type {
   DriverCreateInput,
@@ -91,7 +92,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const child = spawn(config.cli, ["app-server"], {
+      const child = spawnCli(config.cli, ["app-server"], {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
@@ -118,7 +119,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const stop = () => {
         try {
-          process.kill(-child.pid!, "SIGTERM");
+          if (child.pid) killProcessTree(child.pid);
         } catch {
           try {
             child.kill("SIGTERM");
@@ -358,7 +359,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
       const version = await new Promise<string | null>((resolve) => {
-        execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) =>
+        execFileCli(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });

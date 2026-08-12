@@ -12,9 +12,11 @@
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "build:server": "tsc -p tsconfig.server.build.json",
-    "build:speech": "swiftc -O electron/resources/speech-helper.swift -o electron/resources/speech-helper",
+    "build:speech": "node scripts/build-native.mjs speech",
+    "build:perm": "node scripts/build-native.mjs perm",
     "package": "pnpm build && pnpm build:server && pnpm build:speech && pnpm build:perm && electron-builder --mac --publish never",
-    "build:perm": "swiftc -O electron/resources/perm-helper.swift -o electron/resources/perm-helper"
+    "package:win": "pnpm build && pnpm build:server && electron-builder --win --publish never",
+    "make:ico": "powershell -NoProfile -ExecutionPolicy Bypass -File build/make-ico.ps1"
   },
   "dependencies": {
     "@trycua/cua-driver": "^0.19.3",

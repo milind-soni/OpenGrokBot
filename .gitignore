@@ -5,4 +5,6 @@ dist-electron
 .DS_Store
 *.tsbuildinfo
 electron/resources/speech-helper
+electron/resources/perm-helper
+build/icon.ico
 release

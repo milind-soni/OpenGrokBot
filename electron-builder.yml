@@ -25,10 +25,6 @@ extraResources:
     to: ui
   - from: dist-server
     to: server
-  - from: electron/resources/speech-helper
-    to: speech-helper
-  - from: electron/resources/perm-helper
-    to: perm-helper
 
 mac:
   target:
@@ -45,9 +41,38 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
+  # The Swift speech + screen-permission helpers are macOS-only — ship them
+  # only on macOS, where they were compiled (never a signed bundle written
+  # into, so they're pre-built at package time).
+  extraResources:
+    - from: electron/resources/speech-helper
+      to: speech-helper
+    - from: electron/resources/perm-helper
+      to: perm-helper
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  icon: build/icon.ico
+  # Windows dictation runs from the bundled PowerShell helper (no compile).
+  extraResources:
+    - from: electron/resources/speech-helper.ps1
+      to: speech-helper.ps1
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OpenMausBot
 
 dmg:
   sign: true

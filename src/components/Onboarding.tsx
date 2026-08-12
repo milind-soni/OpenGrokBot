@@ -100,7 +100,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
         {step === 0 && (
           <div className="flex flex-col items-center">
-            <MausAvatar color="green" expression="friendly" size={72} />
+            <MausAvatar color="green" state="happy" size={72} />
             <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to OpenMausBot</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
               Bots that do real work on their own computer. Tell us who you are

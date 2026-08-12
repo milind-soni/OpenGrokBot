@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { useStore, formatTime, type Bot } from "@/state/store";
 import { MausAvatar, InitialsAvatar } from "./Avatar";
-import { expressionForBot } from "@/lib/mascot";
+import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 
 const isElectron = navigator.userAgent.includes("Electron");
@@ -164,8 +164,8 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
     >
       <MausAvatar
         color={bot.color}
-        expression={expressionForBot(bot)}
-        size={44}
+        state={stateForBot(bot)}
+        size={56}
         motion={mascotMotion?.kind ?? "none"}
         motionKey={mascotMotion?.nonce ?? 0}
       />

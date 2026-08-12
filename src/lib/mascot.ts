@@ -1,3 +1,8 @@
+import { MAUS_STATES, STATE_GROUPS, type MausState } from "@/lib/maus-engine";
+
+export { MAUS_STATES, STATE_GROUPS };
+export type { MausState };
+
 export const MAUS_COLOR_NAMES = [
   "green",
   "blue",
@@ -26,21 +31,6 @@ export const MAUS_COLORS: Record<MausColor, string> = {
   coral: "#E5634E",
 };
 
-export const MAUS_EXPRESSIONS = [
-  "deadpan",
-  "friendly",
-  "focused",
-  "thinking",
-  "excited",
-  "sleepy",
-  "surprised",
-  "skeptical",
-  "worried",
-  "mischievous",
-] as const;
-
-export type MausExpression = (typeof MAUS_EXPRESSIONS)[number];
-
 export const MAUS_MOTIONS = [
   "arrive",
   "switch",
@@ -58,6 +48,60 @@ export const MAUS_MOTIONS = [
 
 export type MausMotion = "none" | (typeof MAUS_MOTIONS)[number];
 
+/**
+ * The face used to be ten hand-drawn SVGs; it is now the engine's 39 states.
+ * Bots saved under the old vocabulary still carry one of these ten names, so
+ * they are translated on read rather than migrated in place — a bot's stored
+ * face should survive a downgrade too.
+ */
+const LEGACY_STATES: Record<string, MausState> = {
+  deadpan: "idle",
+  friendly: "happy",
+  focused: "working",
+  thinking: "thinking",
+  excited: "excited",
+  sleepy: "drowsy",
+  surprised: "surprised",
+  skeptical: "suspicious",
+  worried: "scared",
+  mischievous: "playful",
+};
+
+const KNOWN_STATES = new Set<string>(MAUS_STATES);
+
+/** Resolves any stored value — current, legacy or junk — to a real state. */
+export function normalizeState(value: string | null | undefined): MausState | null {
+  if (!value) return null;
+  if (KNOWN_STATES.has(value)) return value as MausState;
+  return LEGACY_STATES[value] ?? null;
+}
+
+/**
+ * The states worth offering in the appearance picker.
+ *
+ * The engine carries 39, but many are transient beats the app drives itself
+ * (`sending`, `alerting`, `powering-down`) and make no sense as a bot's resting
+ * face. More importantly, states share resting faces: `happy`, `excited` and
+ * `playful` all rest on expression 2, and `curious`, `surprised` and `scared`
+ * all rest on 3 — they differ in which faces they *drift* to, which a static
+ * swatch cannot show. Offering them all gave 15 buttons showing 8 pictures.
+ *
+ * Across all 39 states there are only 11 distinct resting faces, so this is one
+ * state per face, chosen for the clearest name. Every swatch looks different.
+ */
+export const PICKABLE_STATES: MausState[] = [
+  "idle", // expression 0
+  "happy", // 2
+  "curious", // 3
+  "drowsy", // 4
+  "working", // 7
+  "thinking", // 8
+  "listening", // 10
+  "sleeping", // 13
+  "suspicious", // 14
+  "proud", // 15
+];
+
 type MascotMessage = {
   kind: string;
   tool?: { ok?: boolean };
@@ -67,57 +111,58 @@ export type MascotBotProfile = {
   name: string;
   title?: string;
   description?: string;
-  mascotExpression?: MausExpression | null;
+  mascotExpression?: string | null;
   busy?: boolean;
   unread?: boolean;
   messages?: MascotMessage[];
 };
 
 /**
- * Selects a face from live state first, then from what the bot is about.
+ * Selects a state from live state first, then from what the bot is about.
  * The keyword groups deliberately overlap as little as possible so a bot's
  * visual identity stays stable while its title and description are edited.
  */
-export function expressionForBot(bot: MascotBotProfile): MausExpression {
-  if (bot.mascotExpression) return bot.mascotExpression;
+export function stateForBot(bot: MascotBotProfile): MausState {
+  const pinned = normalizeState(bot.mascotExpression);
+  if (pinned) return pinned;
 
   const last = bot.messages?.[bot.messages.length - 1];
 
-  if (last?.kind === "activity" && last.tool?.ok === false) return "worried";
-  if (bot.busy) return "focused";
-  if (bot.unread) return "surprised";
-  if (last?.kind === "options") return "thinking";
+  if (last?.kind === "activity" && last.tool?.ok === false) return "alerting";
+  if (bot.busy) return "working";
+  if (bot.unread) return "notifying";
+  if (last?.kind === "options") return "curious";
 
   const profile = `${bot.name} ${bot.title ?? ""} ${bot.description ?? ""}`.toLowerCase();
   const matches = (words: RegExp) => words.test(profile);
 
   if (matches(/\b(code|coding|developer|development|engineer|engineering|build|debug|program|software)\b/)) {
-    return "focused";
+    return "working";
   }
   if (matches(/\b(research|researcher|search|investigate|strategy|strategist|study|learn|knowledge)\b/)) {
-    return "thinking";
+    return "searching";
   }
   if (matches(/\b(marketing|growth|launch|campaign|social|sales|outreach|brand)\b/)) {
     return "excited";
   }
   if (matches(/\b(overnight|night|background|async|queue|batch|long-running)\b/)) {
-    return "sleepy";
+    return "drowsy";
   }
   if (matches(/\b(monitor|monitoring|incident|alert|watch|status|uptime)\b/)) {
-    return "surprised";
+    return "radar";
   }
   if (matches(/\b(review|reviewer|audit|critic|critique|quality|qa|test|legal)\b/)) {
-    return "skeptical";
+    return "suspicious";
   }
   if (matches(/\b(security|secure|compliance|risk|privacy|finance|financial)\b/)) {
-    return "worried";
+    return "scared";
   }
   if (matches(/\b(design|designer|creative|brainstorm|art|illustration|music|story)\b/)) {
-    return "mischievous";
+    return "playful";
   }
   if (matches(/\b(support|help|success|onboarding|coach|teacher|guide|welcome)\b/)) {
-    return "friendly";
+    return "happy";
   }
 
-  return "deadpan";
+  return "idle";
 }

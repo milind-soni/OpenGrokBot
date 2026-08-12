@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Check, Loader2, Monitor, Square, X } from "lucide-react";
 import { useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
-import { expressionForBot } from "@/lib/mascot";
+import { stateForBot } from "@/lib/mascot";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
@@ -161,7 +161,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         >
           <MausAvatar
             color={bot.color}
-            expression={expressionForBot(bot)}
+            state={stateForBot(bot)}
             size={28}
             motion={mascotMotion?.kind ?? "none"}
             motionKey={mascotMotion?.nonce ?? 0}

@@ -20,17 +20,12 @@ export type MausColor =
   | "teal"
   | "coral";
 
-export type MausExpression =
-  | "deadpan"
-  | "friendly"
-  | "focused"
-  | "thinking"
-  | "excited"
-  | "sleepy"
-  | "surprised"
-  | "skeptical"
-  | "worried"
-  | "mischievous";
+/**
+ * The face a bot rests on, as one of the engine's state names. Kept as a plain
+ * string rather than a union: bots saved under the app's earlier ten-face
+ * vocabulary still carry those names, and the client resolves both on read.
+ */
+export type MausExpression = string;
 
 export interface OptionCardData {
   title: string;

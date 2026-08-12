@@ -11,7 +11,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { MausColor, MausExpression, MausMotion } from "@/lib/mascot";
+import type { MausColor, MausMotion } from "@/lib/mascot";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -52,7 +52,7 @@ export interface Bot {
   description: string;
   notifications: boolean;
   color: MausColor;
-  mascotExpression?: MausExpression | null;
+  mascotExpression?: string | null;
   unread: boolean;
   busy?: boolean;
   modelSelection: ModelSelection;
@@ -138,7 +138,6 @@ type Action =
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
-  | { type: "previewMascotMotion"; botId: string; kind: Exclude<MausMotion, "none"> }
   | {
       type: "updateBot";
       botId: string;
@@ -343,8 +342,6 @@ function reducer(state: AppState, action: Action): AppState {
         pluginsOpen: open ? false : state.pluginsOpen,
       };
     }
-    case "previewMascotMotion":
-      return withMascotMotion(state, action.botId, action.kind);
     case "updateBot": {
       const mascotChanged =
         Object.prototype.hasOwnProperty.call(action.patch, "color") ||

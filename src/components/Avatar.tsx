@@ -1,18 +1,121 @@
-import { memo, useId, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  MAUS_COLORS,
-  type MausColor,
-  type MausExpression,
-  type MausMotion,
-} from "@/lib/mascot";
+  forwardRef,
+  memo,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import {
+  BLINK,
+  blinkScale,
+  clone,
+  displayed,
+  displayedMouth,
+  EXPR_CADENCE,
+  EXPRESSION_COUNT,
+  EXPRESSIONS,
+  MAUS_FIT_OFFSET,
+  MAUS_FIT_SCALE,
+  MAUS_PATH,
+  MOUTHS,
+  POOLS,
+  type MouthSpec,
+} from "@/lib/maus-engine";
+import { subscribeToFrames } from "@/lib/maus-driver";
+import { projectFace, type FaceProjection } from "@/lib/maus-face";
 
 // Exact SupaMaus mascot silhouette from the website's
-// components/v2/MascotSlot.js. The geometry and tilt remain faithful to that
-// source; app avatars use a larger borderless flat fill.
-const BODY =
-  "M93.4 40.6 L43 151.1 Q38 162 48.4 156 L91.4 131 Q100 126 108.7 131 L151.6 156 Q162 162 157 151.1 L106.6 40.6 Q100 26 93.4 40.6 Z";
+// components/v2/MascotSlot.js. The face engine was authored against the same
+// path, so MAUS_PATH is this geometry — the two frames differ only by MAUS_FIT.
+const BODY = MAUS_PATH;
 
 const INK = "#10201b";
+
+/**
+ * Face space -> the body's own untransformed space.
+ *
+ * The engine's fit is `translate(offset) scale(fit) rotate(-20 100 100)`, and
+ * this component already draws the body under that same rotation, so the bridge
+ * is the fit undone and the rotation put back: the face lands on the silhouette
+ * without either side knowing the other's numbers.
+ *
+ * It has to be expressed in *pre-rotation* space, which is why the face group
+ * lives inside `.maus-solid` rather than beside it. `.maus-solid` is styled with
+ * `transform-box: view-box; transform-origin: 100px 100px`, and since a browser
+ * treats the SVG transform attribute as the CSS transform property, that origin
+ * is applied on top of the attribute's own rotate-about-point — the body is
+ * really drawn at translate(-28.17 40.23) of where the attribute alone puts it,
+ * which is what this component's viewBox is framed around. Nesting the face
+ * under the same group means it inherits that quirk instead of fighting it.
+ */
+const FACE_TO_BODY = `rotate(20 100 100) scale(${(1 / MAUS_FIT_SCALE).toFixed(6)}) translate(${-MAUS_FIT_OFFSET[0]} ${-MAUS_FIT_OFFSET[1]})`;
+
+/**
+ * Face placement, tunable per instance via the preview harness.
+ *
+ * The ceilings below were measured by hit-testing every one of the 25
+ * expressions against the silhouette, not chosen by eye:
+ *
+ *   faceScale   > 0.4937 clips — 0.47 is the engine's own value, near the max
+ *   eyeScale    > 1.336  clips at rest
+ *   mouthStroke > 22.7   clips at eyeScale 1.15
+ *
+ * So the face cannot get bigger, but it can get bolder: the app's earlier
+ * hand-drawn face was much heavier than the engine's default, and a thicker
+ * mouth costs nothing. Those eyeScale/gaze ceilings are the pessimistic ones,
+ * measured with the expressions' authored off-centre gaze; facing forward the
+ * eyes sit mid-silhouette and the ceilings rise to 1.812 and full gaze. 1.12 is
+ * chosen to stay clear in both modes.
+ */
+export const FACE_X = 80;
+export const FACE_Y = 102;
+export const FACE_SCALE = 0.47;
+export const EYE_SCALE = 1.12;
+export const MOUTH_WEIGHT = 11;
+
+/**
+ * How far the pointer may pull the eyes, measured per mode.
+ *
+ * Facing forward the eyes sit in the middle of the silhouette and the full
+ * range is safe. With the expressions' authored off-centre gaze they already
+ * start near an edge, and anything past 0.258 pushes one under it — which is
+ * why raising eyeScale costs headroom there but not here.
+ */
+const POINTER_GAZE = { forward: 1, authored: 0.25 };
+
+const faceAnchor = (x: number, y: number, scale: number) =>
+  `translate(${x} ${y}) scale(${scale}) translate(-120 -122.5)`;
+
+/**
+ * What a one-shot motion does to the face while its body animation plays. The
+ * CSS library moves the character; this keeps the expression agreeing with it,
+ * so an alert reads as alarm rather than a calm face on a shaking body.
+ */
+const MOTION_FACE: Partial<
+  Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+> = {
+  arrive: { state: "spawning", spin: 900 },
+  switch: { state: "waking", spin: 620 },
+  customize: { state: "proud", blink: true },
+  alert: { state: "alerting" },
+  thinking: { state: "thinking" },
+  working: { state: "working" },
+  launch: { state: "loading" },
+  success: { state: "happy", blink: true },
+  celebrate: { state: "celebrate", spin: 700 },
+  blink: { blink: true },
+  surprise: { state: "surprised", blink: true },
+  failure: { state: "sad" },
+};
+
+/** How long a one-shot motion holds its face before the bot's own returns. */
+const MOTION_FACE_MS = 1400;
 
 function shade(hex: string, amount: number) {
   const value = Number.parseInt(hex.slice(1), 16);
@@ -23,178 +126,86 @@ function shade(hex: string, amount: number) {
     .join("")}`;
 }
 
-function PillEye({
-  cx,
-  cy = 88,
-  width = 7,
-  height = 18,
-  angle = -12,
-}: {
-  cx: number;
-  cy?: number;
-  width?: number;
-  height?: number;
-  angle?: number;
-}) {
-  return (
-    <rect
-      x={cx - width / 2}
-      y={cy - height / 2}
-      width={width}
-      height={height}
-      rx={width / 2}
-      fill={INK}
-      transform={`rotate(${angle} ${cx} ${cy})`}
-    />
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return reduced;
 }
 
-function Face({ expression }: { expression: MausExpression }) {
-  const line = {
-    fill: "none",
-    stroke: INK,
-    strokeWidth: 6,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-  };
+export type MausAvatarHandle = {
+  blink: () => void;
+  spin: (durationMs?: number) => void;
+  setExpression: (index: number) => void;
+};
 
-  switch (expression) {
-    case "friendly":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} height={15} angle={-18} />
-            <PillEye cx={112} height={15} angle={-10} />
-          </g>
-          <g className="maus-mouth"><path d="M88 105 Q101 118 114 105" {...line} /></g>
-        </>
-      );
-    case "focused":
-      return (
-        <>
-          <g className="maus-eyes">
-            <path d="M83 80 L94 84 M108 84 L119 80" {...line} strokeWidth="5" />
-            <PillEye cx={90} cy={92} height={16} angle={-7} />
-            <PillEye cx={112} cy={92} height={16} angle={7} />
-          </g>
-          <g className="maus-mouth"><path d="M90 111 Q101 107 112 111" {...line} /></g>
-        </>
-      );
-    case "thinking":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} cy={87} height={17} angle={-16} />
-            <PillEye cx={112} cy={82} height={14} angle={-7} />
-            <path d="M84 78 Q90 73 96 77 M108 73 Q115 70 120 75" {...line} strokeWidth="4.5" />
-          </g>
-          <g className="maus-mouth"><path d="M93 111 Q101 105 110 109" {...line} /></g>
-        </>
-      );
-    case "excited":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} cy={87} height={19} angle={-24} />
-            <PillEye cx={112} cy={87} height={19} angle={4} />
-          </g>
-          <g className="maus-mouth"><path d="M88 102 Q101 124 114 102 Q101 109 88 102 Z" fill={INK} /></g>
-        </>
-      );
-    case "sleepy":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} cy={89} height={8} angle={-24} />
-            <PillEye cx={112} cy={89} height={8} angle={-6} />
-          </g>
-          <g className="maus-mouth"><ellipse cx="101" cy="110" rx="6" ry="8" fill={INK} /></g>
-        </>
-      );
-    case "surprised":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} height={22} width={8} angle={-15} />
-            <PillEye cx={112} height={22} width={8} angle={-8} />
-          </g>
-          <g className="maus-mouth"><circle cx="101" cy="111" r="8" fill={INK} /></g>
-        </>
-      );
-    case "skeptical":
-      return (
-        <>
-          <g className="maus-eyes">
-            <path d="M83 82 L96 79 M107 77 L120 83" {...line} strokeWidth="5" />
-            <PillEye cx={90} cy={91} height={17} angle={-18} />
-            <PillEye cx={112} cy={92} height={8} angle={-2} />
-          </g>
-          <g className="maus-mouth"><path d="M91 112 Q101 107 112 113" {...line} /></g>
-        </>
-      );
-    case "worried":
-      return (
-        <>
-          <g className="maus-eyes">
-            <path d="M83 82 Q90 76 97 82 M105 82 Q112 76 119 82" {...line} strokeWidth="4.5" />
-            <PillEye cx={90} cy={91} height={17} angle={-5} />
-            <PillEye cx={112} cy={91} height={17} angle={-20} />
-          </g>
-          <g className="maus-mouth"><path d="M89 115 Q101 103 113 115" {...line} /></g>
-        </>
-      );
-    case "mischievous":
-      return (
-        <>
-          <g className="maus-eyes">
-            <path d="M83 82 L96 86 M106 86 L119 80" {...line} strokeWidth="5" />
-            <PillEye cx={90} cy={93} height={15} angle={-2} />
-            <PillEye cx={112} cy={93} height={15} angle={-22} />
-          </g>
-          <g className="maus-mouth"><path d="M89 106 Q103 118 116 103 Q103 110 89 106 Z" fill={INK} /></g>
-        </>
-      );
-    case "deadpan":
-      return (
-        <>
-          <g className="maus-eyes">
-            <PillEye cx={90} angle={-18} />
-            <PillEye cx={112} angle={-10} />
-          </g>
-          <g className="maus-mouth"><path d="M88 110 L114 110" {...line} /></g>
-        </>
-      );
-  }
-}
-
-function trackEyes(event: ReactPointerEvent<SVGSVGElement>) {
-  const rect = event.currentTarget.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
-  const y = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
-  event.currentTarget.style.setProperty("--maus-eye-x", `${Math.max(-1, Math.min(1, x)) * 3.4}px`);
-  event.currentTarget.style.setProperty("--maus-eye-y", `${Math.max(-1, Math.min(1, y)) * 2.6}px`);
-}
-
-function resetEyes(event: ReactPointerEvent<SVGSVGElement>) {
-  event.currentTarget.style.setProperty("--maus-eye-x", "0px");
-  event.currentTarget.style.setProperty("--maus-eye-y", "0px");
-}
-
-function MausAvatarComponent({
-  color,
-  expression = "deadpan",
-  size = 44,
-  label,
-  motion = "none",
-  motionKey = 0,
-}: {
+export type MausAvatarProps = {
   color: MausColor;
-  expression?: MausExpression;
+  /** Named behaviour — drives the expression pool, its cadence and blinking. */
+  state?: MausState;
+  /** Pin one of the 25 faces and stop the state's own drift. */
+  expression?: number;
   size?: number;
   label?: string;
   motion?: MausMotion;
   motionKey?: number;
-}) {
+  /** Head turn in degrees. The silhouette never rotates; only the face travels. */
+  turn?: number;
+  gaze?: { x?: number; y?: number };
+  spring?: number;
+  eyeScale?: number;
+  eyeSpacing?: number;
+  showMouth?: boolean;
+  mouthStroke?: number;
+  faceX?: number;
+  faceY?: number;
+  faceScale?: number;
+  /**
+   * Face the viewer at turn 0, cancelling each expression's authored gaze
+   * direction. Off restores the engine's own drawn-in directions.
+   */
+  forward?: boolean;
+  /** Let the eyes follow the pointer across this avatar. */
+  trackPointer?: boolean;
+  /** Run the frame loop. Off draws the state's resting face once. */
+  animated?: boolean;
+};
+
+function MausAvatarComponent(
+  {
+    color,
+    state = "idle",
+    expression,
+    size = 44,
+    label,
+    motion = "none",
+    motionKey = 0,
+    turn = 0,
+    gaze,
+    spring = 7,
+    eyeScale = EYE_SCALE,
+    eyeSpacing = 1,
+    showMouth = true,
+    mouthStroke = MOUTH_WEIGHT,
+    faceX = FACE_X,
+    faceY = FACE_Y,
+    faceScale = FACE_SCALE,
+    forward = true,
+    trackPointer = true,
+    animated = true,
+  }: MausAvatarProps,
+  ref: React.Ref<MausAvatarHandle>,
+) {
   const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
   const uid = useId().replace(/:/g, "");
   const surfaceId = `maus-surface-${uid}`;
@@ -202,11 +213,219 @@ function MausAvatarComponent({
   const glossId = `maus-gloss-${uid}`;
   const clipId = `maus-clip-${uid}`;
   const surfaceShade = shade(fill, -30);
-  const hasAlert = motion === "alert" || motion === "failure";
-  const hasEllipsis = motion === "thinking";
-  const hasRibbons = motion === "launch";
-  const hasBurst = motion === "celebrate";
-  const hasOrbit = motion === "arrive" || motion === "switch" || motion === "customize" || motion === "working";
+
+  const reducedMotion = usePrefersReducedMotion();
+  const live = animated && !reducedMotion;
+
+  const eye0 = useRef<SVGPathElement | null>(null);
+  const eye1 = useRef<SVGPathElement | null>(null);
+  const mouth = useRef<SVGPathElement | null>(null);
+
+  // A one-shot motion borrows the face for a moment, then hands it back.
+  const [motionState, setMotionState] = useState<MausState | null>(null);
+  const activeState = motionState ?? state;
+
+  // Everything the frame loop reads lives in a ref, so a prop change never
+  // restarts the animation mid-morph.
+  const engine = useRef({
+    current: clone(EXPRESSIONS[0]),
+    target: EXPRESSIONS[0],
+    currentMouth: MOUTHS[0].slice() as MouthSpec,
+    targetMouth: MOUTHS[0] as MouthSpec,
+    expression: 0,
+    morph: 1,
+    velocity: 0,
+    blinkStart: null as number | null,
+    spinStart: null as number | null,
+    spinDuration: 900,
+    last: 0,
+    pointer: { x: 0, y: 0 },
+    drawKey: "",
+    projection: { spring, eyeScale, eyeSpacing, turn, forward, gaze } as {
+      spring: number;
+      eyeScale: number;
+      eyeSpacing: number;
+      turn: number;
+      forward: boolean;
+      gaze?: { x?: number; y?: number };
+    },
+  });
+  engine.current.projection = { spring, eyeScale, eyeSpacing, turn, forward, gaze };
+
+  const selectExpression = (index: number) => {
+    const e = engine.current;
+    const i = ((index % EXPRESSION_COUNT) + EXPRESSION_COUNT) % EXPRESSION_COUNT;
+    if (i === e.expression && e.morph >= 1) return;
+    e.current = displayed(e);
+    e.currentMouth = displayedMouth(e);
+    e.target = EXPRESSIONS[i];
+    e.targetMouth = MOUTHS[i];
+    e.expression = i;
+    e.morph = 0;
+    e.velocity = 0;
+  };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      blink: () => {
+        engine.current.blinkStart = performance.now();
+      },
+      spin: (durationMs = 900) => {
+        engine.current.spinDuration = durationMs;
+        engine.current.spinStart = performance.now();
+      },
+      setExpression: selectExpression,
+    }),
+    [],
+  );
+
+  // Settle on the state's resting face, or the pinned one.
+  useEffect(() => {
+    selectExpression(expression ?? POOLS[activeState][0]);
+  }, [activeState, expression]);
+
+  // Drift through the state's own expression pool.
+  useEffect(() => {
+    if (!live || !autoDrift(expression)) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const [lo, hi] = EXPR_CADENCE[activeState];
+      timer = setTimeout(
+        () => {
+          const pool = POOLS[activeState];
+          const alternatives = pool.filter((x) => x !== engine.current.expression);
+          selectExpression(
+            alternatives.length
+              ? alternatives[Math.floor(Math.random() * alternatives.length)]
+              : pool[0],
+          );
+          tick();
+        },
+        lo + Math.random() * (hi - lo),
+      );
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [activeState, expression, live]);
+
+  // Blink on the state's own rhythm.
+  useEffect(() => {
+    const cadence = BLINK[activeState];
+    if (!live || !cadence) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      timer = setTimeout(
+        () => {
+          engine.current.blinkStart = performance.now();
+          tick();
+        },
+        cadence[0] + Math.random() * (cadence[1] - cadence[0]),
+      );
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [activeState, live]);
+
+  // A replayed motion pulls the face along with the body animation.
+  useEffect(() => {
+    if (motion === "none" || !live) return;
+    const beat = MOTION_FACE[motion];
+    if (!beat) return;
+
+    if (beat.blink) engine.current.blinkStart = performance.now();
+    if (beat.spin) {
+      engine.current.spinDuration = beat.spin;
+      engine.current.spinStart = performance.now();
+    }
+    if (!beat.state) return;
+
+    setMotionState(beat.state);
+    const timer = setTimeout(() => setMotionState(null), MOTION_FACE_MS);
+    return () => clearTimeout(timer);
+  }, [motion, motionKey, live]);
+
+  // The frame loop, shared across every mounted avatar.
+  useEffect(() => {
+    if (!live) return;
+    engine.current.last = performance.now();
+
+    return subscribeToFrames((now) => {
+      const e = engine.current;
+      const p = e.projection;
+      const dt = Math.min((now - e.last) / 1000, 0.1);
+      e.last = now;
+
+      // Critically-damped spring toward the target expression.
+      const f = p.spring;
+      e.velocity += (-2 * f * e.velocity - f * f * (e.morph - 1)) * dt;
+      e.morph += e.velocity * dt;
+      if (!Number.isFinite(e.morph)) {
+        e.morph = 1;
+        e.velocity = 0;
+      }
+
+      let spinTurn = 0;
+      if (e.spinStart !== null) {
+        const t = (now - e.spinStart) / e.spinDuration;
+        if (t >= 1) e.spinStart = null;
+        else spinTurn = 360 * t;
+      }
+
+      const blink = blinkScale(e, now);
+      const gazeX = (p.gaze?.x ?? 0) + e.pointer.x;
+      const gazeY = (p.gaze?.y ?? 0) + e.pointer.y;
+
+      // A settled face is not redrawn. Most avatars on screen are resting most
+      // of the time, so this is what keeps a long bot list free.
+      const key = `${e.expression}|${e.morph >= 1 ? 1 : e.morph.toFixed(4)}|${blink.toFixed(3)}|${gazeX.toFixed(3)}|${gazeY.toFixed(3)}|${(p.turn + spinTurn).toFixed(2)}|${p.eyeScale}|${p.eyeSpacing}|${p.forward}`;
+      if (key === e.drawKey) return;
+      e.drawKey = key;
+
+      const face = projectFace(displayed(e), displayedMouth(e), {
+        gazeX,
+        gazeY,
+        turn: p.turn + spinTurn,
+        eyeScale: p.eyeScale,
+        eyeSpacing: p.eyeSpacing,
+        blink,
+        forward: p.forward,
+      });
+
+      apply(eye0.current, face.eyes[0]);
+      apply(eye1.current, face.eyes[1]);
+      apply(mouth.current, face.mouth);
+    });
+  }, [live]);
+
+  // First paint, and the whole of the static render. Uses the resting face so a
+  // reduced-motion or non-animated avatar still looks deliberate.
+  const rest = useMemo(() => {
+    const index = expression ?? POOLS[activeState][0];
+    const projection: FaceProjection = {
+      gazeX: gaze?.x ?? 0,
+      gazeY: gaze?.y ?? 0,
+      turn,
+      eyeScale,
+      eyeSpacing,
+      blink: 1,
+      forward,
+    };
+    return projectFace(EXPRESSIONS[index], MOUTHS[index], projection);
+  }, [activeState, expression, gaze?.x, gaze?.y, turn, eyeScale, eyeSpacing, forward]);
+
+  const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!trackPointer || !live) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    engine.current.pointer = {
+      x: clampGaze(((event.clientX - rect.left) / rect.width - 0.5) * 2, forward),
+      y: clampGaze(((event.clientY - rect.top) / rect.height - 0.5) * 2, forward),
+    };
+  };
+
+  const onPointerLeave = () => {
+    engine.current.pointer = { x: 0, y: 0 };
+  };
 
   return (
     <svg
@@ -217,9 +436,9 @@ function MausAvatarComponent({
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      onPointerMove={trackEyes}
-      onPointerLeave={resetEyes}
-      style={{ "--maus-color": fill, "--maus-eye-x": "0px", "--maus-eye-y": "0px" } as CSSProperties}
+      onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
+      style={{ "--maus-color": fill } as CSSProperties}
     >
       <defs>
         <clipPath id={clipId}>
@@ -245,14 +464,14 @@ function MausAvatarComponent({
       </defs>
 
       <g key={motionKey} className={`maus-motion maus-motion--${motion}`}>
-        {hasAlert && (
+        {(motion === "alert" || motion === "failure") && (
           <g className="maus-fx maus-fx--alert" aria-hidden="true">
             <path d="M97 45 Q100 40 103 45 L106 92 Q106 99 100 99 Q94 99 94 92 Z" fill={fill} />
             <circle cx="100" cy="116" r="8" fill={fill} />
           </g>
         )}
 
-        {hasEllipsis && (
+        {motion === "thinking" && (
           <g className="maus-fx maus-fx--ellipsis" aria-hidden="true">
             <circle className="maus-ellipsis-dot maus-ellipsis-dot--one" cx="72" cy="101" r="8" fill={fill} />
             <circle className="maus-ellipsis-dot maus-ellipsis-dot--two" cx="100" cy="101" r="10" fill={fill} />
@@ -260,7 +479,7 @@ function MausAvatarComponent({
           </g>
         )}
 
-        {hasRibbons && (
+        {motion === "launch" && (
           <g className="maus-fx maus-fx--ribbons" aria-hidden="true">
             <path className="maus-ribbon maus-ribbon--one" pathLength="1" d="M55 119 C79 137 119 140 150 116" stroke={fill} />
             <path className="maus-ribbon maus-ribbon--two" pathLength="1" d="M54 112 C85 126 119 125 145 103" stroke="#fcfcfc" />
@@ -268,7 +487,7 @@ function MausAvatarComponent({
           </g>
         )}
 
-        {hasBurst && (
+        {motion === "celebrate" && (
           <g className="maus-fx maus-fx--burst" aria-hidden="true">
             <circle className="maus-burst-dot maus-burst-dot--one" cx="100" cy="100" r="5" fill={fill} />
             <circle className="maus-burst-dot maus-burst-dot--two" cx="100" cy="100" r="4" fill="#fcfcfc" />
@@ -280,7 +499,7 @@ function MausAvatarComponent({
           </g>
         )}
 
-        {hasOrbit && (
+        {(motion === "arrive" || motion === "switch" || motion === "customize" || motion === "working") && (
           <g className="maus-orbit" aria-hidden="true">
             <path className="maus-speed-line maus-speed-line--one" pathLength="1" d="M38 119 C23 81 45 42 78 29" />
             <path className="maus-speed-line maus-speed-line--two" pathLength="1" d="M55 151 C32 126 29 94 39 70" />
@@ -292,38 +511,68 @@ function MausAvatarComponent({
 
         <g className="maus-character">
           <g className="maus-solid" transform="rotate(-20 100 100)">
-              <path className="maus-body" d={BODY} fill={`url(#${surfaceId})`} />
-              <path
-                className="maus-bevel"
-                d={BODY}
-                fill="none"
-                stroke={`url(#${bevelId})`}
-                strokeWidth="4.5"
-                clipPath={`url(#${clipId})`}
-              />
-              <ellipse
-                className="maus-specular"
-                cx="73"
-                cy="60"
-                rx="42"
-                ry="24"
-                fill={`url(#${glossId})`}
-                clipPath={`url(#${clipId})`}
-                transform="rotate(-26 73 60)"
-              />
-              <path
-                className="maus-rim-light"
-                d="M94 43 L48 144"
-                fill="none"
-                stroke="#ffffff"
-                strokeOpacity="0.35"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                clipPath={`url(#${clipId})`}
-              />
-              <g className="maus-face">
-                <Face expression={expression} />
+            <path className="maus-body" d={BODY} fill={`url(#${surfaceId})`} />
+            <path
+              className="maus-bevel"
+              d={BODY}
+              fill="none"
+              stroke={`url(#${bevelId})`}
+              strokeWidth="4.5"
+              clipPath={`url(#${clipId})`}
+            />
+            <ellipse
+              className="maus-specular"
+              cx="73"
+              cy="60"
+              rx="42"
+              ry="24"
+              fill={`url(#${glossId})`}
+              clipPath={`url(#${clipId})`}
+              transform="rotate(-26 73 60)"
+            />
+            <path
+              className="maus-rim-light"
+              d="M94 43 L48 144"
+              fill="none"
+              stroke="#ffffff"
+              strokeOpacity="0.35"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              clipPath={`url(#${clipId})`}
+            />
+
+            <g className="maus-face" clipPath={`url(#${clipId})`}>
+              <g transform={FACE_TO_BODY}>
+                <g transform={faceAnchor(faceX, faceY, faceScale)}>
+                  <path
+                    ref={eye0}
+                    fill={INK}
+                    d={rest.eyes[0].d}
+                    transform={rest.eyes[0].transform}
+                    opacity={rest.eyes[0].hidden ? 0 : 1}
+                  />
+                  <path
+                    ref={eye1}
+                    fill={INK}
+                    d={rest.eyes[1].d}
+                    transform={rest.eyes[1].transform}
+                    opacity={rest.eyes[1].hidden ? 0 : 1}
+                  />
+                  {showMouth && (
+                    <path
+                      ref={mouth}
+                      fill="none"
+                      stroke={INK}
+                      strokeWidth={mouthStroke}
+                      strokeLinecap="round"
+                      d={rest.mouth.d}
+                      transform={rest.mouth.transform}
+                      opacity={rest.mouth.hidden ? 0 : 1}
+                    />
+                  )}
+                </g>
               </g>
+            </g>
           </g>
         </g>
       </g>
@@ -331,7 +580,23 @@ function MausAvatarComponent({
   );
 }
 
-export const MausAvatar = memo(MausAvatarComponent);
+const clampGaze = (v: number, forward: boolean) => {
+  const limit = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
+  return Math.max(-limit, Math.min(limit, v));
+};
+
+function autoDrift(expression: number | undefined) {
+  return expression === undefined;
+}
+
+function apply(el: SVGPathElement | null, part: { d: string; transform: string; hidden: boolean }) {
+  if (!el) return;
+  el.setAttribute("d", part.d);
+  el.setAttribute("transform", part.transform);
+  el.style.opacity = part.hidden ? "0" : "1";
+}
+
+export const MausAvatar = memo(forwardRef(MausAvatarComponent));
 
 export function InitialsAvatar({
   initials,

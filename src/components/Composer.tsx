@@ -4,6 +4,7 @@ import { Plus, Mic, Square } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
+import { normalizeState } from "@/lib/mascot";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -125,7 +126,7 @@ export function Composer({ bot }: { bot: Bot }) {
                   i === highlight ? "bg-raised-hover" : "",
                 )}
               >
-                <MausAvatar color={peer.color} expression={peer.mascotExpression ?? "friendly"} size={24} />
+                <MausAvatar color={peer.color} state={normalizeState(peer.mascotExpression) ?? "happy"} size={24} />
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
                 <span className="shrink-0 text-xs text-ink-secondary">Agent</span>
               </button>

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
+import { replayMacro, startRecording, stopRecording } from "./macros.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -195,6 +196,12 @@ ipcMain.handle("speech:start", (event) => {
   if (win) startSpeech(win);
 });
 ipcMain.handle("speech:stop", () => stopSpeech());
+
+// Macro record/replay — Windows-only; the renderer hides these on other
+// platforms, so the handlers just resolve to an error there.
+ipcMain.handle("macro:record-start", () => startRecording());
+ipcMain.handle("macro:record-stop", () => stopRecording());
+ipcMain.handle("macro:replay", (_event, actions) => replayMacro(actions));
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);

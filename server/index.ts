@@ -14,6 +14,8 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { MacroStore } from "./macros.ts";
+import { RoutineStore } from "./routines.ts";
 import { Store, type Message } from "./store.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -48,6 +50,9 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+
+const routines = new RoutineStore();
+const macros = new MacroStore();
 
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 const sseClients = new Set<ServerResponse>();
@@ -334,6 +339,31 @@ async function reloadProviders() {
   bus.attach(registry.instances());
 }
 
+// ── routine scheduler ─────────────────────────────────────────────────
+// One central tick walks every due routine and dispatches its prompt to
+// the owning bot exactly like a user message (startTurn handles busy,
+// computer wiring, screen polling, SSE). Runs are debounced/backed off so
+// a failing routine retries rather than hot-looping the bot.
+setInterval(async () => {
+  for (const routine of routines.due()) {
+    const bot = store.bot(routine.botId);
+    if (!bot) {
+      routines.remove(routine.id);
+      continue;
+    }
+    if (bot.busy) {
+      routines.postpone(routine.id);
+      continue;
+    }
+    routines.markRun(routine.id);
+    broadcast({
+      kind: "routine",
+      routine: { _id: routine.id, botId: routine.botId, name: routine.name, lastRunAt: routine.lastRunAt },
+    });
+    await startTurn(routine.botId, routine.prompt).catch(() => routines.postpone(routine.id));
+  }
+}, 30_000);
+
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
   const data = JSON.stringify(body);
@@ -478,6 +508,77 @@ const server = createServer(async (req, res) => {
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
       return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+    }
+
+    // ── routines ──
+    if (method === "GET" && path === "/api/routines") {
+      return json(res, 200, { routines: routines.all() });
+    }
+    if (method === "POST" && path === "/api/routines") {
+      const body = await readBody(req);
+      if (!body.botId || !store.bot(body.botId)) return json(res, 404, { error: "no such bot" });
+      const routine = routines.create({
+        botId: body.botId,
+        name: body.name,
+        prompt: body.prompt,
+        everyMinutes: body.everyMinutes,
+        enabled: body.enabled !== false,
+      });
+      broadcast({ kind: "routine", routine });
+      return json(res, 201, { routine });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      const body = await readBody(req);
+      if (body.botId && !store.bot(body.botId)) return json(res, 404, { error: "no such bot" });
+      const routine = routines.patch(m[1], {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(body.everyMinutes !== undefined ? { everyMinutes: body.everyMinutes } : {}),
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      });
+      if (!routine) return json(res, 404, { error: "no such routine" });
+      broadcast({ kind: "routine", routine });
+      return json(res, 200, { routine });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      if (!routines.remove(m[1])) return json(res, 404, { error: "no such routine" });
+      broadcast({ kind: "routine.deleted", id: m[1] });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
+    if (m && method === "POST") {
+      const routine = routines.get(m[1]);
+      if (!routine) return json(res, 404, { error: "no such routine" });
+      const bot = store.bot(routine.botId);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (bot.busy) return json(res, 409, { error: "the bot is already working — interrupt it first" });
+      routines.markRun(routine.id);
+      broadcast({ kind: "routine", routine: { ...routine, lastRunAt: Date.now() } });
+      await startTurn(routine.botId, routine.prompt).catch((e) => {
+        routines.postpone(routine.id);
+        return json(res, e?.status ?? 500, { error: e?.message ?? String(e) });
+      });
+      return json(res, 202, { ok: true });
+    }
+
+    // ── macros (recorded input sequences; replay runs in Electron main) ──
+    if (method === "GET" && path === "/api/macros") {
+      return json(res, 200, { macros: macros.all() });
+    }
+    if (method === "POST" && path === "/api/macros") {
+      const body = await readBody(req);
+      if (!body.botId || !store.bot(body.botId)) return json(res, 404, { error: "no such bot" });
+      const macro = macros.create(body.botId, body.name, body.actions);
+      broadcast({ kind: "macro", macro });
+      return json(res, 201, { macro });
+    }
+    m = path.match(/^\/api\/macros\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      if (!macros.remove(m[1])) return json(res, 404, { error: "no such macro" });
+      broadcast({ kind: "macro.deleted", id: m[1] });
+      return json(res, 200, { ok: true });
     }
 
     // ── provider instances (model picker) ──

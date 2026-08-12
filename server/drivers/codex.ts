@@ -11,7 +11,7 @@
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
 
-import { execFileCli, killProcessTree, spawnCli } from "../cli-util.ts";
+import { execFileCli, isWindows, killProcessTree, spawnCli } from "../cli-util.ts";
 
 import type {
   DriverCreateInput,
@@ -96,7 +96,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true,
+        // see claude.ts — detached on Windows spawns a console and severs
+        // the piped stdio this driver speaks RPC over
+        detached: !isWindows,
       });
 
       const state = { settled: false, lastText: "" };

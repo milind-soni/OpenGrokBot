@@ -21,6 +21,25 @@ declare global {
       permOpenSettings(pane: "mic" | "screen" | "speech"): Promise<void>;
       /** Registers a screen-capture attempt (adds the app to the TCC pane). */
       permRequestScreen(): Promise<string>;
+      /** Begin recording keyboard/mouse input (Windows). */
+      macroRecordStart(): Promise<{ ok: boolean; error?: string }>;
+      /** Stop recording; resolves the captured action list. */
+      macroRecordStop(): Promise<{ ok: boolean; error?: string; actions?: MacroAction[] }>;
+      /** Replay a recorded action list through SendInput (Windows). */
+      macroReplay(actions: MacroAction[]): Promise<{ ok: boolean; error?: string; events?: number }>;
     };
+  }
+
+  interface MacroAction {
+    /** absolute ms offset from recording start */
+    t: number;
+    type: "move" | "down" | "up" | "wheel" | "key";
+    x?: number;
+    y?: number;
+    button?: string;
+    delta?: number;
+    vk?: number;
+    ext?: boolean;
+    down?: boolean;
   }
 }

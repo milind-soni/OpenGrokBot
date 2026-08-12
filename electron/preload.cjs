@@ -27,4 +27,10 @@ contextBridge.exposeInMainWorld("ogb", {
   permOpenSettings: (pane) => ipcRenderer.invoke("perm:open-settings", pane),
   /** Registers a screen-capture attempt (adds the app to the TCC pane). */
   permRequestScreen: () => ipcRenderer.invoke("perm:request-screen"),
+  /** Begin recording keyboard/mouse input (Windows). */
+  macroRecordStart: () => ipcRenderer.invoke("macro:record-start"),
+  /** Stop recording; resolves the captured action list. */
+  macroRecordStop: () => ipcRenderer.invoke("macro:record-stop"),
+  /** Replay a recorded action list through SendInput (Windows). */
+  macroReplay: (actions) => ipcRenderer.invoke("macro:replay", actions),
 });

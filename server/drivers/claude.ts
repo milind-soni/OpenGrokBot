@@ -316,7 +316,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true, // own process group: killing -pid reaps child MCP servers
+        // POSIX: own process group so killing -pid reaps child MCP servers.
+        // Windows: never detach — it gives the child its own console (a
+        // flashing window) and severs the piped stdout/stderr the driver
+        // reads (verified: claude exits 1 with no output). Tree-kill there
+        // is `taskkill /T`, which needs no process group.
+        detached: !isWindows,
       });
 
       let settled = false;

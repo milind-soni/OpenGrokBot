@@ -14,6 +14,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { ensureUserPath } from "./login-path.ts";
 import { Store, type Message } from "./store.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -29,6 +30,9 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
+// before anything probes or spawns a CLI: the packaged app is launched by
+// launchd, so without this the drivers only ever see /usr/bin:/bin:/usr/sbin:/sbin
+await ensureUserPath();
 ensureDirs();
 const cfg = loadConfig();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);

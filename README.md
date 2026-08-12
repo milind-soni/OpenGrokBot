@@ -170,9 +170,10 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code)
-or [`codex`](https://github.com/openai/codex) — installed and logged in. They appear in the model picker
-automatically.
+Requirements: **macOS or Windows**, **Node 22.18+** (Node 24+ recommended), **pnpm**, and at least one
+agent CLI — [`claude`](https://claude.com/claude-code) or [`codex`](https://github.com/openai/codex) —
+installed and logged in. They appear in the model picker automatically. On Windows, the CLIs are the npm
+`.cmd` shims; the server resolves and spawns them through cmd.exe automatically.
 
 Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
@@ -187,11 +188,25 @@ pnpm typecheck     # app + server
 pnpm build         # typecheck + production build
 ```
 
+## Packaging
+
+```sh
+pnpm package        # macOS → release/OpenMausBot-<version>.dmg (requires Swift + Xcode)
+pnpm package:win    # Windows → release/OpenMausBot-<version>-x64.exe (NSIS installer)
+```
+
+Both produce a `win-unpacked`/`OpenMausBot.app` under `release/` for testing before the installer.
+Windows builds use the generated `build/icon.ico` (`pnpm make:ico`) and bundle the PowerShell
+speech helper — no native toolchain needed. The macOS helpers (Swift speech + screen permission) are
+no-ops on Windows, and vice versa.
+
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
 computer use. Rough edges to expect: routines (scheduled tasks) are a placeholder, sidebar sections aren't
-built yet, and Windows/Linux shells haven't been attempted (the harness itself is portable Node).
+built yet, and Linux shells haven't been attempted (the harness itself is portable Node). Windows is
+supported; voice dictation uses on-device Windows speech recognition, and computer use requires the
+`cua-driver` CLI on PATH.
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

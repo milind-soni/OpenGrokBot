@@ -4,6 +4,8 @@
 
 **Your own team of AI bots, in a chat app.**
 
+<sub>An open-source version of **Grok Bot** — bring-your-own-agent, local-first, on the models you already have.</sub>
+
 Every bot in the sidebar is a real agent — Claude or Codex running locally under the hood — with its own
 personality, its own model, its own cloud computer, and its own connected apps.
 Talk to them like contacts. Watch them work. Approve what matters.
@@ -33,12 +35,13 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ## Why
 
-One assistant in one box is the wrong shape for agents. OpenMausBot treats AI as a *messaging app*: a roster
-of bots you chat with — each with its own personality, memory of its thread, model, computer, and apps — built
-on the agents you already have:
+One assistant in one box is the wrong shape for agents. OpenMausBot is an open-source take on **Grok Bot** —
+it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each with its own personality,
+memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
+already have:
 
-- **Bring your own agents.** Bots run on the `claude` and `codex` CLIs installed on your Mac — your existing
-  logins and subscriptions, no new accounts, no proxy in the middle.
+- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your Mac — your
+  existing logins and subscriptions, no new accounts, no proxy in the middle.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
@@ -148,7 +151,7 @@ flowchart LR
 
 | Layer | Where | What it does |
 |---|---|---|
-| Drivers | `server/drivers/` | One per provider: Claude and Codex over their local CLIs (stream-JSON / JSON-RPC), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
+| Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
@@ -170,10 +173,10 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS or Windows**, **Node 22.18+** (Node 24+ recommended), **pnpm**, and at least one
-agent CLI — [`claude`](https://claude.com/claude-code) or [`codex`](https://github.com/openai/codex) —
-installed and logged in. They appear in the model picker automatically. On Windows, the CLIs are the npm
-`.cmd` shims; the server resolves and spawns them through cmd.exe automatically.
+Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
+[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
+in the model picker automatically. On Windows, the CLIs are the npm
+`.cmd` shims; the server resolves and spawns them automatically.
 
 Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
@@ -210,3 +213,11 @@ supported; voice dictation uses on-device Windows speech recognition, and comput
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.
+
+## License
+
+[MIT](LICENSE) © 2026 Milind Soni and contributors.
+
+OpenMausBot is an independent, open-source project inspired by Grok Bot. It is
+not affiliated with, endorsed by, or associated with xAI; "Grok" is a trademark
+of its respective owner.

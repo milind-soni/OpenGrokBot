@@ -1,10 +1,20 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  test: {
+    environment: "node",
+    include: ["server/**/*.test.ts"],
+    setupFiles: ["server/testing/setup.ts"],
+    // the suite spawns fake provider CLIs and a real harness server;
+    // parallel files introduce load-sensitive flakes for no win
+    fileParallelism: false,
+    testTimeout: 20_000,
+    hookTimeout: 30_000,
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

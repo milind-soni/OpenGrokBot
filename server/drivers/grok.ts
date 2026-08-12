@@ -43,7 +43,8 @@ function decodeConfig(raw: unknown): GrokConfig {
 
 export const GrokDriver: ProviderDriver<GrokConfig> = {
   driverKind: DRIVER_KIND,
-  metadata: { displayName: "Grok", supportsMultipleInstances: true },
+  // "(API)" distinguishes this key-billed driver from grokAgent, the CLI one
+  metadata: { displayName: "Grok (API)", supportsMultipleInstances: true },
   models: MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),

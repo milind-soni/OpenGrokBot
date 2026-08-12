@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: typecheck + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # the harness must stay portable Node — the windows leg is the
+        # guardrail for the in-progress Windows port (POSIX-only tests
+        # self-skip there)
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      # tests never launch Electron; skip the binary download
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: production UI build
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm exec vite build

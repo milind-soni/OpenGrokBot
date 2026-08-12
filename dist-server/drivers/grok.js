@@ -19,7 +19,8 @@ function decodeConfig(raw) {
 }
 export const GrokDriver = {
     driverKind: DRIVER_KIND,
-    metadata: { displayName: "Grok", supportsMultipleInstances: true },
+    // "(API)" distinguishes this key-billed driver from grokAgent, the CLI one
+    metadata: { displayName: "Grok (API)", supportsMultipleInstances: true },
     models: MODELS,
     decodeConfig,
     defaultConfig: () => decodeConfig({}),

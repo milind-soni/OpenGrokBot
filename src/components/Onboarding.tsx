@@ -84,6 +84,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
   const claude = byKind("claudeAgent");
   const codex = byKind("codex");
+  const grok = byKind("grokAgent");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
@@ -160,6 +161,18 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                       codex?.snapshot.state === "available"
                         ? "Installed — bots can run on Codex too."
                         : "Optional. Install: npm i -g @openai/codex"
+                    }
+                  />
+                  <StatusRow
+                    ok={grok?.snapshot.state === "available"}
+                    warn
+                    title={`Grok Build ${grok?.snapshot.version ? `· ${grok.snapshot.version.split(" ")[1]}` : ""}`}
+                    detail={
+                      grok?.snapshot.state === "available"
+                        ? grok.snapshot.authenticated
+                          ? "Installed and signed in — bots can run on Grok too."
+                          : "Installed. Run `grok login` in a terminal to sign in."
+                        : "Optional. Install: curl -fsSL https://x.ai/cli/install.sh | bash"
                     }
                   />
                 </>

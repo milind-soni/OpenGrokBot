@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+// Fake of the codex CLI's `app-server` JSON-RPC surface, for driver
+// tests. Speaks newline-delimited JSON-RPC on stdio: answers the
+// initialize/thread/turn handshake, then plays a scripted turn. Like the
+// real app-server, it never exits on its own — the driver kills it.
+//
+//   FAKE_CODEX_MODE   happy (default) | approval | resume
+//   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
+//
+// Keep this file dependency-free — it runs as a bare `node` subprocess.
+import { writeFileSync } from "node:fs";
+
+const mode = process.env.FAKE_CODEX_MODE ?? "happy";
+const calls: Array<{ method: string; params: unknown }> = [];
+let decision: unknown = null;
+
+const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
+const notify = (method: string, params: unknown) => out({ jsonrpc: "2.0", method, params });
+
+const dump = () => {
+  if (process.env.FAKE_CODEX_DUMP) {
+    writeFileSync(
+      process.env.FAKE_CODEX_DUMP,
+      JSON.stringify({ argv: process.argv.slice(2), env: process.env, calls, decision }, null, 2),
+    );
+  }
+};
+
+const finishTurn = () => {
+  notify("item/completed", { item: { id: "i1", type: "commandExecution", status: "completed" } });
+  notify("item/completed", { item: { id: "m1", type: "agentMessage", text: "done from fake codex" } });
+  notify("thread/tokenUsage/updated", { tokenUsage: { total: { inputTokens: 7, outputTokens: 3 } } });
+  dump();
+  notify("turn/completed", { turn: { status: "completed" } });
+};
+
+let buf = "";
+process.stdin.on("data", (chunk) => {
+  buf += chunk;
+  let nl;
+  while ((nl = buf.indexOf("\n")) !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (!line.trim()) continue;
+    let msg: any;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    // response to our own server->client request (approval decision)
+    if (msg.id === 100 && (msg.result !== undefined || msg.error !== undefined)) {
+      decision = msg.result ?? { error: msg.error };
+      finishTurn();
+      continue;
+    }
+
+    if (msg.method) calls.push({ method: msg.method, params: msg.params ?? null });
+
+    switch (msg.method) {
+      case "initialize":
+        out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
+        break;
+      case "thread/resume":
+        if (mode === "resume") {
+          out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId } } });
+        } else {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such thread" } });
+        }
+        break;
+      case "thread/start":
+        out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
+        break;
+      case "turn/start":
+        out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
+        notify("item/started", { item: { id: "i1", type: "commandExecution", command: "ls -la" } });
+        if (mode === "approval") {
+          out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
+          // turn continues from the approval response handler above
+        } else {
+          finishTurn();
+        }
+        break;
+      default:
+        if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });
+    }
+  }
+});
+
+// match the real app-server: stay alive until killed
+setInterval(() => {}, 1_000);

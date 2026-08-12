@@ -39,6 +39,7 @@ export function ComputerMark({ size = 16, className }: IconProps) {
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
     case "grok":
+    case "grokAgent":
       return <GrokMark size={size} className={className} />;
     case "claudeAgent":
       return <ClaudeMark size={size} className={className} />;

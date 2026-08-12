@@ -94,6 +94,26 @@ const COLORS: MausColor[] = [
   "coral",
 ];
 
+/** Resolve @mentions in a message against a bot roster: `@` must start a
+ * word, names match case-insensitively, longest name wins (so "@New Bot 2"
+ * never half-matches "New Bot"), hidden bots skipped, results deduped.
+ * Callers pre-filter the sender out of `peers`. */
+export function mentionedBots<T extends { name: string; hidden?: boolean }>(text: string, peers: T[]): T[] {
+  const candidates = peers
+    .filter((p) => !p.hidden && p.name.trim())
+    .sort((a, b) => b.name.length - a.name.length);
+  const lower = text.toLowerCase();
+  const found: T[] = [];
+  let at = -1;
+  while ((at = lower.indexOf("@", at + 1)) !== -1) {
+    if (at > 0 && !/\s/.test(text[at - 1])) continue; // user@host, not a tag
+    const rest = lower.slice(at + 1);
+    const hit = candidates.find((p) => rest.startsWith(p.name.toLowerCase()));
+    if (hit && !found.includes(hit)) found.push(hit);
+  }
+  return found;
+}
+
 const onboardingCard = (): OptionCardData => ({
   title: "What do you mostly want help with?",
   subtitle: "Pick whatever's closest; we can always expand from there.",

@@ -16,7 +16,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { Store, type Message } from "./store.ts";
+import { mentionedBots, Store, type Message } from "./store.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -348,6 +348,15 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       if (commsDepth < MAX_COMMS_DEPTH && store.bots.filter((b) => b.id !== bot.id && !b.hidden).length > 0) {
         integrations.agents = agentsIntegration(bot.id, commsDepth);
       }
+      // @mentions in the user's message (the composer's tagging UI) become
+      // an explicit delegation nudge — the agent still does the ask_bot call
+      // itself, so the harness stays the single owner of turns/permissions
+      const tagged = integrations.agents
+        ? mentionedBots(
+            text,
+            store.bots.filter((b) => b.id !== bot.id),
+          )
+        : [];
 
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
@@ -361,7 +370,15 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
             ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
             : integrations.localComputer
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
-              : ""),
+              : "") +
+          (integrations.agents
+            ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
+            : "") +
+          (tagged.length
+            ? ` The user tagged ${tagged
+                .map((t) => `@${t.name} (ask_bot bot_id ${t.id})`)
+                .join(" and ")} in their message — bring them in with ask_bot and fold their reply into your answer.`
+            : ""),
         integrations,
       });
       if (integrations.computer) startScreenPoller(bot.id);

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import { ProviderSetupOptions } from "./ProviderSetupOptions";
 
 // Three-step first-run onboarding: who you are (email), what's installed
 // (live engine checks from the harness), what the app may use (TCC).
@@ -142,18 +143,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         )}
 
         {step === 1 && (
-          <div className="flex flex-col">
-            <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
+          <div className="flex max-h-[82vh] flex-col">
+            <h1 className="text-[18px] font-semibold text-ink">Choose your model providers</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Use tools already on this Mac, connect a hosted provider, or do both.
             </p>
-            <div className="mt-4 flex flex-col gap-2.5">
-              {!instances ? (
-                <div className="flex items-center gap-2 py-6 text-ink-secondary">
-                  <Loader2 size={16} className="animate-spin" /> Checking…
-                </div>
-              ) : (
-                <>
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <div className="text-[12px] font-medium uppercase tracking-wide text-ink-secondary">Local tools</div>
+              <div className="mt-2 flex flex-col gap-2.5">
+                {!instances ? (
+                  <div className="flex items-center gap-2 py-6 text-ink-secondary">
+                    <Loader2 size={16} className="animate-spin" /> Checking…
+                  </div>
+                ) : (
+                  <>
                   <StatusRow
                     ok={claude?.snapshot.state === "available"}
                     warn
@@ -188,14 +191,25 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                         : "Optional. Install: curl -fsSL https://x.ai/cli/install.sh | bash"
                     }
                   />
-                </>
-              )}
+                  </>
+                )}
+              </div>
+              <div className="mb-2 mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-secondary">
+                API and network providers
+              </div>
+              <ProviderSetupOptions />
             </div>
             <button
               onClick={() => (isElectron ? setStep(2) : finish())}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue
+            </button>
+            <button
+              onClick={() => (isElectron ? setStep(2) : finish())}
+              className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
+            >
+              Set up later
             </button>
           </div>
         )}

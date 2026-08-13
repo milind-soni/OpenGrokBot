@@ -4,6 +4,7 @@ export interface HtmlArtifact {
   index: number;
   language: "html" | "htm" | "html_preview";
   html: string;
+  sourceLine: number;
 }
 
 const HTML_LANGUAGES = new Set<HtmlArtifact["language"]>(["html", "htm", "html_preview"]);
@@ -36,6 +37,7 @@ export function extractHtmlArtifacts(markdown: string, messageId: string): HtmlA
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const opening = /^\s{0,3}(`{3,}|~{3,})\s*([^\s]*)?.*$/.exec(lines[lineIndex]!);
     if (!opening) continue;
+    const sourceLine = lineIndex + 1;
     const fence = opening[1]!;
     const language = (opening[2] ?? "").toLowerCase();
     const character = fence[0]!;
@@ -59,6 +61,7 @@ export function extractHtmlArtifacts(markdown: string, messageId: string): HtmlA
       index,
       language: language as HtmlArtifact["language"],
       html: body.join("\n"),
+      sourceLine,
     });
   }
   return artifacts;

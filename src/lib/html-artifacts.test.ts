@@ -11,6 +11,7 @@ describe("HTML artifact extraction", () => {
         index: 0,
         language: "html",
         html: "<h1>Hello</h1>",
+        sourceLine: 2,
       },
     ]);
   });
@@ -37,6 +38,7 @@ describe("HTML artifact extraction", () => {
         index: 0,
         language: "htm",
         html: "<pre>``` stays inside</pre>",
+        sourceLine: 1,
       },
       {
         id: "message-2:1",
@@ -44,6 +46,7 @@ describe("HTML artifact extraction", () => {
         index: 1,
         language: "html_preview",
         html: "<button>Go</button>",
+        sourceLine: 4,
       },
     ]);
   });

@@ -13,6 +13,7 @@ describe("ArtifactPanel", () => {
           index: 0,
           language: "html",
           html: "<button>Interactive</button>",
+          sourceLine: 1,
         }}
         width={560}
         onWidthChange={() => {}}

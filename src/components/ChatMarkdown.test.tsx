@@ -26,6 +26,8 @@ describe("ChatMarkdown HTML creations", () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("Collapse");
     expect(html).not.toContain("max-h-[9.75rem]");
+    expect(html).toContain("min-h-[20rem]");
+    expect(html).toContain("max-h-[60vh]");
   });
 
   it("renders completed HTML as a collapsed card with a permanent Open action", () => {

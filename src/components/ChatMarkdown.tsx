@@ -119,7 +119,7 @@ function CodeBlock({
             </button>
           </div>
         </div>
-        <div className={expanded ? "overflow-auto" : "max-h-[9.75rem] overflow-auto"}>
+        <div className={expanded ? "min-h-[20rem] max-h-[60vh] overflow-auto" : "max-h-[9.75rem] overflow-auto"}>
           <pre className="p-3 text-[13px] leading-relaxed text-ink">{code}</pre>
         </div>
       </div>
@@ -207,13 +207,12 @@ function ChatMarkdownComponent({
     [messageId, streaming, text],
   );
   const streamingHtml = useMemo(() => (streaming ? findStreamingHtmlFence(text) : null), [streaming, text]);
-  let artifactIndex = 0;
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
-          pre({ children }: { children?: ReactNode }) {
+          pre({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
             // fenced code arrives as <pre><code class="language-x">…</code></pre>
             const child: any = Array.isArray(children) ? children[0] : children;
             const className: string = child?.props?.className ?? "";
@@ -223,7 +222,9 @@ function ChatMarkdownComponent({
             const flat = (n: any): string =>
               typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
             const code = flat(child?.props?.children).replace(/\n$/, "");
-            const artifact = /^(?:html|htm|html_preview)$/i.test(lang) ? artifacts[artifactIndex++] : undefined;
+            const artifact = /^(?:html|htm|html_preview)$/i.test(lang)
+              ? artifacts.find((candidate) => candidate.sourceLine === node?.position?.start.line)
+              : undefined;
             const streamedCode = streamingHtml && /^(?:html|htm|html_preview)$/i.test(lang) ? streamingHtml.code : code;
             return (
               <CodeBlock

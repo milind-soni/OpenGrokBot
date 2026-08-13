@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Check, Loader2, Monitor, Square, X } from "lucide-react";
+import { ArrowDown, CalendarClock, Check, Loader2, Monitor, Square, X } from "lucide-react";
 import { useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
@@ -20,30 +20,41 @@ function Bubble({ message }: { message: Message }) {
   const text = message.text ?? "";
   const collapsible =
     user && !expanded && (text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES);
+  // routine-fired turns show the routine banner instead of the scaffold text
+  const routine = user ? message.via : undefined;
+  const shown = routine ? text.replace(/^\[[^\]]*\]\s*/s, "") : text;
   return (
     <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
-          user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+      <div className="flex max-w-[70%] flex-col items-end gap-1">
+        {routine && (
+          <span className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent">
+            <CalendarClock size={11} />
+            Routine · {routine.name}
+          </span>
         )}
-      >
-        {user ? (
-          <>
-            <div
-              className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
-            >
-              {text}
-            </div>
-            {collapsible && (
-              <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                Show full message
-              </button>
-            )}
-          </>
-        ) : (
-          <ChatMarkdown text={text} />
-        )}
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+            user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+          )}
+        >
+          {user ? (
+            <>
+              <div
+                className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
+              >
+                {shown}
+              </div>
+              {collapsible && (
+                <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+                  Show full message
+                </button>
+              )}
+            </>
+          ) : (
+            <ChatMarkdown text={text} />
+          )}
+        </div>
       </div>
     </div>
   );

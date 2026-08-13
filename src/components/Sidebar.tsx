@@ -6,6 +6,7 @@ import {
   Copy,
   EyeOff,
   FolderPlus,
+  Grid2x2,
   Pencil,
   Pin,
   PinOff,
@@ -197,9 +198,18 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
 export function Sidebar() {
   const { state, dispatch } = useStore();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [query, setQuery] = useState("");
 
+  const q = query.trim().toLowerCase();
   const visibleBots = state.bots
     .filter((b) => !b.hidden)
+    .filter(
+      (b) =>
+        !q ||
+        b.name.toLowerCase().includes(q) ||
+        b.title.toLowerCase().includes(q) ||
+        preview(b).toLowerCase().includes(q),
+    )
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
 
   return (
@@ -218,14 +228,22 @@ export function Sidebar() {
             <span className="size-3 rounded-full bg-[#28c840]" />
           </div>
         )}
-        <button
-          onClick={() => { track("bot_created"); dispatch({ type: "newBot" }); }}
-          className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          title="New bot"
-        >
-          <Plus size={20} strokeWidth={2} />
-        </button>
+        <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+          <button
+            onClick={() => dispatch({ type: "toggleMissionControl", open: true })}
+            className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+            title="Mission Control (⌘⇧M)"
+          >
+            <Grid2x2 size={18} strokeWidth={2} />
+          </button>
+          <button
+            onClick={() => { track("bot_created"); dispatch({ type: "newBot" }); }}
+            className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+            title="New bot"
+          >
+            <Plus size={20} strokeWidth={2} />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -233,9 +251,19 @@ export function Sidebar() {
         <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
           <Search size={16} className="text-ink-secondary" />
           <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
             placeholder="Search"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
+          <kbd
+            onClick={() => dispatch({ type: "togglePalette", open: true })}
+            className="shrink-0 cursor-pointer rounded border border-hairline/60 bg-inset px-1.5 py-0.5 text-[10.5px] text-ink-secondary hover:text-ink"
+            title="Command palette"
+          >
+            ⌘K
+          </kbd>
         </div>
       </div>
 
@@ -245,6 +273,9 @@ export function Sidebar() {
           {visibleBots.map((b) => (
             <BotListItem key={b.id} bot={b} onMenu={setMenu} />
           ))}
+          {q && visibleBots.length === 0 && (
+            <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">No bots match "{query}"</div>
+          )}
         </div>
       </div>
 

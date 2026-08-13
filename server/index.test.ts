@@ -169,6 +169,51 @@ describe("harness HTTP API", () => {
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
   });
 
+  it("creates, schedules, patches, and deletes a routine", async () => {
+    const { body: botsBody } = await api("GET", "/api/bots");
+    const bot = botsBody.bots[0];
+
+    const bad = await api("POST", "/api/routines", { botId: bot.id, name: "", prompt: "x", schedule: { kind: "interval", minutes: 30 } });
+    expect(bad.status).toBe(400);
+
+    const created = await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "Morning brief",
+      prompt: "Summarize my inbox",
+      schedule: { kind: "daily", hour: 9, minute: 0 },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.routine).toMatchObject({
+      botId: bot.id,
+      name: "Morning brief",
+      enabled: true,
+      schedule: { kind: "daily", hour: 9, minute: 0 },
+    });
+    expect(typeof created.body.routine.nextRunAt).toBe("number");
+    const id = created.body.routine.id;
+
+    const listed = await api("GET", `/api/routines?botId=${bot.id}`);
+    expect(listed.body.routines.map((r: { id: string }) => r.id)).toContain(id);
+
+    const paused = await api("PATCH", `/api/routines/${id}`, { enabled: false });
+    expect(paused.status).toBe(200);
+    expect(paused.body.routine.enabled).toBe(false);
+    expect(paused.body.routine.nextRunAt).toBeNull();
+
+    // run-now against the ghost provider records the failure on the routine
+    const ran = await api("POST", `/api/routines/${id}/run`);
+    expect(ran.status).toBe(200);
+    expect(["error", "skipped-busy"]).toContain(ran.body.routine.lastStatus);
+
+    const deleted = await api("DELETE", `/api/routines/${id}`);
+    expect(deleted.status).toBe(200);
+    const after = await api("GET", "/api/routines");
+    expect(after.body.routines.find((r: { id: string }) => r.id === id)).toBeUndefined();
+
+    const missing = await api("POST", "/api/routines/nope/run");
+    expect(missing.status).toBe(404);
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

@@ -48,6 +48,8 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  /** how this user message entered the thread when not typed (e.g. a routine) */
+  via?: { kind: "routine"; name: string };
   at: number;
 }
 

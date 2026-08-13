@@ -36,7 +36,29 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
+  /** how this user message entered the thread when not typed (e.g. a routine) */
+  via?: { kind: "routine"; name: string };
   at: number;
+}
+
+export type RoutineSchedule =
+  | { kind: "interval"; minutes: number }
+  | { kind: "daily"; hour: number; minute: number }
+  | { kind: "weekly"; day: number; hour: number; minute: number };
+
+/** A scheduled autonomous task, as GET /api/routines returns it. */
+export interface Routine {
+  id: string;
+  botId: string;
+  name: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+  createdAt: number;
+  lastRunAt?: number;
+  lastStatus?: "ok" | "skipped-busy" | "error";
+  lastError?: string;
+  nextRunAt: number | null;
 }
 
 export interface ModelSelection {
@@ -90,11 +112,14 @@ interface AppState {
   bots: Bot[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  routines: Routine[];
   selectedId: string;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  paletteOpen: boolean;
+  missionControlOpen: boolean;
   /** in-flight assistant text per threadId (content.delta fold) */
   streaming: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
@@ -134,10 +159,15 @@ type Action =
   | { type: "interrupt"; botId: string }
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
+  | { type: "routines"; routines: Routine[] }
+  | { type: "routineUpserted"; routine: Routine }
+  | { type: "routineDeleted"; id: string }
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "togglePalette"; open?: boolean }
+  | { type: "toggleMissionControl"; open?: boolean }
   | {
       type: "updateBot";
       botId: string;
@@ -311,6 +341,19 @@ function reducer(state: AppState, action: Action): AppState {
           : state),
         error: action.message,
       };
+    case "routines":
+      return { ...state, routines: action.routines };
+    case "routineUpserted": {
+      const exists = state.routines.some((r) => r.id === action.routine.id);
+      return {
+        ...state,
+        routines: exists
+          ? state.routines.map((r) => (r.id === action.routine.id ? action.routine : r))
+          : [...state.routines, action.routine],
+      };
+    }
+    case "routineDeleted":
+      return { ...state, routines: state.routines.filter((r) => r.id !== action.id) };
     // bot settings, the computer panel, and app settings share the right slot
     case "toggleSettings": {
       const open = action.open ?? !state.settingsOpen;
@@ -342,6 +385,15 @@ function reducer(state: AppState, action: Action): AppState {
         pluginsOpen: open ? false : state.pluginsOpen,
       };
     }
+    // full-screen surfaces: opening one closes the other
+    case "togglePalette": {
+      const open = action.open ?? !state.paletteOpen;
+      return { ...state, paletteOpen: open, missionControlOpen: open ? false : state.missionControlOpen };
+    }
+    case "toggleMissionControl": {
+      const open = action.open ?? !state.missionControlOpen;
+      return { ...state, missionControlOpen: open, paletteOpen: open ? false : state.paletteOpen };
+    }
     case "updateBot": {
       const mascotChanged =
         Object.prototype.hasOwnProperty.call(action.patch, "color") ||
@@ -365,11 +417,14 @@ const initialState: AppState = {
   bots: [],
   instances: [],
   config: null,
+  routines: [],
   selectedId: "",
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
   appSettingsOpen: false,
+  paletteOpen: false,
+  missionControlOpen: false,
   streaming: {},
   screens: {},
   provisioning: {},
@@ -546,6 +601,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       api("/api/config")
         .then((config) => alive && rawDispatch({ type: "configStatus", config }))
         .catch(() => {});
+      api("/api/routines")
+        .then(({ routines }) => alive && rawDispatch({ type: "routines", routines }))
+        .catch(() => {});
     };
     loadAll();
 
@@ -600,6 +658,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "bot.deleted":
           rawDispatch({ type: "deleteBot", botId: frame.botId });
+          break;
+        case "routine":
+          rawDispatch({ type: "routineUpserted", routine: frame.routine });
+          break;
+        case "routine.deleted":
+          rawDispatch({ type: "routineDeleted", id: frame.id });
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately

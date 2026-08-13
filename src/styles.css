@@ -62,6 +62,18 @@ body {
   to { transform: scale(1) translateY(0); opacity: 1; }
 }
 
+/* Mission Control: a busy bot's card breathes — accent ring + soft glow. */
+.mc-live {
+  animation: mc-live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes mc-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 132, 254, 0.28), 0 0 22px -6px rgba(16, 132, 254, 0.35); }
+  50% { box-shadow: 0 0 0 3px rgba(16, 132, 254, 0.1), 0 0 30px -4px rgba(16, 132, 254, 0.5); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-live { animation: none; box-shadow: 0 0 0 1px rgba(16, 132, 254, 0.3); }
+}
+
 /* SupaMaus vector motion. The fast horizontal compression is the edge-on
    moment of a turn; face parallax, surface lighting, and orbiting vector marks
    sell the 3D rotation without duplicate silhouettes, raster frames, or WebGL. */

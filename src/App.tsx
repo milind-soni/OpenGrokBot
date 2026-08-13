@@ -10,10 +10,29 @@ import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { CommandPalette } from "@/components/CommandPalette";
+import { MissionControl } from "@/components/MissionControl";
 
 function Shell() {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+
+  // Operator keys: ⌘K palette, ⌘⇧M mission control — everywhere, always.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        dispatch({ type: "togglePalette" });
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        dispatch({ type: "toggleMissionControl" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dispatch]);
+
   return (
     <div className="flex h-full flex-col">
       {/* fixed-position popup, bottom-left — outside the layout flow */}
@@ -40,6 +59,8 @@ function Shell() {
       {state.appSettingsOpen && <AppSettingsPanel />}
       {state.pluginsOpen && <PluginsPanel />}
       </div>
+      {state.missionControlOpen && <MissionControl />}
+      {state.paletteOpen && <CommandPalette />}
     </div>
   );
 }

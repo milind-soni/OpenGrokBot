@@ -16,6 +16,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { RoutineStore } from "./routines.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -282,7 +283,11 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string, opts?: { commsDepth?: number }) {
+async function startTurn(
+  botId: string,
+  text: string,
+  opts?: { commsDepth?: number; via?: Message["via"] },
+) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -296,7 +301,12 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     );
   }
 
-  const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+  const userMessage = store.appendMessage(bot.threadId, {
+    role: "user",
+    kind: "text",
+    text,
+    ...(opts?.via ? { via: opts.via } : {}),
+  });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
 
   // transcript for API-backed drivers: settled text turns only
@@ -403,6 +413,21 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     }
   })();
 }
+
+// ── routines: the autonomy scheduler ──────────────────────────────────
+// Due routines start a normal turn on their bot (same permission broker,
+// same streaming) — autonomy changes WHEN a turn starts, never WHAT it
+// may do. Changes broadcast so every client's routine views stay live.
+const routines = new RoutineStore(
+  (routine) =>
+    startTurn(
+      routine.botId,
+      `[Scheduled routine "${routine.name}" — this run started automatically, not from a typed message. Do the task now and report the outcome concisely.]\n\n${routine.prompt}`,
+      { via: { kind: "routine", name: routine.name } },
+    ),
+  (change) => broadcast(change),
+);
+routines.start();
 
 // ── config hot-reload ─────────────────────────────────────────────────
 function configStatus() {
@@ -550,6 +575,7 @@ const server = createServer(async (req, res) => {
       // a running turn dies with its bot
       await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
       stopScreenPoller(bot.id);
+      routines.deleteForBot(bot.id);
       store.deleteBot(bot.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
         try {
@@ -606,6 +632,41 @@ const server = createServer(async (req, res) => {
       const instance = registry.get(bot.modelSelection.instanceId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
+    }
+
+    // ── routines (scheduled autonomous tasks) ──
+    if (method === "GET" && path === "/api/routines") {
+      return json(res, 200, { routines: routines.list(url.searchParams.get("botId") ?? undefined) });
+    }
+    if (method === "POST" && path === "/api/routines") {
+      const body = await readBody(req);
+      const bot = store.bot(String(body.botId ?? ""));
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const routine = routines.create({
+        botId: bot.id,
+        name: body.name,
+        prompt: body.prompt,
+        schedule: body.schedule,
+        enabled: body.enabled,
+      });
+      return json(res, 201, { routine });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      const routine = routines.patch(m[1], await readBody(req));
+      if (!routine) return json(res, 404, { error: "no such routine" });
+      return json(res, 200, { routine });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      if (!routines.delete(m[1])) return json(res, 404, { error: "no such routine" });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
+    if (m && method === "POST") {
+      const routine = await routines.fire(m[1], { manual: true });
+      if (!routine) return json(res, 404, { error: "no such routine" });
+      return json(res, 200, { routine });
     }
 
     // identity handshake for the packaged app's port fallback: the forked

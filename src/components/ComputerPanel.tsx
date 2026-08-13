@@ -6,17 +6,21 @@
 // prefers the cloud box when one exists, else local inside the app.
 import { useEffect, useRef, useState } from "react";
 import {
-  CalendarClock,
+  Camera,
+  ChevronRight,
   ExternalLink,
   Loader2,
   Monitor,
   Moon,
   Power,
+  Radio,
   Settings,
+  TerminalSquare,
   X,
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
+import { RoutinesCard } from "./RoutinesCard";
 import { cn } from "@/lib/cn";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
@@ -152,12 +156,63 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     live ??
     polledFrame ??
     (lastScreenMessage ? { png: lastScreenMessage.png!, mime: lastScreenMessage.mime ?? "image/png" } : null);
-  const frameSrc =
+  const liveSrc =
     phase === "local"
       ? localFrame
       : phase === "ready" || phase === "starting"
         ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
         : null;
+
+  // Filmstrip: the last 8 distinct frames of this session. Click a thumb to
+  // scrub back in time; the LIVE chip returns to the moving picture.
+  const [film, setFilm] = useState<Array<{ src: string; at: number }>>([]);
+  const [pinnedAt, setPinnedAt] = useState<number | null>(null);
+  useEffect(() => {
+    setFilm([]);
+    setPinnedAt(null);
+  }, [bot.id]);
+  useEffect(() => {
+    if (!liveSrc) return;
+    setFilm((prev) => (prev[prev.length - 1]?.src === liveSrc ? prev : [...prev.slice(-7), { src: liveSrc, at: Date.now() }]));
+  }, [liveSrc]);
+  const pinnedFrame = pinnedAt !== null ? film.find((f) => f.at === pinnedAt) : null;
+  const frameSrc = pinnedFrame?.src ?? liveSrc;
+
+  // Capture-now: force one screenshot instead of waiting for the next tick.
+  const [capturing, setCapturing] = useState(false);
+  const captureNow = () => {
+    setCapturing(true);
+    const req =
+      phase === "local" && window.ogb
+        ? window.ogb.screenFrame().then((url) => url && setLocalFrame(url))
+        : api(`/api/bots/${bot.id}/computer/screenshot`, { method: "POST" }).then(({ png, format }) =>
+            setPolledFrame({ png, mime: format === "jpeg" ? "image/jpeg" : "image/png" }),
+          );
+    req.catch(() => {}).finally(() => setCapturing(false));
+  };
+
+  // Quick command: run one shell line on the bot's box, output inline.
+  const [cmd, setCmd] = useState("");
+  const [execBusy, setExecBusy] = useState(false);
+  const [execLog, setExecLog] = useState<Array<{ cmd: string; out: string; ok: boolean }>>([]);
+  useEffect(() => {
+    setExecLog([]);
+    setCmd("");
+  }, [bot.id]);
+  const runCmd = () => {
+    const command = cmd.trim();
+    if (!command || execBusy) return;
+    setExecBusy(true);
+    setCmd("");
+    api(`/api/bots/${bot.id}/computer/exec`, { method: "POST", body: JSON.stringify({ command }) })
+      .then((r) => {
+        const out = [r.stdout, r.stderr].filter(Boolean).join("\n").trim();
+        setExecLog((l) => [...l.slice(-19), { cmd: command, out: out || `(exit ${r.exitCode})`, ok: r.exitCode === 0 }]);
+        captureNow(); // the command likely changed the screen
+      })
+      .catch((e) => setExecLog((l) => [...l.slice(-19), { cmd: command, out: e.message, ok: false }]))
+      .finally(() => setExecBusy(false));
+  };
 
   const run = (kind: "join" | "sleep") => {
     setPending(kind);
@@ -205,9 +260,21 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {/* Screen preview */}
         <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
           <span>{bot.name}'s screen</span>
-          {phase === "local" && <span className="text-[11px]">this Mac</span>}
+          <span className="flex items-center gap-1.5">
+            {phase === "local" && <span className="text-[11px]">this Mac</span>}
+            {(phase === "ready" || phase === "local") && (
+              <button
+                onClick={captureNow}
+                disabled={capturing}
+                className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40"
+                title="Capture now"
+              >
+                {capturing ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
+              </button>
+            )}
+          </span>
         </div>
-        <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
+        <div className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
             <img src={frameSrc} alt={`${bot.name}'s screen`} className="h-full w-full object-contain" />
           ) : (
@@ -238,7 +305,39 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               )}
             </div>
           )}
+          {pinnedFrame && (
+            <button
+              onClick={() => setPinnedAt(null)}
+              className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[10.5px] font-medium text-white hover:bg-black/85"
+              title="Back to live"
+            >
+              <Radio size={10} /> Back to live
+            </button>
+          )}
         </div>
+
+        {/* Filmstrip: scrub through the session's recent frames */}
+        {film.length > 1 && (
+          <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+            {film.map((f) => (
+              <button
+                key={f.at}
+                onClick={() => setPinnedAt(pinnedAt === f.at ? null : f.at)}
+                className={cn(
+                  "h-11 w-[72px] shrink-0 overflow-hidden rounded-md border",
+                  pinnedAt === f.at
+                    ? "border-accent"
+                    : pinnedAt === null && f.src === liveSrc
+                      ? "border-hairline"
+                      : "border-hairline/40 opacity-70 hover:opacity-100",
+                )}
+                title={new Date(f.at).toLocaleTimeString()}
+              >
+                <img src={f.src} alt="frame" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
@@ -284,6 +383,44 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </div>
         )}
 
+        {/* Quick command: drive the box by hand without leaving the app */}
+        {phase === "ready" && (
+          <div className="mt-4 rounded-xl bg-card p-4">
+            <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
+              <TerminalSquare size={16} className="text-ink-secondary" />
+              Quick command
+            </div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              Run one shell line on this bot's computer — the preview refreshes after.
+            </div>
+            {execLog.length > 0 && (
+              <div className="mt-3 max-h-44 overflow-y-auto rounded-lg border border-hairline/40 bg-inset p-2 font-mono text-[11.5px] leading-relaxed">
+                {execLog.map((entry, i) => (
+                  <div key={i} className={cn(i > 0 && "mt-2 border-t border-hairline/30 pt-2")}>
+                    <div className="flex items-center gap-1 text-ink">
+                      <ChevronRight size={11} className={entry.ok ? "text-success" : "text-danger"} />
+                      <span className="truncate">{entry.cmd}</span>
+                    </div>
+                    <pre className="mt-0.5 whitespace-pre-wrap break-all pl-4 text-ink-secondary">{entry.out}</pre>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-2.5 py-1.5 focus-within:border-accent-border">
+              <ChevronRight size={13} className="shrink-0 text-ink-secondary" />
+              <input
+                value={cmd}
+                onChange={(e) => setCmd(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && runCmd()}
+                placeholder="xdg-open https://example.com"
+                spellCheck={false}
+                className="w-full bg-transparent font-mono text-[12.5px] text-ink placeholder:text-ink-secondary/50 focus:outline-none"
+              />
+              {execBusy && <Loader2 size={13} className="shrink-0 animate-spin text-ink-secondary" />}
+            </div>
+          </div>
+        )}
+
         {/* Computer source */}
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Runs on</div>
@@ -317,22 +454,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
 
         {/* Routines */}
-        <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
-            <CalendarClock size={16} className="text-ink-secondary" />
-            Routines
-          </div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Routines are recurring tasks this agent runs on a schedule.
-          </div>
-          <button
-            disabled
-            className="mt-3 w-full cursor-not-allowed rounded-lg bg-raised py-2 text-[13px] text-ink-secondary opacity-60"
-            title="Coming soon"
-          >
-            Create Routine
-          </button>
-        </div>
+        <RoutinesCard bot={bot} />
       </div>
     </aside>
   );

@@ -135,6 +135,19 @@ export interface SendTurnInput {
      * through the harness so this bot can message other bots. The harness
      * owns turns, permissions, and recursion limits; the proxy only forwards. */
     agents?: { command: string; args: string[]; env: Record<string, string> };
+    /** Optional per-bot media specialists. CLI agents mount the stdio proxy;
+     * OpenAI-compatible drivers use the same endpoint metadata as native
+     * function tools without ever receiving another provider's credentials. */
+    media?: {
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+      tasks: Array<"image" | "video">;
+      endpoint?: string;
+      token?: string;
+      botId?: string;
+      primaryTurnId?: string;
+    };
   };
   cwd?: string;
 }
@@ -154,6 +167,8 @@ export interface ProviderAdapter {
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
     agentsMcp?: boolean;
+    /** How this driver exposes configured media specialists to its model. */
+    mediaTools?: "mcp" | "native";
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

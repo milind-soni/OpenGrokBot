@@ -57,6 +57,11 @@ export interface Message {
   parentId?: string | null;
 }
 
+export interface BotSpecialists {
+  image?: ModelSelection;
+  video?: ModelSelection;
+}
+
 function withoutMediaSources(message: Message): Message {
   if (!message.media) return message;
   return {
@@ -76,6 +81,8 @@ export interface BotRecord {
   mascotExpression?: MausExpression | null;
   unread: boolean;
   modelSelection: ModelSelection;
+  /** Optional media generators the primary model can call as tools. */
+  specialists?: BotSpecialists;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),

@@ -22,9 +22,16 @@ if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
   process.exit(0);
 }
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env }, null, 2));
-}
+const seenRequests: unknown[] = [];
+const dump = () => {
+  if (process.env.FAKE_ACP_DUMP) {
+    writeFileSync(
+      process.env.FAKE_ACP_DUMP,
+      JSON.stringify({ argv, env: process.env, requests: seenRequests }, null, 2),
+    );
+  }
+};
+dump();
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const result = (id: unknown, res: unknown) => out({ jsonrpc: "2.0", id, result: res });
@@ -112,6 +119,10 @@ process.stdin.on("data", (c) => {
 });
 
 function handle(msg: any) {
+  if (msg.method) {
+    seenRequests.push(msg);
+    dump();
+  }
   // client's response to our permission request
   if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined) && msg.id === pendingPermissionId) {
     pendingPermissionId = null;

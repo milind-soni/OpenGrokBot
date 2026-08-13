@@ -30,6 +30,8 @@ function CodeBlock({
   artifact,
   selected,
   onPreview,
+  streamingExpanded,
+  onStreamingExpandedChange,
 }: {
   code: string;
   lang: string;
@@ -37,10 +39,18 @@ function CodeBlock({
   artifact?: HtmlArtifact;
   selected?: boolean;
   onPreview?: (artifact: HtmlArtifact) => void;
+  streamingExpanded?: boolean;
+  onStreamingExpandedChange?: (expanded: boolean) => void;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [sourceExpanded, setSourceExpanded] = useState(false);
+  const expanded = streaming ? (streamingExpanded ?? false) : sourceExpanded;
+  const setExpanded = (value: boolean | ((current: boolean) => boolean)) => {
+    const next = typeof value === "function" ? value(expanded) : value;
+    if (streaming && onStreamingExpandedChange) onStreamingExpandedChange(next);
+    else setSourceExpanded(next);
+  };
   const htmlLanguage = /^(?:html|htm|html_preview)$/i.test(lang);
 
   useEffect(() => {
@@ -179,6 +189,8 @@ interface ChatMarkdownProps {
   messageId?: string;
   selectedArtifactId?: string | null;
   onPreviewArtifact?: (artifact: HtmlArtifact) => void;
+  streamingHtmlExpanded?: boolean;
+  onStreamingHtmlExpandedChange?: (expanded: boolean) => void;
 }
 
 function ChatMarkdownComponent({
@@ -187,6 +199,8 @@ function ChatMarkdownComponent({
   messageId,
   selectedArtifactId,
   onPreviewArtifact,
+  streamingHtmlExpanded,
+  onStreamingHtmlExpandedChange,
 }: ChatMarkdownProps) {
   const artifacts = useMemo(
     () => (!streaming && messageId ? extractHtmlArtifacts(text, messageId) : []),
@@ -219,6 +233,8 @@ function ChatMarkdownComponent({
                 artifact={artifact}
                 selected={artifact?.id === selectedArtifactId}
                 onPreview={onPreviewArtifact}
+                streamingExpanded={streamingHtmlExpanded}
+                onStreamingExpandedChange={onStreamingHtmlExpandedChange}
               />
             );
           },

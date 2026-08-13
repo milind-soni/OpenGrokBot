@@ -140,6 +140,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
           });
         }
+        const media = turn.integrations?.media;
+        if (media) {
+          servers.push({
+            name: "media",
+            command: media.command,
+            args: media.args,
+            env: Object.entries(media.env).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
         return servers;
       };
 
@@ -478,7 +487,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, mediaTools: "mcp" },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

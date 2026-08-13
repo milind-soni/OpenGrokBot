@@ -14,6 +14,20 @@ describe("ChatMarkdown HTML creations", () => {
     expect(html).toContain("Expand");
   });
 
+  it("honors expansion state owned by the chat while streaming text changes", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        text={"```html\n<main>Still writing"}
+        streaming
+        streamingHtmlExpanded
+        onStreamingHtmlExpandedChange={() => {}}
+      />,
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("Collapse");
+    expect(html).not.toContain("max-h-[9.75rem]");
+  });
+
   it("renders completed HTML as a collapsed card with a permanent Open action", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown

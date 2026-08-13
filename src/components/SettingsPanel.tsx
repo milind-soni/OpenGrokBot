@@ -32,7 +32,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const patch = (
     p: Partial<
-      Pick<Bot, "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression">
+      Pick<Bot, "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "specialists">
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
   const activeState = stateForBot(bot);
@@ -148,14 +148,34 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             />
           </Field>
 
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
-              <div className="text-[15px] font-medium text-ink">Model</div>
-              <div className="mt-0.5 text-[13px] text-ink-secondary">
-                Which provider and model this bot runs on
+          <div className="rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Model team</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              The primary agent can call optional image and video specialists as tools.
+            </div>
+            <div className="mt-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[13px] font-medium text-ink">Primary agent</div>
+                  <div className="text-[11px] text-ink-secondary">Chat, reasoning, and coding</div>
+                </div>
+                <ModelPicker bot={bot} role="primary" />
+              </div>
+              <div className="flex items-center justify-between gap-3 border-t border-hairline/30 pt-3">
+                <div>
+                  <div className="text-[13px] font-medium text-ink">Image specialist</div>
+                  <div className="text-[11px] text-ink-secondary">Optional · any image provider</div>
+                </div>
+                <ModelPicker bot={bot} role="image" />
+              </div>
+              <div className="flex items-center justify-between gap-3 border-t border-hairline/30 pt-3">
+                <div>
+                  <div className="text-[13px] font-medium text-ink">Video specialist</div>
+                  <div className="text-[11px] text-ink-secondary">Optional · any video provider</div>
+                </div>
+                <ModelPicker bot={bot} role="video" />
               </div>
             </div>
-            <ModelPicker bot={bot} />
           </div>
 
           <div className="rounded-xl bg-card p-4">

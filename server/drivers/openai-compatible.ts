@@ -44,7 +44,19 @@ export interface OpenAICompatibleDriverSpec {
   missingCredentialMessage?: string;
 }
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+type ToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+type FunctionTool = {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+};
+type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; content: string; tool_call_id: string };
 type Usage = { input: number; output: number };
 
 const PROBE_TTL_MS = 15_000;
@@ -569,10 +581,11 @@ export function createOpenAICompatibleDriver(
         opts: {
           stream: boolean;
           signal?: AbortSignal;
+          tools?: FunctionTool[];
           onDelta?: (delta: string) => void;
           onReasoning?: (delta: string) => void;
         },
-      ): Promise<{ text: string; usage: Usage | null }> => {
+      ): Promise<{ text: string; usage: Usage | null; toolCalls: ToolCall[] }> => {
         requireCredential();
         const timeout = AbortSignal.timeout(120_000);
         const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
@@ -583,11 +596,19 @@ export function createOpenAICompatibleDriver(
             model,
             messages,
             stream: opts.stream,
+            ...(opts.tools?.length ? { tools: opts.tools, tool_choice: "auto" } : {}),
             ...(opts.stream ? { stream_options: { include_usage: true } } : {}),
           }),
           signal,
         });
-        if (!res.ok) throw new Error(`${spec.displayName} ${await httpFailure(res)}`);
+        if (!res.ok) {
+          const failure = await httpFailure(res);
+          throw new Error(
+            opts.tools?.length
+              ? `The selected primary model/provider does not support tool calling. ${spec.displayName}: ${failure}`
+              : `${spec.displayName} ${failure}`,
+          );
+        }
 
         if (!opts.stream) {
           const payload = (await res.json()) as any;
@@ -595,6 +616,9 @@ export function createOpenAICompatibleDriver(
           if (apiError) throw new Error(`${spec.displayName}: ${apiError}`);
           return {
             text: responseText(payload.choices?.[0]?.message?.content),
+            toolCalls: Array.isArray(payload.choices?.[0]?.message?.tool_calls)
+              ? payload.choices[0].message.tool_calls
+              : [],
             usage: payload.usage
               ? {
                   input: payload.usage.prompt_tokens ?? 0,
@@ -607,6 +631,7 @@ export function createOpenAICompatibleDriver(
         if (!res.body) throw new Error(`${spec.displayName} returned an empty streaming response`);
         let text = "";
         let usage: Usage | null = null;
+        const streamedToolCalls = new Map<number, ToolCall>();
         const parseLine = (rawLine: string) => {
           const line = rawLine.trim();
           if (!line.startsWith("data:")) return;
@@ -631,6 +656,20 @@ export function createOpenAICompatibleDriver(
               chunk.choices?.[0]?.delta?.thinking,
           );
           if (reasoning) opts.onReasoning?.(reasoning);
+          for (const rawCall of chunk.choices?.[0]?.delta?.tool_calls ?? []) {
+            const index = typeof rawCall?.index === "number" ? rawCall.index : 0;
+            const current = streamedToolCalls.get(index) ?? {
+              id: "",
+              type: "function" as const,
+              function: { name: "", arguments: "" },
+            };
+            if (typeof rawCall?.id === "string") current.id += rawCall.id;
+            if (typeof rawCall?.function?.name === "string") current.function.name += rawCall.function.name;
+            if (typeof rawCall?.function?.arguments === "string") {
+              current.function.arguments += rawCall.function.arguments;
+            }
+            streamedToolCalls.set(index, current);
+          }
           if (chunk.usage) {
             usage = {
               input: chunk.usage.prompt_tokens ?? 0,
@@ -655,7 +694,47 @@ export function createOpenAICompatibleDriver(
         }
         buffer += decoder.decode();
         if (buffer.trim()) parseLine(buffer);
-        return { text, usage };
+        return {
+          text,
+          usage,
+          toolCalls: [...streamedToolCalls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call),
+        };
+      };
+
+      const mediaTools = (turn: SendTurnInput): FunctionTool[] =>
+        (turn.integrations?.media?.tasks ?? []).map((task) => ({
+          type: "function" as const,
+          function: {
+            name: `generate_${task}`,
+            description: `Generate a ${task} with this bot's configured specialist and place it in the current chat.`,
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string", description: `A complete production-ready ${task} prompt.` },
+              },
+              required: ["prompt"],
+            },
+          },
+        }));
+
+      const callMediaTool = async (turn: SendTurnInput, task: "image" | "video", prompt: string) => {
+        const media = turn.integrations?.media;
+        if (!media?.endpoint || !media.token || !media.botId || !media.primaryTurnId) {
+          throw new Error("media specialist endpoint is unavailable");
+        }
+        const response = await fetch(media.endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${media.token}` },
+          body: JSON.stringify({
+            botId: media.botId,
+            primaryTurnId: media.primaryTurnId,
+            task,
+            prompt,
+          }),
+        });
+        const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!response.ok) throw new Error(String(body.error ?? `HTTP ${response.status}`));
+        return body;
       };
 
       const sendTurn = async (turn: SendTurnInput) => {
@@ -699,42 +778,92 @@ export function createOpenAICompatibleDriver(
               emit({ ...base(turn.threadId, turnId), type: "turn.completed", ok: true, stopReason: null, cost: null });
               return;
             }
-            const result = await complete(messages, selectedModel, {
-              stream: true,
-              signal: abort.signal,
-              onDelta: (delta) =>
+            const tools = mediaTools(turn);
+            const workingMessages = [...messages];
+            let result: Awaited<ReturnType<typeof complete>> | null = null;
+            let inputTokens = 0;
+            let outputTokens = 0;
+            let mediaCalls = 0;
+            for (;;) {
+              result = await complete(workingMessages, selectedModel, {
+                stream: true,
+                signal: abort.signal,
+                tools,
+                onDelta: (delta) =>
+                  emit({
+                    ...base(turn.threadId, turnId),
+                    type: "content.delta",
+                    streamKind: "assistant_text",
+                    delta,
+                  }),
+                onReasoning: (delta) =>
+                  emit({
+                    ...base(turn.threadId, turnId),
+                    type: "content.delta",
+                    streamKind: "reasoning_text",
+                    delta,
+                  }),
+              });
+              if (result.usage) {
+                inputTokens += result.usage.input;
+                outputTokens += result.usage.output;
+              }
+              if (!result.toolCalls.length) break;
+              workingMessages.push({
+                role: "assistant",
+                content: result.text || null,
+                tool_calls: result.toolCalls,
+              });
+              for (const call of result.toolCalls) {
+                mediaCalls += 1;
+                if (mediaCalls > 3) throw new Error("the model exceeded the three media generations allowed per turn");
+                const task = call.function.name === "generate_image" ? "image" : call.function.name === "generate_video" ? "video" : null;
+                const itemId = call.id || newId();
                 emit({
                   ...base(turn.threadId, turnId),
-                  type: "content.delta",
-                  streamKind: "assistant_text",
-                  delta,
-                }),
-              onReasoning: (delta) =>
-                emit({
-                  ...base(turn.threadId, turnId),
-                  type: "content.delta",
-                  streamKind: "reasoning_text",
-                  delta,
-                }),
-            });
+                  itemId,
+                  type: "item.started",
+                  itemType: "tool",
+                  title: call.function.name || "media tool",
+                });
+                let content: string;
+                let ok = false;
+                try {
+                  if (!task || !turn.integrations?.media?.tasks.includes(task)) {
+                    throw new Error(`unavailable media tool: ${call.function.name}`);
+                  }
+                  const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+                  const prompt = String(args.prompt ?? "").trim();
+                  if (!prompt) throw new Error(`${call.function.name} needs a prompt`);
+                  const generated = await callMediaTool(turn, task, prompt);
+                  content = JSON.stringify({ ok: true, ...generated, note: `The ${task} is already visible in chat.` });
+                  ok = true;
+                } catch (error) {
+                  content = JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) });
+                }
+                emit({ ...base(turn.threadId, turnId), itemId, type: "item.completed", itemType: "tool", ok });
+                workingMessages.push({ role: "tool", tool_call_id: call.id, content });
+              }
+            }
             appendNative(turn.threadId, {
               dir: "in",
               source: `${spec.driverKind}.chat.completions`,
               msg: result,
             });
-            if (result.text.trim()) {
+            if (result!.text.trim()) {
               emit({
                 ...base(turn.threadId, turnId),
                 type: "item.completed",
                 itemType: "assistant_text",
-                text: result.text,
+                text: result!.text,
               });
             }
-            if (result.usage) {
+            if (inputTokens || outputTokens) {
               emit({
                 ...base(turn.threadId, turnId),
                 type: "thread.token-usage.updated",
-                ...result.usage,
+                input: inputTokens,
+                output: outputTokens,
               });
             }
             active.delete(turn.threadId);
@@ -790,7 +919,7 @@ export function createOpenAICompatibleDriver(
         snapshot,
         adapter: {
           provider: spec.driverKind,
-          capabilities: { sessionModelSwitch: "in-session", transcriptReplay: true },
+          capabilities: { sessionModelSwitch: "in-session", transcriptReplay: true, mediaTools: "native" },
           sendTurn,
           interruptTurn: async (threadId, turnId) => {
             const running = active.get(threadId);

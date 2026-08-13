@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatModelTaskOverrides, parseModelTaskOverrides } from "./model-tasks";
+import { formatModelTaskOverrides, modelSupportsTask, parseModelTaskOverrides } from "./model-tasks";
 
 describe("model task overrides", () => {
   it("parses one explicit chat, image, or video task per line", () => {
@@ -25,5 +25,14 @@ describe("model task overrides", () => {
 
   it("formats overrides deterministically for editing", () => {
     expect(formatModelTaskOverrides({ zeta: "video", alpha: "image" })).toBe("alpha=image\nzeta=video");
+  });
+
+  it("keeps legacy untagged models in the primary picker and specialists task-specific", () => {
+    expect(modelSupportsTask(undefined, "chat")).toBe(true);
+    expect(modelSupportsTask("chat", "chat")).toBe(true);
+    expect(modelSupportsTask("image", "chat")).toBe(false);
+    expect(modelSupportsTask("image", "image")).toBe(true);
+    expect(modelSupportsTask(undefined, "image")).toBe(false);
+    expect(modelSupportsTask("video", "video")).toBe(true);
   });
 });

@@ -1,5 +1,9 @@
 import type { ModelTask } from "@/state/store";
 
+export function modelSupportsTask(task: ModelTask | undefined, requested: ModelTask): boolean {
+  return requested === "chat" ? task === undefined || task === "chat" : task === requested;
+}
+
 export function parseModelTaskOverrides(text: string): {
   tasks: Record<string, ModelTask>;
   error: string | null;

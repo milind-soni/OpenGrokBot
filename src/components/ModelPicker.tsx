@@ -2,10 +2,11 @@
 // Routing is by exact instanceId only — an entry is never inferred from a
 // driver kind, and unavailable instances render disabled with the reason.
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Image, Video } from "lucide-react";
-import { useStore, type Bot, type InstanceInfo } from "@/state/store";
+import { Check, ChevronDown, Image, Video, X } from "lucide-react";
+import { useStore, type Bot, type InstanceInfo, type ModelSelection, type ModelTask } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
 import { cn } from "@/lib/cn";
+import { modelSupportsTask } from "@/lib/model-tasks";
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((o) => o.id === model)?.label ?? model;
@@ -25,20 +26,41 @@ function TaskBadge({ task, compact = false }: { task?: "chat" | "image" | "video
   );
 }
 
-export function ModelPicker({ bot, className }: { bot: Bot; className?: string }) {
+type ModelRole = "primary" | "image" | "video";
+
+export function ModelPicker({
+  bot,
+  role = "primary",
+  className,
+}: {
+  bot: Bot;
+  role?: ModelRole;
+  className?: string;
+}) {
   const { state, dispatch } = useStore();
   const [open, setOpen] = useState(false);
   const [railId, setRailId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const selection = bot.modelSelection;
-  const active = state.instances.find((i) => i.instanceId === selection.instanceId);
-  const activeModel = active?.models.options.find((option) => option.id === selection.model);
+  const task: ModelTask = role === "primary" ? "chat" : role;
+  const selection: ModelSelection | undefined =
+    role === "primary" ? bot.modelSelection : bot.specialists?.[role];
+  const eligibleInstances = state.instances.filter(
+    (instance) =>
+      instance.instanceId === selection?.instanceId ||
+      instance.models.options.some((option) => modelSupportsTask(option.task, task)),
+  );
+  const active = state.instances.find((i) => i.instanceId === selection?.instanceId);
+  const activeModel = active?.models.options.find((option) => option.id === selection?.model);
   const railInstance =
-    state.instances.find((i) => i.instanceId === (railId ?? selection.instanceId)) ??
-    state.instances[0];
-  const visibleModels = (railInstance?.models.options ?? []).filter((option) => {
+    eligibleInstances.find((i) => i.instanceId === (railId ?? selection?.instanceId)) ??
+    eligibleInstances[0];
+  const eligibleModels = (railInstance?.models.options ?? []).filter((option) => {
+    const selected = selection?.instanceId === railInstance?.instanceId && selection.model === option.id;
+    return selected || modelSupportsTask(option.task, task);
+  });
+  const visibleModels = eligibleModels.filter((option) => {
     const needle = query.trim().toLowerCase();
     return !needle || option.id.toLowerCase().includes(needle) || option.label.toLowerCase().includes(needle);
   });
@@ -58,7 +80,23 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   }, [open]);
 
   const pick = (instance: InstanceInfo, model: string) => {
-    dispatch({ type: "setModel", botId: bot.id, selection: { instanceId: instance.instanceId, model } });
+    const next = { instanceId: instance.instanceId, model };
+    if (role === "primary") dispatch({ type: "setModel", botId: bot.id, selection: next });
+    else {
+      dispatch({
+        type: "updateBot",
+        botId: bot.id,
+        patch: { specialists: { ...bot.specialists, [role]: next } },
+      });
+    }
+    setOpen(false);
+  };
+
+  const clear = () => {
+    if (role === "primary") return;
+    const specialists = { ...bot.specialists };
+    delete specialists[role];
+    dispatch({ type: "updateBot", botId: bot.id, patch: { specialists } });
     setOpen(false);
   };
 
@@ -66,20 +104,24 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
     <div ref={rootRef} className={cn("relative", className)}>
       <button
         onClick={() => {
-          setRailId(selection.instanceId);
+          setRailId(selection?.instanceId ?? eligibleInstances[0]?.instanceId ?? null);
           setQuery("");
           setOpen((o) => !o);
         }}
         className="flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised"
         title={
-          active
-            ? `${active.displayName} · ${modelLabel(active, selection.model)}${activeModel?.task && activeModel.task !== "chat" ? ` · ${activeModel.task} generation` : ""}`
-            : selection.model
+          selection
+            ? active
+              ? `${active.displayName} · ${modelLabel(active, selection.model)}${activeModel?.task && activeModel.task !== "chat" ? ` · ${activeModel.task} generation` : ""}`
+              : selection.model
+            : `Choose a ${task} model`
         }
       >
         {active && <ProviderMark driverKind={active.driverKind} size={14} />}
         <TaskBadge task={activeModel?.task} compact />
-        <span className="max-w-[160px] truncate">{modelLabel(active, selection.model)}</span>
+        <span className="max-w-[160px] truncate">
+          {selection ? modelLabel(active, selection.model) : "Not configured"}
+        </span>
         <ChevronDown size={14} className="text-ink-secondary" />
       </button>
 
@@ -90,7 +132,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
         >
           {/* instance rail */}
           <div className="flex flex-col gap-1 border-r border-hairline/40 bg-panel p-2">
-            {state.instances.map((instance) => {
+            {eligibleInstances.map((instance) => {
               const unavailable = instance.snapshot.state !== "available";
               const onRail = instance.instanceId === railInstance?.instanceId;
               return (
@@ -129,7 +171,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                       : (railInstance.snapshot.reason ?? "unavailable")}
                   </div>
                 </div>
-                {railInstance.models.options.length > 8 && (
+                {eligibleModels.length > 8 && (
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
@@ -141,7 +183,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                 <div className="min-h-0 overflow-y-auto">
                   {visibleModels.map((option) => {
                     const current =
-                      selection.instanceId === railInstance.instanceId && selection.model === option.id;
+                      selection?.instanceId === railInstance.instanceId && selection.model === option.id;
                     const disabled = railInstance.snapshot.state !== "available";
                     return (
                       <button
@@ -168,13 +210,23 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     );
                   })}
                   {!visibleModels.length && (
-                    <div className="px-2 py-3 text-[12px] text-ink-secondary">No matching models.</div>
+                    <div className="px-2 py-3 text-[12px] text-ink-secondary">
+                      No {task} models from this provider.
+                    </div>
                   )}
                 </div>
+                {role !== "primary" && selection && (
+                  <button
+                    onClick={clear}
+                    className="mt-1 flex items-center justify-center gap-1.5 rounded-lg border-t border-hairline/40 px-2 py-2 text-[12px] text-ink-secondary hover:bg-raised/60 hover:text-ink"
+                  >
+                    <X size={13} /> Remove specialist
+                  </button>
+                )}
               </>
             ) : (
               <div className="px-2 py-3 text-[13px] text-ink-secondary">
-                No providers — is the server running?
+                No {task} models are configured.
               </div>
             )}
           </div>

@@ -44,15 +44,39 @@ beforeAll(async () => {
   provider = createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/v1/models") {
       return json(res, 200, {
-        data: [{ id: "fixture-image", name: "Fixture image", output_modalities: ["image"] }],
+        data: [
+          { id: "fixture-image", name: "Fixture image", output_modalities: ["image"] },
+          { id: "fixture-chat", name: "Fixture chat" },
+        ],
       });
+    }
+    if (req.method === "POST" && req.url === "/v1/chat/completions") {
+      const body = await requestBody(req);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      if (!body.messages.some((message: any) => message.role === "tool")) {
+        res.write(
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"generate-1","type":"function","function":{"name":"generate_image","arguments":"{\\"prompt\\":\\"draw via specialist\\"}"}}]}}]}\n\n',
+        );
+      } else {
+        res.write('data: {"choices":[{"delta":{"content":"Made it with the image specialist."}}]}\n\n');
+      }
+      res.end("data: [DONE]\n\n");
+      return;
     }
     if (req.method === "POST" && req.url === "/v1/images/generations") {
       const body = await requestBody(req);
-      if (body.model !== "fixture-image" || body.prompt !== "draw one pixel") {
+      if (
+        body.model !== "fixture-image" ||
+        (body.prompt !== "draw one pixel" && body.prompt !== "draw via specialist")
+      ) {
         return json(res, 400, { error: { message: "wrong generation request" } });
       }
-      return json(res, 200, { data: [{ b64_json: TINY_PNG_BASE64, media_type: "image/png" }] });
+      return json(res, 200, { data: [{ url: `${PROVIDER}/fixture.png`, media_type: "image/png" }] });
+    }
+    if (req.method === "GET" && req.url === "/v1/fixture.png") {
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(Buffer.from(TINY_PNG_BASE64, "base64"));
+      return;
     }
     return json(res, 404, { error: { message: "not found" } });
   });
@@ -146,5 +170,43 @@ describe("generated media e2e", () => {
     expect(cached.status).toBe(200);
     expect(cached.headers.get("content-type")).toBe("image/png");
     expect(Buffer.from(await cached.arrayBuffer())).toEqual(Buffer.from(TINY_PNG_BASE64, "base64"));
+  });
+
+  it("lets a primary chat model call a configured image specialist", async () => {
+    const before = await api("GET", "/api/bots");
+    const bot = before.body.bots[0];
+    const existingMediaIds = new Set(
+      bot.messages.filter((message: any) => message.kind === "media").map((message: any) => message.id),
+    );
+    const configured = await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "media", model: "fixture-chat" },
+      specialists: { image: { instanceId: "media", model: "fixture-image" } },
+    });
+    expect(configured.status).toBe(200);
+
+    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "please create a specialist image" });
+    expect(sent.status).toBe(202);
+
+    const deadline = Date.now() + 10_000;
+    let mediaMessage: any = null;
+    let assistantText = "";
+    while (Date.now() < deadline) {
+      const snapshot = await api("GET", "/api/bots");
+      const current = snapshot.body.bots.find((candidate: any) => candidate.id === bot.id);
+      mediaMessage = current.messages.find(
+        (message: any) => message.kind === "media" && !existingMediaIds.has(message.id),
+      );
+      assistantText = current.messages
+        .filter((message: any) => message.role === "bot" && message.kind === "text")
+        .at(-1)?.text;
+      if (!current.busy && mediaMessage?.media?.[0]?.status === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(mediaMessage).toMatchObject({
+      kind: "media",
+      media: [{ kind: "image", status: "ready", cacheKey: expect.stringMatching(/\.png$/) }],
+    });
+    expect(assistantText).toBe("Made it with the image specialist.");
   });
 });

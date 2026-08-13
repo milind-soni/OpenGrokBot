@@ -65,6 +65,25 @@ beforeAll(async () => {
       return json(res, 200, { data: [{ id: "image-only-model", name: "Image only model" }] });
     }
     if (request.method === "POST" && request.url === "/v1/chat/completions") {
+      if (request.body.tools) {
+        if (request.body.messages.some((message: any) => message.content === "reject media tools")) {
+          return json(res, 400, { error: { message: "tools are unsupported" } });
+        }
+        const hasToolResult = request.body.messages.some((message: any) => message.role === "tool");
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (!hasToolResult) {
+          res.write(
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-image-1","type":"function","function":{"name":"generate_image","arguments":"{\\"prompt\\":\\"copper "}}]}}]}\n\n',
+          );
+          res.write(
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"robot\\"}"}}]}}]}\n\n',
+          );
+        } else {
+          res.write('data: {"choices":[{"delta":{"content":"Your image is ready."}}]}\n\n');
+        }
+        res.end("data: [DONE]\n\n");
+        return;
+      }
       if (!request.body.stream) {
         return json(res, 200, {
           choices: [{ message: { role: "assistant", content: "short title" } }],
@@ -80,6 +99,9 @@ beforeAll(async () => {
       res.write('data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4}}\n\n');
       res.end("data: [DONE]\n\n");
       return;
+    }
+    if (request.method === "POST" && request.url === "/v1/internal-media") {
+      return json(res, 200, { ok: true, task: request.body.task, messageId: "media-message-1" });
     }
     if (request.method === "POST" && request.url === "/v1/images/generations") {
       if (request.body.prompt === "reject this") {
@@ -288,6 +310,112 @@ describe("OpenAI-compatible driver", () => {
     });
     expect(await instance.snapshot()).toMatchObject({ state: "available" });
     expect(requests.at(-1)?.authorization).toBeUndefined();
+    await instance.dispose();
+  });
+
+  it("runs standard media function tools and resumes the chat completion", async () => {
+    requests.length = 0;
+    const driver = testDriver(false);
+    const instance = await driver.create({
+      instanceId: "tool-primary",
+      displayName: "Tool primary",
+      environment: {},
+      enabled: true,
+      config: driver.decodeConfig({ url: baseUrl }),
+    });
+    const events: RuntimeEvent[] = [];
+    const completed = new Promise<void>((resolve) => {
+      instance.adapter.onEvent((event) => {
+        events.push(event);
+        if (event.type === "turn.completed") resolve();
+      });
+    });
+
+    await instance.adapter.sendTurn({
+      threadId: "tool-loop",
+      text: "make a copper robot",
+      model: "test-model",
+      integrations: {
+        media: {
+          command: process.execPath,
+          args: [],
+          env: {},
+          tasks: ["image"],
+          endpoint: `${baseUrl}/internal-media`,
+          token: "internal-token",
+          botId: "bot-1",
+          primaryTurnId: "primary-1",
+        },
+      },
+    });
+    await completed;
+
+    const chats = requests.filter((request) => request.url === "/v1/chat/completions");
+    expect(chats).toHaveLength(2);
+    expect(chats[0].body.tools[0]).toMatchObject({ function: { name: "generate_image" } });
+    expect(chats[1].body.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      tool_calls: [expect.objectContaining({ id: "call-image-1" })],
+    });
+    expect(chats[1].body.messages.at(-1)).toMatchObject({
+      role: "tool",
+      tool_call_id: "call-image-1",
+    });
+    const mediaCall = requests.find((request) => request.url === "/v1/internal-media")!;
+    expect(mediaCall.authorization).toBe("Bearer internal-token");
+    expect(mediaCall.body).toEqual({
+      botId: "bot-1",
+      primaryTurnId: "primary-1",
+      task: "image",
+      prompt: "copper robot",
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: "item.started", title: "generate_image" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "item.completed", text: "Your image is ready." }));
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    await instance.dispose();
+  });
+
+  it("explains when the selected primary provider rejects function tools", async () => {
+    requests.length = 0;
+    const driver = testDriver(false);
+    const instance = await driver.create({
+      instanceId: "no-tools",
+      displayName: "No tools",
+      environment: {},
+      enabled: true,
+      config: driver.decodeConfig({ url: baseUrl }),
+    });
+    const events: RuntimeEvent[] = [];
+    const completed = new Promise<void>((resolve) => {
+      instance.adapter.onEvent((event) => {
+        events.push(event);
+        if (event.type === "turn.completed") resolve();
+      });
+    });
+    await instance.adapter.sendTurn({
+      threadId: "reject-tools",
+      text: "reject media tools",
+      integrations: {
+        media: {
+          command: process.execPath,
+          args: [],
+          env: {},
+          tasks: ["image"],
+          endpoint: `${baseUrl}/internal-media`,
+          token: "token",
+          botId: "bot-1",
+          primaryTurnId: "primary-1",
+        },
+      },
+    });
+    await completed;
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "runtime.error",
+        message: expect.stringContaining("does not support tool calling"),
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false });
     await instance.dispose();
   });
 

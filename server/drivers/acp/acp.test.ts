@@ -108,6 +108,38 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
   });
 
+  it("mounts the configured media specialist proxy as an ACP MCP server", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-media",
+      text: "make an image",
+      integrations: {
+        media: {
+          command: process.execPath,
+          args: ["/fake/media-proxy.js"],
+          env: { OMB_MEDIA_TASKS: "image", OMB_PRIMARY_TURN_ID: "primary-1" },
+          tasks: ["image"],
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const sessionNew = seen.requests.find((request: any) => request.method === "session/new");
+    expect(sessionNew.params.mcpServers).toContainEqual({
+      name: "media",
+      command: process.execPath,
+      args: ["/fake/media-proxy.js"],
+      env: expect.arrayContaining([
+        { name: "OMB_MEDIA_TASKS", value: "image" },
+        { name: "OMB_PRIMARY_TURN_ID", value: "primary-1" },
+      ]),
+    });
+  });
+
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-perm", text: "go" });

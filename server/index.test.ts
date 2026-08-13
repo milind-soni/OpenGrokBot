@@ -140,9 +140,30 @@ describe("harness HTTP API", () => {
     expect(created.status).toBe(201);
     const bot = created.body.bot;
 
-    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true });
+    const specialists = {
+      image: { instanceId: "openrouter", model: "black-forest-labs/flux.1" },
+      video: { instanceId: "remote", model: "wan-2.2" },
+    };
+    const patched = await api("PATCH", `/api/bots/${bot.id}`, {
+      name: "Renamed",
+      pinned: true,
+      specialists,
+    });
     expect(patched.status).toBe(200);
-    expect(patched.body.bot).toMatchObject({ name: "Renamed", pinned: true });
+    expect(patched.body.bot).toMatchObject({ name: "Renamed", pinned: true, specialists });
+
+    const clearedImage = await api("PATCH", `/api/bots/${bot.id}`, { specialists: { image: null } });
+    expect(clearedImage.status).toBe(200);
+    expect(clearedImage.body.bot.specialists).toEqual({ video: specialists.video });
+
+    const clearedVideo = await api("PATCH", `/api/bots/${bot.id}`, { specialists: { video: null } });
+    expect(clearedVideo.status).toBe(200);
+    expect(clearedVideo.body.bot.specialists).toBeUndefined();
+
+    const invalid = await api("PATCH", `/api/bots/${bot.id}`, {
+      specialists: { image: { instanceId: "openrouter", model: "" } },
+    });
+    expect(invalid.status).toBe(400);
 
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);

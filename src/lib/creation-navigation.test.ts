@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CreationEntry } from "./creations";
-import { creationOpenRequest } from "./creation-navigation";
+import { artifactHeaderMode, creationOpenRequest } from "./creation-navigation";
 
 const entry: CreationEntry = {
   id: "m-1:0",
@@ -16,6 +16,12 @@ const entry: CreationEntry = {
 };
 
 describe("creation navigation", () => {
+  it("shows Open latest unless the newest artifact is already open", () => {
+    expect(artifactHeaderMode(undefined, null)).toBe("hidden");
+    expect(artifactHeaderMode("latest", null)).toBe("open");
+    expect(artifactHeaderMode("latest", "older")).toBe("open");
+    expect(artifactHeaderMode("latest", "latest")).toBe("close");
+  });
   it("builds a repeatable open request without copying creation payloads", () => {
     const first = creationOpenRequest(entry, "request-1");
     const second = creationOpenRequest(entry, "request-2");

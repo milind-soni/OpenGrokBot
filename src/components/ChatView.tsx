@@ -11,6 +11,8 @@ import {
   Loader2,
   Monitor,
   Pencil,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCw,
   Square,
   X,
@@ -27,6 +29,7 @@ import { ArtifactPanel } from "./ArtifactPanel";
 import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
 import { deriveCreations } from "@/lib/creations";
 import { cn } from "@/lib/cn";
+import { artifactHeaderMode } from "@/lib/creation-navigation";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -399,12 +402,25 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
   );
 }
 
-function StreamingBubble({ text }: { text: string }) {
+function StreamingBubble({
+  text,
+  htmlExpanded,
+  onHtmlExpandedChange,
+}: {
+  text: string;
+  htmlExpanded: boolean;
+  onHtmlExpandedChange: (expanded: boolean) => void;
+}) {
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <MessageBoundary fallbackText={text}>
-          <ChatMarkdown text={text} streaming />
+          <ChatMarkdown
+            text={text}
+            streaming
+            streamingHtmlExpanded={htmlExpanded}
+            onStreamingHtmlExpandedChange={onHtmlExpandedChange}
+          />
         </MessageBoundary>
         <span className="animate-caret ml-0.5 inline-block h-[14px] w-[2px] bg-ink align-middle" />
       </div>
@@ -467,6 +483,11 @@ export function ChatView({ bot }: { bot: Bot }) {
   }, [bot.threadId, newestArtifact]);
   const selectedArtifactId = artifactSelections[bot.threadId] ?? null;
   const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const artifactAction = artifactHeaderMode(newestArtifact?.id, selectedArtifactId);
+  const [streamingHtmlExpanded, setStreamingHtmlExpanded] = useState(false);
+  useEffect(() => {
+    if (!streaming) setStreamingHtmlExpanded(false);
+  }, [bot.threadId, streaming]);
   const handledHtmlRequest = useRef<string | null>(null);
   useEffect(() => {
     const request = state.openCreationRequest;
@@ -594,6 +615,26 @@ export function ChatView({ bot }: { bot: Bot }) {
               Stop
             </button>
           )}
+          {artifactAction !== "hidden" && newestArtifact && (
+            <button
+              onClick={() => {
+                if (artifactAction === "close") {
+                  setArtifactSelections((current) => ({ ...current, [bot.threadId]: null }));
+                } else {
+                  openArtifact(newestArtifact);
+                }
+              }}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] hover:bg-raised hover:text-ink",
+                artifactAction === "close" ? "text-accent" : "text-ink-secondary",
+              )}
+              aria-label={artifactAction === "close" ? "Close artifact" : "Open latest artifact"}
+              title={artifactAction === "close" ? "Close the artifact preview" : "Open the latest artifact"}
+            >
+              {artifactAction === "close" ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+              {artifactAction === "close" ? "Close" : "Open artifact"}
+            </button>
+          )}
           <ModelPicker bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
@@ -713,7 +754,11 @@ export function ChatView({ bot }: { bot: Bot }) {
           )}
           {reasoning && bot.busy && <ThinkingStrip text={reasoning} active={!streaming} />}
           {streaming ? (
-            <StreamingBubble text={streaming} />
+            <StreamingBubble
+              text={streaming}
+              htmlExpanded={streamingHtmlExpanded}
+              onHtmlExpandedChange={setStreamingHtmlExpanded}
+            />
           ) : (
             bot.busy && (
               <div className="flex justify-start">

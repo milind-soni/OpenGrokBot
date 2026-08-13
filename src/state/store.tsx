@@ -68,6 +68,11 @@ export interface ModelSelection {
   model: string;
 }
 
+export interface BotSpecialists {
+  image?: ModelSelection;
+  video?: ModelSelection;
+}
+
 export interface Bot {
   id: string;
   threadId: string;
@@ -80,6 +85,7 @@ export interface Bot {
   unread: boolean;
   busy?: boolean;
   modelSelection: ModelSelection;
+  specialists?: BotSpecialists;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "local" | "off";
   pinned?: boolean;
@@ -226,7 +232,7 @@ type Action =
       patch: Partial<
         Pick<
           Bot,
-          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden"
+          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden" | "specialists"
         >
       >;
     };
@@ -658,6 +664,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   description: source.description,
                   notifications: source.notifications,
                   modelSelection: source.modelSelection,
+                  ...(source.specialists ? { specialists: source.specialists } : {}),
                   ...(source.computer ? { computer: source.computer } : {}),
                 }),
               }).then(({ bot: patched }) =>

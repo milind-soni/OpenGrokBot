@@ -49,6 +49,26 @@ describe("Store", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
 
+  it("persists optional image and video specialist selections", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, {
+      specialists: {
+        image: { instanceId: "openrouter", model: "black-forest-labs/flux.1" },
+        video: { instanceId: "remote", model: "wan-2.2" },
+      },
+    });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.specialists).toEqual({
+      image: { instanceId: "openrouter", model: "black-forest-labs/flux.1" },
+      video: { instanceId: "remote", model: "wan-2.2" },
+    });
+
+    reloaded.patchBot(bot.id, { specialists: undefined });
+    expect(new Store(selection).bot(bot.id)?.specialists).toBeUndefined();
+  });
+
   it("persists media metadata without raw provider sources", () => {
     const store = new Store(selection);
     const bot = store.createBot();

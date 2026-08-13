@@ -101,8 +101,9 @@ OAuth once, and every bot can use them as tools.
 
 ### 🗂 Manage bots like chats
 
-Right-click any bot: pin, mark unread, edit profile, duplicate, copy conversation ID, hide, delete. It's a
-messaging app — your agents behave like contacts.
+Right-click any bot: pin, move to a section, mark unread, edit profile, duplicate, copy conversation
+ID, hide, delete. Group them into collapsible sections, filter the roster by name, role, or anything
+said in the thread, and jump anywhere with ⌘K.
 
 <img src="docs/screenshots/context-menu.png" alt="Bot context menu" width="100%">
 
@@ -157,7 +158,7 @@ flowchart LR
 |---|---|---|
 | Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
-| API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, routines, connectors, config — HTTP + SSE. |
+| API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, routines, sections, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
 | Desktop | `electron/` | macOS shell: dictation helper (SFSpeechRecognizer), local screen capture, CUA bridge. |
 
@@ -197,8 +198,8 @@ pnpm build         # typecheck + production build
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use → routines on a schedule. Rough edges to expect: sidebar sections aren't built yet, and
-Windows/Linux shells haven't been attempted (the harness itself is portable Node).
+computer use → routines on a schedule. Rough edges to expect: Windows/Linux shells haven't been
+attempted (the harness itself is portable Node).
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

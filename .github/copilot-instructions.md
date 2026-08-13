@@ -65,7 +65,7 @@ Rules that hold the design together:
   safely. Do not "fix" this by validating driver slugs up front.
 - **`~/.openmausbot/`** holds everything: `config.json` (keys), `bots.json` (bot records,
   thread→instance binding, per-instance `resumeCursors`), `routines.json` (scheduled turns),
-  transcripts, event logs.
+  `sections.json` (sidebar groups), transcripts, event logs.
 
 ## Conventions
 
@@ -104,6 +104,15 @@ B→C and A→B→A loops never start (`MAX_COMMS_DEPTH` in `server/index.ts`).
 the same `startTurn` as a typed message, so it inherits the permission broker, event bus, and
 transcript. Schedule math is pure and lives in `routines.ts`; the ticking scheduler lives in
 `index.ts` and advances the clock *before* running, so a slow or failing turn can't hot-loop.
+
+**Sections own no bots.** A sidebar section (`sections.json`) is just a named, ordered, collapsible
+group; membership lives on `bot.sectionId`. Deleting a section returns its bots to ungrouped — which
+is also how an unknown `sectionId` reads — so a group can never take a bot with it.
+
+**UI matching lives in `src/lib/search.ts`.** The sidebar filter and the ⌘K palette share one
+ranking (exact > prefix > word-start > substring > subsequence). Palette entries are generated from
+live state — bots, *available* instances, real sections — so it can never offer something that isn't
+there.
 
 **UI** uses Tailwind v4 with the palette defined as `@theme` tokens in `src/styles.css` (e.g.
 `bg-panel`, `text-ink-secondary`, `text-accent`) — use the tokens, not raw hex. Compose classes

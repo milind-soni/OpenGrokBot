@@ -6,14 +6,19 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box" | "ollamaUrl" | "ollamaApiKey";
+export type ConfigSection =
+  | "composio"
+  | "composioApi"
+  | "box"
+  | "ollamaLocalUrl"
+  | "ollamaWorkstationUrl"
+  | "ollamaCloudUrl"
+  | "ollamaCloudApiKey";
 
 interface SectionDef {
   body: (value: string) => unknown;
   flag: (config: ConfigStatus) => boolean;
-  /** When true, the input is a plain text field (URL), not a password. */
   plaintext?: boolean;
-  /** A non-secret value echoed back by the server (e.g. the URL). */
   displayValue?: (config: ConfigStatus) => string | undefined;
 }
 
@@ -24,15 +29,27 @@ const SECTIONS: Record<ConfigSection, SectionDef> = {
     flag: (c) => c.composio.apiKeyConfigured ?? false,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
-  ollamaUrl: {
+  ollamaLocalUrl: {
     body: (v) => ({ ollama: { url: v } }),
-    flag: (c) => c.ollama?.configured ?? false,
+    flag: () => true,
     plaintext: true,
     displayValue: (c) => c.ollama?.url,
   },
-  ollamaApiKey: {
-    body: (v) => ({ ollama: { apiKey: v } }),
-    flag: (c) => Boolean(c.ollama?.configured && c.ollama?.url && c.ollama?.url !== "http://127.0.0.1:11434"),
+  ollamaWorkstationUrl: {
+    body: (v) => ({ ollamaWorkstation: { url: v } }),
+    flag: () => true,
+    plaintext: true,
+    displayValue: (c) => c.ollamaWorkstation?.url,
+  },
+  ollamaCloudUrl: {
+    body: (v) => ({ ollamaCloud: { url: v } }),
+    flag: () => true,
+    plaintext: true,
+    displayValue: (c) => c.ollamaCloud?.url,
+  },
+  ollamaCloudApiKey: {
+    body: (v) => ({ ollamaCloud: { apiKey: v } }),
+    flag: (c) => c.ollamaCloud?.configured ?? false,
   },
 };
 
@@ -45,7 +62,6 @@ export function ApiKeyRow({
   section: ConfigSection;
   label: string;
   placeholder: string;
-  /** Called after a successful save with the section's new configured flag. */
   onSaved?: (configured: boolean) => void;
 }) {
   const { state, dispatch } = useStore();
@@ -55,8 +71,8 @@ export function ApiKeyRow({
   const [error, setError] = useState<string | null>(null);
 
   const configured = state.config ? def.flag(state.config) : false;
-  const displayVal = def.displayValue?.(state.config ?? {} as ConfigStatus);
-  const clearing = !value.trim() && configured;
+  const displayVal = def.displayValue?.(state.config ?? ({} as ConfigStatus));
+  const clearing = !value.trim() && configured && !def.plaintext;
 
   const save = () => {
     if (saving || (!value.trim() && !configured)) return;
@@ -80,7 +96,7 @@ export function ApiKeyRow({
       <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
         <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
         {label}
-        {configured && <span className="text-[11px] text-success">Connected</span>}
+        {configured && !def.plaintext && <span className="text-[11px] text-success">Connected</span>}
         {def.plaintext && displayVal && (
           <span className="text-[11px] text-ink-secondary/70 truncate">{displayVal}</span>
         )}

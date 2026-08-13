@@ -1,25 +1,30 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "ollama": {"url":"http://127.0.0.1:11434"},
-//     "instances": { "<instanceId>": {"driver":"grok", …} } }
+//     "ollamaWorkstation": {"url":"http://192.168.68.70:11434"},
+//     "ollamaCloud": {"url":"https://api.ollama.com", "apiKey":"…"},
+//     "instances": { "<instanceId>": {"driver":"ollama", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
 
+export interface OllamaEndpoint {
+  url?: string;
+  apiKey?: string;
+}
+
 export interface AppConfig {
   xai?: { key?: string; url?: string };
-  /** key = ck_… Connect consumer key (connections + agent tools);
-   * apiKey = ak_… project API key — optional, unlocks the full toolkit
-   * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
-  /** Ollama endpoint — defaults to http://127.0.0.1:11434. An optional
-   * apiKey supports remote/proxied Ollama instances. */
-  ollama?: { url?: string; apiKey?: string };
-  /** The person using the app (collected in onboarding, shown in the
-   * sidebar). Not a secret — echoed back by GET /api/config. */
+  /** Primary local Ollama endpoint — defaults to http://127.0.0.1:11434 */
+  ollama?: OllamaEndpoint;
+  /** Workstation Ollama endpoint (LAN remote) */
+  ollamaWorkstation?: OllamaEndpoint;
+  /** Ollama Cloud endpoint (api.ollama.com with API key) */
+  ollamaCloud?: OllamaEndpoint;
   profile?: { name?: string; email?: string };
   instances?: InstanceConfigMap;
 }
@@ -30,14 +35,8 @@ export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 
 export function ensureDirs() {
-  // one-time migration from the pre-rename data dir — bots, transcripts,
-  // config and keys all carry over
   if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
-    try {
-      renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    } catch {
-      /* cross-device or busy — fall through to a fresh dir */
-    }
+    try { renameSync(LEGACY_DATA_DIR, DATA_DIR); } catch {}
   }
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
 }
@@ -46,27 +45,21 @@ export function loadConfig(): AppConfig {
   let cfg: AppConfig = {};
   try {
     cfg = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
-  } catch {
-    /* first run — env fallbacks below */
-  }
+  } catch {}
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-  cfg.ollama = { url: process.env.OLLAMA_URL, apiKey: process.env.OLLAMA_API_KEY, ...cfg.ollama };
+  cfg.ollama = { url: process.env.OLLAMA_URL, ...cfg.ollama };
+  cfg.ollamaWorkstation = { ...cfg.ollamaWorkstation };
+  cfg.ollamaCloud = { apiKey: process.env.OLLAMA_API_KEY_2, ...cfg.ollamaCloud };
   return cfg;
 }
 
-/** Merge a partial config into ~/.openmausbot/config.json (secrets never
- * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");
   let disk: Record<string, unknown> = {};
-  try {
-    disk = JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    /* first write */
-  }
-  for (const key of ["xai", "composio", "box", "ollama", "profile"] as const) {
+  try { disk = JSON.parse(readFileSync(p, "utf8")); } catch {}
+  for (const key of ["xai", "composio", "box", "ollama", "ollamaWorkstation", "ollamaCloud", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -75,22 +68,33 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   writeFileSync(p, JSON.stringify(disk, null, 2));
 }
 
-// Default fleet: one instance per built-in driver (upstream
-// defaultInstanceIdForDriver — instanceId defaults to the driver kind).
-// Config-file keys are injected as per-instance environment so drivers
-// see them without needing real process env vars.
+// Default fleet: three Ollama instances (local, workstation, cloud) plus
+// the original CLI-based drivers. Config-file keys are injected as
+// per-instance environment so drivers see them without needing real
+// process env vars.
 export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
-  // The default `grok` instance rides the `grokAgent` driver, not the API-key
-  // one: like claude and codex it needs no credential from us, just the CLI
-  // installed and logged in (it shows up unavailable otherwise). The API-key
-  // `grok` driver stays registered but out of the default fleet — that key is
-  // a credential Milind doesn't want to manage; an `instances` entry brings
-  // it back anytime.
   const map: InstanceConfigMap =
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances
       : {
-          ollama: { driver: "ollama" },
+          ollamaLocal: {
+            driver: "ollama",
+            displayName: "Ollama (Laptop)",
+            config: { url: cfg.ollama?.url ?? "http://127.0.0.1:11434" },
+          },
+          ollamaWorkstation: {
+            driver: "ollama",
+            displayName: "Ollama (Workstation)",
+            config: { url: cfg.ollamaWorkstation?.url ?? "http://192.168.68.70:11434" },
+          },
+          ollamaCloud: {
+            driver: "ollama",
+            displayName: "Ollama (Cloud)",
+            config: {
+              url: cfg.ollamaCloud?.url ?? "https://api.ollama.com",
+              apiKeyEnv: "OLLAMA_CLOUD_KEY",
+            },
+          },
           grok: { driver: "grokAgent" },
           gemini: { driver: "geminiAgent" },
           claude: { driver: "claudeAgent" },
@@ -101,13 +105,10 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
-      ...(cfg.ollama?.apiKey ? { OLLAMA_API_KEY: cfg.ollama.apiKey } : {}),
+      // Inject the cloud API key into the ollamaCloud instance's environment
+      ...(cfg.ollamaCloud?.apiKey ? { OLLAMA_CLOUD_KEY: cfg.ollamaCloud.apiKey } : {}),
       ...entry.environment,
     };
-    // Inject Ollama URL into the ollama instance's config
-    if (entry.driver === "ollama" && cfg.ollama?.url) {
-      entry.config = { ...((entry.config as object) ?? {}), url: cfg.ollama.url };
-    }
   }
   return map;
 }

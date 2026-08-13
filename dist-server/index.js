@@ -97,7 +97,8 @@ function askBotAndWait(targetBotId, message, depth) {
 async function defaultSelection() {
     const described = await registry.describe();
     const available = described.filter((d) => d.snapshot.state === "available");
-    const pick = available.find((d) => d.driverKind === "ollama") ??
+    const pick = available.find((d) => d.instanceId === "ollamaLocal") ??
+        available.find((d) => d.driverKind === "ollama") ??
         available.find((d) => d.driverKind === "claudeAgent") ?? available[0] ?? described[0];
     return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
 }
@@ -403,7 +404,9 @@ function configStatus() {
         xai: { configured: Boolean(cfg.xai?.key) },
         composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
         box: { configured: Boolean(cfg.box?.token) },
-        ollama: { configured: Boolean(cfg.ollama?.url), url: cfg.ollama?.url ?? "http://127.0.0.1:11434" },
+        ollama: { configured: true, url: cfg.ollama?.url ?? "http://127.0.0.1:11434" },
+        ollamaWorkstation: { configured: true, url: cfg.ollamaWorkstation?.url ?? "http://192.168.68.70:11434" },
+        ollamaCloud: { configured: Boolean(cfg.ollamaCloud?.apiKey), url: cfg.ollamaCloud?.url ?? "https://api.ollama.com" },
         // not a secret — the sidebar shows it
         profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
     };
@@ -629,7 +632,7 @@ const server = createServer(async (req, res) => {
         if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
             const body = await readBody(req);
             const patch = {};
-            for (const key of ["xai", "composio", "box", "ollama", "profile"]) {
+            for (const key of ["xai", "composio", "box", "ollama", "ollamaWorkstation", "ollamaCloud", "profile"]) {
                 if (body[key] && typeof body[key] === "object")
                     patch[key] = body[key];
             }

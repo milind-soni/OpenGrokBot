@@ -6,13 +6,10 @@ import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 
-/** Name + email, persisted to /api/config {profile} on blur. Prefilled from
- * the current config (the values are echoed back — they're not secrets). */
 function ProfileFields() {
   const { state, dispatch } = useStore();
   const [name, setName] = useState(state.config?.profile?.name ?? "");
   const [email, setEmail] = useState(state.config?.profile?.email ?? "");
-  // adopt late-arriving config exactly once per open (config loads async)
   useEffect(() => {
     setName(state.config?.profile?.name ?? "");
     setEmail(state.config?.profile?.email ?? "");
@@ -72,19 +69,33 @@ export function AppSettingsPanel() {
         </div>
 
         <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="text-[15px] font-medium text-ink">Ollama (Local LLM)</div>
+          <div className="text-[15px] font-medium text-ink">Ollama — Local (Laptop)</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Connect to a local or remote Ollama instance. Default is{" "}
-            <code className="text-[12px] text-ink-secondary/80">http://127.0.0.1:11434</code>.
-            Models you've pulled appear automatically in the model picker.
+            Your local Ollama instance. Models you've pulled appear automatically.
+          </div>
+          <div className="mt-4">
+            <ApiKeyRow section="ollamaLocalUrl" label="Ollama URL" placeholder="http://127.0.0.1:11434" />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl bg-card p-4">
+          <div className="text-[15px] font-medium text-ink">Ollama — Workstation</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            Remote Ollama on your LAN. Larger models run here.
+          </div>
+          <div className="mt-4">
+            <ApiKeyRow section="ollamaWorkstationUrl" label="Workstation URL" placeholder="http://192.168.68.70:11434" />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl bg-card p-4">
+          <div className="text-[15px] font-medium text-ink">Ollama — Cloud</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            Ollama Cloud API for hosted models (deepseek-v4-pro, kimi-k3, qwen3.5, etc.).
           </div>
           <div className="mt-4 flex flex-col gap-4">
-            <ApiKeyRow section="ollamaUrl" label="Ollama URL" placeholder="http://127.0.0.1:11434" />
-            <ApiKeyRow
-              section="ollamaApiKey"
-              label="Ollama API key (optional, for remote instances)"
-              placeholder="Bearer token for proxied Ollama"
-            />
+            <ApiKeyRow section="ollamaCloudUrl" label="Cloud API URL" placeholder="https://api.ollama.com" />
+            <ApiKeyRow section="ollamaCloudApiKey" label="Cloud API key" placeholder="Your Ollama Cloud API key" />
           </div>
         </div>
 

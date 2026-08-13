@@ -69,6 +69,8 @@ export interface ConfigStatus {
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   box: { configured: boolean };
   ollama: { configured: boolean; url?: string };
+  ollamaWorkstation: { configured: boolean; url?: string };
+  ollamaCloud: { configured: boolean; url?: string };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
 }
@@ -610,7 +612,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, ollama: frame.ollama, profile: frame.profile },
+            config: { xai: frame.xai, composio: frame.composio, box: frame.box, ollama: frame.ollama, ollamaWorkstation: frame.ollamaWorkstation, ollamaCloud: frame.ollamaCloud, profile: frame.profile },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))

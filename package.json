@@ -21,7 +21,10 @@
     "build:speech": "swiftc -O electron/resources/speech-helper.swift -o electron/resources/speech-helper",
     "package": "pnpm build && pnpm build:server && pnpm build:speech && electron-builder --mac --publish never",
     "package:win": "pnpm build && pnpm build:server && electron-builder --win --publish never",
-    "package:mac": "pnpm build && pnpm build:server && pnpm build:speech && electron-builder --mac --publish never"
+    "package:mac": "pnpm build && pnpm build:server && pnpm build:speech && electron-builder --mac --publish never",
+    "safe:status": "node scripts/safe-process.mjs status",
+    "safe:kill": "node scripts/safe-process.mjs kill-omb",
+    "safe:start": "node scripts/safe-process.mjs start"
   },
   "dependencies": {
     "@trycua/cua-driver": "^0.19.3",

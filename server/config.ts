@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
+import { providerDisplayName, type ApiProviderConfig } from "./providers.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
@@ -17,6 +18,9 @@ export interface AppConfig {
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
+  /** Direct OpenAI-compatible providers. API keys remain local and are never
+   * returned by the harness API. */
+  apiProviders?: Record<string, ApiProviderConfig>;
   instances?: InstanceConfigMap;
 }
 
@@ -67,6 +71,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
   }
+  if (patch.apiProviders !== undefined) disk.apiProviders = patch.apiProviders;
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(p, JSON.stringify(disk, null, 2));
 }
@@ -104,6 +109,23 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
       ...entry.environment,
+    };
+  }
+  for (const [providerId, provider] of Object.entries(cfg.apiProviders ?? {})) {
+    if (provider.enabled === false) continue;
+    const instanceId = `api-${providerId}`;
+    if (map[instanceId]) continue;
+    map[instanceId] = {
+      driver: "openaiCompatible",
+      displayName: providerDisplayName(provider),
+      environment: provider.apiKey ? { OPENAI_COMPAT_API_KEY: provider.apiKey } : {},
+      config: {
+        baseUrl: provider.baseUrl,
+        apiKeyEnv: "OPENAI_COMPAT_API_KEY",
+        requiresApiKey: provider.requiresApiKey,
+        models: provider.models ?? [],
+        defaultModel: provider.defaultModel,
+      },
     };
   }
   return map;

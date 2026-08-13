@@ -733,6 +733,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
           break;
+        case "providers":
+          api("/api/instances")
+            .then(({ instances }) => rawDispatch({ type: "instances", instances }))
+            .catch(() => {});
+          break;
         case "bot.deleted":
           rawDispatch({ type: "deleteBot", botId: frame.botId });
           break;

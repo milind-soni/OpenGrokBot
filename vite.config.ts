@@ -21,8 +21,6 @@ export default defineConfig({
     },
   },
   server: {
-    // Bind all interfaces so the app is reachable via the Netbird mesh IP
-    // (http://100.78.44.10:5199) as well as localhost.
     host: "0.0.0.0",
     port: 5199,
     // packager output lands inside the repo — its HTML files must never

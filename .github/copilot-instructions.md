@@ -24,6 +24,14 @@ pnpm build                   # typecheck + vite build
 pnpm package                 # full macOS .dmg via electron-builder (signing/notarization)
 ```
 
+`electron-builder.yml` sets `notarize: false`, so `pnpm package` only *signs* with the Developer ID;
+notarization is a separate step (`--config.mac.notarize=true` with `APPLE_ID` /
+`APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`, or `xcrun notarytool` afterwards). If the checkout
+lives under an iCloud-managed folder such as `~/Documents`, signing fails with `resource fork, Finder
+information, or similar detritus not allowed` — the file provider stamps `com.apple.FinderInfo` on the
+output tree. Build to a path outside it:
+`--config.directories.output=/tmp/omb-release`.
+
 CI (`.github/workflows/ci.yml`) runs `pnpm typecheck && pnpm test` on macOS, Ubuntu, and
 Windows — the Windows leg is the guardrail for portability, and POSIX-only tests self-skip
 there. **`pnpm typecheck && pnpm test` must pass before any PR.**

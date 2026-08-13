@@ -4,6 +4,9 @@
 @theme {
   --animate-panel-in: panel-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-pop-in: pop-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-caret: caret-blink 1s step-end infinite;
+  --animate-msg-in: msg-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-shimmer: shimmer 2s linear infinite;
 
   --color-app: #070707;
   --color-panel: #111111;
@@ -60,6 +63,32 @@ body {
 @keyframes pop-in {
   from { transform: scale(0.96) translateY(6px); opacity: 0; }
   to { transform: scale(1) translateY(0); opacity: 1; }
+}
+/* streaming caret: a true typing blink (step, not fade) */
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+/* new message settle-in: subtle, fast, GPU-only */
+@keyframes msg-in {
+  from { transform: translateY(4px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+/* "Thinking…" label sheen while the model reasons */
+@keyframes shimmer {
+  from { background-position: 200% 50%; }
+  to { background-position: -200% 50%; }
+}
+.thinking-shimmer {
+  background: linear-gradient(90deg, var(--color-ink-secondary) 40%, var(--color-ink) 50%, var(--color-ink-secondary) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-caret, .animate-msg-in, .animate-shimmer { animation: none; }
+  .thinking-shimmer { background: none; color: var(--color-ink-secondary); }
 }
 
 /* SupaMaus vector motion. The fast horizontal compression is the edge-on

@@ -97,8 +97,22 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
             const child: any = Array.isArray(children) ? children[0] : children;
             const className: string = child?.props?.className ?? "";
             const lang = /language-([\w-]+)/.exec(className)?.[1] ?? "";
-            const code = String(child?.props?.children ?? "").replace(/\n$/, "");
+            // children can be a string OR an array of strings/nodes — flatten
+            // strings only, so String() never comma-joins an array
+            const flat = (n: any): string =>
+              typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
+            const code = flat(child?.props?.children).replace(/\n$/, "");
             return <CodeBlock code={code} lang={lang} streaming={streaming} />;
+          },
+          img({ src, alt }: { src?: string; alt?: string }) {
+            return (
+              <img
+                src={src}
+                alt={alt ?? ""}
+                loading="lazy"
+                className="max-h-96 max-w-full rounded-lg border border-hairline/30"
+              />
+            );
           },
           code({ children }: { children?: ReactNode }) {
             return (
@@ -149,6 +163,12 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
           },
           h4({ children }: { children?: ReactNode }) {
             return <div className="mt-1.5 font-semibold">{children}</div>;
+          },
+          h5({ children }: { children?: ReactNode }) {
+            return <div className="mt-1.5 text-[14px] font-semibold">{children}</div>;
+          },
+          h6({ children }: { children?: ReactNode }) {
+            return <div className="mt-1.5 text-[13.5px] font-semibold text-ink-secondary">{children}</div>;
           },
           blockquote({ children }: { children?: ReactNode }) {
             return (

@@ -1,5 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronLeft, ChevronRight, Loader2, Monitor, Pencil, Square, X } from "lucide-react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Loader2,
+  Monitor,
+  Pencil,
+  RefreshCw,
+  Square,
+  X,
+} from "lucide-react";
 import { useStore, formatTime, messageVersions, visibleMessages, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
@@ -13,6 +28,129 @@ import { cn } from "@/lib/cn";
  * bury the conversation; bots get full markdown. */
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
+
+/** "Today" / "Yesterday" / "Mon, Aug 11" — real dates, not a hardcoded label. */
+function dayLabel(at: number): string {
+  const d = new Date(at);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+function DaySeparator({ at }: { at: number }) {
+  return (
+    <div className="py-3 text-center text-[13px] text-ink-secondary">
+      {dayLabel(at)} {formatTime(at)}
+    </div>
+  );
+}
+
+/** Hover/focus-revealed copy control shared by user + bot bubbles. */
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      aria-label="Copy message"
+      title="Copy message"
+      className={cn(
+        "rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
+        className,
+      )}
+    >
+      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+    </button>
+  );
+}
+
+/** Live extended thinking: shimmer label + collapsible reasoning text.
+ * Ephemeral — rendered only while the turn runs, dropped when it settles. */
+function ThinkingStrip({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const tailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) tailRef.current?.scrollTo({ top: tailRef.current.scrollHeight });
+  }, [text, open]);
+  return (
+    <div className="flex w-full justify-start">
+      <div className="max-w-[70%] min-w-[200px]">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[12.5px] hover:bg-raised/40"
+        >
+          <Brain size={13} className="text-ink-secondary" />
+          <span className={cn(active ? "thinking-shimmer animate-shimmer" : "text-ink-secondary")}>
+            {active ? "Thinking…" : "Thought process"}
+          </span>
+          <ChevronDown size={12} className={cn("text-ink-secondary transition-transform", open && "rotate-180")} />
+        </button>
+        {open ? (
+          <div
+            ref={tailRef}
+            className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-hairline/30 bg-panel px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary"
+          >
+            {text}
+          </div>
+        ) : (
+          active && (
+            <div className="mt-0.5 truncate pl-6 text-[12px] text-ink-secondary/70">
+              {text.slice(-120).split("\n").pop()}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A failed turn: a real error block with a retry, not a truncated pill. */
+function ErrorRow({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[70%] rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-[13.5px] text-danger">
+        <div className="flex items-start gap-2">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 break-words">{message}</span>
+        </div>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="mt-1.5 flex items-center gap-1.5 rounded-full border border-danger/30 px-2.5 py-1 text-[12.5px] hover:bg-danger/15"
+          >
+            <RefreshCw size={12} /> Retry
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One bad markdown node must not white-screen the app — the transcript
+ * degrades to a plain-text bubble instead. */
+class MessageBoundary extends Component<{ children: ReactNode; fallbackText: string }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+          {this.props.fallbackText}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /** Inline editor a user bubble turns into: Enter sends (forking the
  * conversation), Esc cancels. Shift+Enter for a newline, like everywhere. */
@@ -75,16 +213,20 @@ function Bubble({
   bot,
   message,
   editing,
+  isLastBotText,
   onStartEdit,
   onCancelEdit,
   onSubmitEdit,
+  onRegenerate,
 }: {
   bot: Bot;
   message: Message;
   editing: boolean;
+  isLastBotText: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSubmitEdit: (text: string) => void;
+  onRegenerate?: () => void;
 }) {
   const { dispatch } = useStore();
   const user = message.role === "user";
@@ -109,24 +251,27 @@ function Bubble({
   };
 
   return (
-    <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
+    <div className={cn("group animate-msg-in flex w-full flex-col", user ? "items-end" : "items-start")}>
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {/* editing rewinds the thread, so it waits for the turn to end —
             same rule as the version switcher below */}
         {user && message.kind === "text" && !bot.busy && (
           <button
             onClick={onStartEdit}
-            className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink group-hover:opacity-100"
+            aria-label="Edit message"
+            className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
             title="Edit message"
           >
             <Pencil size={14} />
           </button>
         )}
+        {user && <CopyButton text={text} />}
         <div
           className={cn(
             "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
             user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
           )}
+          title={new Date(message.at).toLocaleString()}
         >
           {user ? (
             <>
@@ -140,11 +285,41 @@ function Bubble({
                   Show full message
                 </button>
               )}
+              {expanded && (
+                <button onClick={() => setExpanded(false)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+                  Show less
+                </button>
+              )}
             </>
           ) : (
-            <ChatMarkdown text={text} />
+            <MessageBoundary fallbackText={text}>
+              <ChatMarkdown text={text} />
+            </MessageBoundary>
           )}
         </div>
+        {!user && (
+          <div className="flex flex-col gap-0.5 self-end pb-0.5">
+            <CopyButton text={text} />
+            {isLastBotText && !bot.busy && onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                aria-label="Regenerate response"
+                title="Regenerate response"
+                className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+              >
+                <RefreshCw size={14} />
+              </button>
+            )}
+          </div>
+        )}
+        <span
+          className={cn(
+            "self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100",
+            user ? "order-first mr-1" : "ml-1",
+          )}
+        >
+          {formatTime(message.at)}
+        </span>
       </div>
       {versions.length > 1 && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
@@ -217,8 +392,10 @@ function StreamingBubble({ text }: { text: string }) {
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
-        <ChatMarkdown text={text} streaming />
-        <span className="ml-0.5 inline-block h-[14px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
+        <MessageBoundary fallbackText={text}>
+          <ChatMarkdown text={text} streaming />
+        </MessageBoundary>
+        <span className="animate-caret ml-0.5 inline-block h-[14px] w-[2px] bg-ink align-middle" />
       </div>
     </div>
   );
@@ -244,11 +421,16 @@ export function ChatView({ bot }: { bot: Bot }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const streaming = state.streaming[bot.threadId];
+  const reasoning = state.reasoning[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
+  const lastBotTextId = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
+    [messages],
+  );
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -258,6 +440,13 @@ export function ChatView({ bot }: { bot: Bot }) {
     dispatch({ type: "editMessage", botId: bot.id, messageId, text });
   };
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user" && m.kind === "text");
+  // regenerate = fork the last user message with the same text — reuses the
+  // existing branch machinery, so the old answer stays reachable via ‹ ›
+  const regenerate = () => {
+    if (lastUserMessage?.text && !bot.busy) {
+      dispatch({ type: "editMessage", botId: bot.id, messageId: lastUserMessage.id, text: lastUserMessage.text });
+    }
+  };
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
@@ -270,7 +459,17 @@ export function ChatView({ bot }: { bot: Bot }) {
   useEffect(() => setFollow(true), [bot.id]);
   useEffect(() => {
     if (follow) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [bot.id, messages.length, streaming, bot.busy, follow]);
+  }, [bot.id, messages.length, streaming, reasoning, bot.busy, follow]);
+
+  // keyboard is a scroll gesture too (upstream lesson): PageUp/Home break
+  // follow like an upward wheel; the at-end onScroll check re-arms it
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "PageUp" || (e.key === "Home" && !(e.target instanceof HTMLTextAreaElement))) setFollow(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const atEnd = () => {
     const el = scrollRef.current;
@@ -363,33 +562,62 @@ export function ChatView({ bot }: { bot: Bot }) {
           if (!follow && atEnd()) setFollow(true);
         }}
       >
-        <div className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4">
-          {first && (
-            <div className="py-3 text-center text-[13px] text-ink-secondary">
-              Today {formatTime(first.at)}
+        <div
+          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
+          role="log"
+          aria-live="polite"
+          aria-label={`Conversation with ${bot.name}`}
+        >
+          {!first && !bot.busy && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
+              <MausAvatar color={bot.color} state="idle" size={64} motion="none" motionKey={0} />
+              <div className="text-[17px] font-semibold text-ink">{bot.name}</div>
+              <div className="max-w-[360px] text-[14px] text-ink-secondary">
+                {bot.description || "Send a message to start the conversation."}
+              </div>
             </div>
           )}
-          {messages.map((m) => {
-            switch (m.kind) {
-              case "options":
-                return <OptionCard key={m.id} botId={bot.id} message={m} />;
-              case "activity":
-                return <ActivityChip key={m.id} message={m} />;
-              case "screen":
-                return m.png ? <ScreenFrame key={m.id} png={m.png} mime={m.mime} /> : null;
-              default:
-                return (
-                  <Bubble
-                    key={m.id}
-                    bot={bot}
-                    message={m}
-                    editing={editingId === m.id}
-                    onStartEdit={() => setEditingId(m.id)}
-                    onCancelEdit={() => setEditingId(null)}
-                    onSubmitEdit={(text) => submitEdit(m.id, text)}
-                  />
-                );
-            }
+          {messages.map((m, i) => {
+            const prev = messages[i - 1];
+            const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
+            const row = (() => {
+              switch (m.kind) {
+                case "options":
+                  return <OptionCard botId={bot.id} message={m} />;
+                case "activity":
+                  // a failed turn is an error, not a tool run — render it as one
+                  return m.tool?.name.startsWith("error:") ? (
+                    <ErrorRow
+                      message={m.tool.name.slice(6).trim()}
+                      onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
+                    />
+                  ) : (
+                    <ActivityChip message={m} />
+                  );
+                case "screen":
+                  return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+                default:
+                  return (
+                    <Bubble
+                      bot={bot}
+                      message={m}
+                      editing={editingId === m.id}
+                      isLastBotText={m.id === lastBotTextId}
+                      onStartEdit={() => setEditingId(m.id)}
+                      onCancelEdit={() => setEditingId(null)}
+                      onSubmitEdit={(text) => submitEdit(m.id, text)}
+                      onRegenerate={regenerate}
+                    />
+                  );
+              }
+            })();
+            if (!row) return null;
+            return (
+              <div key={m.id} className="contents">
+                {newDay && <DaySeparator at={m.at} />}
+                {row}
+              </div>
+            );
           })}
           {provisioning && (
             <div className="flex justify-start">
@@ -399,6 +627,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               </div>
             </div>
           )}
+          {reasoning && bot.busy && <ThinkingStrip text={reasoning} active={!streaming} />}
           {streaming ? (
             <StreamingBubble text={streaming} />
           ) : (
@@ -418,11 +647,12 @@ export function ChatView({ bot }: { bot: Bot }) {
         </div>
       </div>
 
-      {/* Reading scrollback while new content arrives — one tap back to live */}
-      {!follow && (bot.busy || Boolean(streaming)) && (
+      {/* Reading scrollback — one tap back to the end, streaming or not */}
+      {!follow && (
         <button
           onClick={jumpToLatest}
-          className="absolute bottom-24 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
+          aria-label="Jump to latest messages"
+          className="animate-pop-in absolute bottom-24 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
         >
           <ArrowDown size={13} /> Jump to latest
         </button>

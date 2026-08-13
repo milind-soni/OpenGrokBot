@@ -444,6 +444,7 @@ export function Sidebar() {
             onChange={(e) => dispatch({ type: "search", value: e.target.value })}
             onKeyDown={(e) => e.key === "Escape" && dispatch({ type: "search", value: "" })}
             placeholder="Search"
+            aria-label="Search bots"
             className="w-full min-w-0 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
           {query && (

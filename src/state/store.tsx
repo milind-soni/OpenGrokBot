@@ -144,6 +144,9 @@ interface AppState {
   appSettingsOpen: boolean;
   /** in-flight assistant text per threadId (content.delta fold) */
   streaming: Record<string, string>;
+  /** in-flight extended-thinking text per threadId (reasoning_text fold) —
+   * ephemeral: shown while the bot thinks, dropped when the turn settles */
+  reasoning: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
@@ -183,7 +186,7 @@ type Action =
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
   | { type: "messagePatched"; threadId: string; message: Message }
-  | { type: "streamDelta"; threadId: string; delta: string }
+  | { type: "streamDelta"; threadId: string; delta: string; reasoning?: string }
   | { type: "streamClear"; threadId: string }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
@@ -307,11 +310,24 @@ function reducer(state: AppState, action: Action): AppState {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) return state;
       // every server-side append chains onto (and becomes) the active leaf
-      const next = updateBot(state, bot.id, (b) =>
-        b.messages.some((m) => m.id === action.message.id)
-          ? { ...b, activeLeafId: action.message.id }
-          : { ...b, messages: [...b.messages, action.message], activeLeafId: action.message.id },
-      );
+      const next = updateBot(state, bot.id, (b) => {
+        if (b.messages.some((m) => m.id === action.message.id)) {
+          return { ...b, activeLeafId: action.message.id };
+        }
+        let messages = [...b.messages, action.message];
+        // base64 screen frames are big; a long computer-use session would
+        // grow memory without bound. Keep the newest few frames' pixels and
+        // strip the rest (the message row survives as a placeholder).
+        if (action.message.kind === "screen") {
+          const withPng = messages.filter((m) => m.kind === "screen" && m.png);
+          const excess = withPng.length - MAX_KEPT_SCREEN_FRAMES;
+          if (excess > 0) {
+            const dropIds = new Set(withPng.slice(0, excess).map((m) => m.id));
+            messages = messages.map((m) => (dropIds.has(m.id) ? { ...m, png: undefined } : m));
+          }
+        }
+        return { ...b, messages, activeLeafId: action.message.id };
+      });
       const motion =
         action.message.kind === "options"
           ? "thinking"
@@ -328,7 +344,8 @@ function reducer(state: AppState, action: Action): AppState {
       // a settled assistant bubble replaces the in-flight stream
       if (action.message.role === "bot" && action.message.kind === "text") {
         const { [action.threadId]: _, ...rest } = animated.streaming;
-        return { ...animated, streaming: rest };
+        const { [action.threadId]: __, ...reasoningRest } = animated.reasoning;
+        return { ...animated, streaming: rest, reasoning: reasoningRest };
       }
       return animated;
     }
@@ -349,17 +366,26 @@ function reducer(state: AppState, action: Action): AppState {
         messages: b.messages.map((m) => (m.id === action.message.id ? action.message : m)),
       }));
     }
-    case "streamDelta":
-      return {
-        ...state,
-        streaming: {
+    case "streamDelta": {
+      const next = { ...state };
+      if (action.delta) {
+        next.streaming = {
           ...state.streaming,
           [action.threadId]: (state.streaming[action.threadId] ?? "") + action.delta,
-        },
-      };
+        };
+      }
+      if (action.reasoning) {
+        next.reasoning = {
+          ...state.reasoning,
+          [action.threadId]: (state.reasoning[action.threadId] ?? "") + action.reasoning,
+        };
+      }
+      return next;
+    }
     case "streamClear": {
       const { [action.threadId]: _, ...rest } = state.streaming;
-      return { ...state, streaming: rest };
+      const { [action.threadId]: __, ...reasoningRest } = state.reasoning;
+      return { ...state, streaming: rest, reasoning: reasoningRest };
     }
     case "screenFrame":
       return {
@@ -428,7 +454,8 @@ function reducer(state: AppState, action: Action): AppState {
       if (!bot) return state;
       // a rewind also invalidates any half-streamed text from the old branch
       const { [action.threadId]: _, ...streaming } = state.streaming;
-      return updateBot({ ...state, streaming }, bot.id, (b) => ({
+      const { [action.threadId]: __, ...reasoning } = state.reasoning;
+      return updateBot({ ...state, streaming, reasoning }, bot.id, (b) => ({
         ...b,
         activeLeafId: action.activeLeafId,
       }));
@@ -459,6 +486,9 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
+/** Newest screen frames whose pixels stay in memory per thread. */
+const MAX_KEPT_SCREEN_FRAMES = 8;
+
 const initialState: AppState = {
   bots: [],
   sections: [],
@@ -472,6 +502,7 @@ const initialState: AppState = {
   computerOpen: false,
   appSettingsOpen: false,
   streaming: {},
+  reasoning: {},
   screens: {},
   provisioning: {},
   connected: false,
@@ -499,6 +530,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // per-frame stream-delta batching (see the "runtime" SSE case)
+  const deltaBuffer = useRef(new Map<string, { text: string; reasoning: string }>());
+  const deltaFlush = useRef<number | null>(null);
 
   // debounced PATCH per bot for text-field edits (name/title/description)
   const patchTimers = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; patch: Record<string, unknown> }>());
@@ -736,9 +770,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         case "runtime": {
           const event = frame.event;
-          if (event.type === "content.delta" && event.streamKind === "assistant_text") {
-            rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
+          if (event.type === "content.delta") {
+            // Batch token deltas per animation frame (t3code-style): a fast
+            // stream dispatches once per frame instead of once per token, so
+            // the app tree re-renders at most ~60x/s while streaming.
+            const buf = deltaBuffer.current;
+            const entry = buf.get(event.threadId) ?? { text: "", reasoning: "" };
+            if (event.streamKind === "assistant_text") entry.text += event.delta;
+            else if (event.streamKind === "reasoning_text") entry.reasoning += event.delta;
+            buf.set(event.threadId, entry);
+            if (deltaFlush.current === null) {
+              deltaFlush.current = requestAnimationFrame(() => {
+                deltaFlush.current = null;
+                for (const [threadId, { text, reasoning }] of deltaBuffer.current) {
+                  rawDispatch({ type: "streamDelta", threadId, delta: text, reasoning: reasoning || undefined });
+                }
+                deltaBuffer.current.clear();
+              });
+            }
           } else if (event.type === "turn.completed") {
+            // flush any buffered tail before clearing so no tokens are lost
+            if (deltaFlush.current !== null) {
+              cancelAnimationFrame(deltaFlush.current);
+              deltaFlush.current = null;
+            }
+            for (const [threadId, { text, reasoning }] of deltaBuffer.current) {
+              rawDispatch({ type: "streamDelta", threadId, delta: text, reasoning: reasoning || undefined });
+            }
+            deltaBuffer.current.clear();
             rawDispatch({ type: "streamClear", threadId: event.threadId });
           }
           break;

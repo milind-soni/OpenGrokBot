@@ -13,8 +13,38 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { UpdateBanner } from "@/components/UpdateBanner";
 
 function Shell() {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+
+  // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next.
+  // Kept deliberately small; every panel already closes on Esc.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const bots = state.bots.filter((b) => !b.hidden);
+      if (e.key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        dispatch({ type: "newBot" });
+      } else if (/^[1-9]$/.test(e.key)) {
+        const target = bots[Number(e.key) - 1];
+        if (target) {
+          e.preventDefault();
+          dispatch({ type: "select", id: target.id });
+        }
+      } else if (e.shiftKey && (e.key === "[" || e.key === "]")) {
+        const idx = bots.findIndex((b) => b.id === state.selectedId);
+        const next = bots[(idx + (e.key === "]" ? 1 : -1) + bots.length) % bots.length];
+        if (next) {
+          e.preventDefault();
+          dispatch({ type: "select", id: next.id });
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state.bots, state.selectedId, dispatch]);
+
   return (
     <div className="flex h-full flex-col">
       {/* fixed-position popup, bottom-left — outside the layout flow */}

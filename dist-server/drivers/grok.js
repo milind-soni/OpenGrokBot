@@ -170,7 +170,7 @@ export const GrokDriver = {
             snapshot,
             adapter: {
                 provider: DRIVER_KIND,
-                capabilities: { sessionModelSwitch: "in-session", transcriptReplay: true },
+                capabilities: { sessionModelSwitch: "in-session" },
                 sendTurn,
                 interruptTurn: async (threadId) => active.get(threadId)?.abort.abort(),
                 respondToRequest: async () => {

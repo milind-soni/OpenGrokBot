@@ -1,7 +1,6 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
-//   { "openrouter": {"key":"sk-or-…"}, "ollamaCloud": {"key":"…"},
-//     "openaiCompatible": {"url":"http://127.0.0.1:11434/v1", "model":"gpt-oss:20b"},
-//     "instances": { "<instanceId>": {"driver":"openaiCompatible", …} } }
+//   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +9,6 @@ export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbo
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
-export const MEDIA_DIR = join(DATA_DIR, "media");
 export function ensureDirs() {
     // one-time migration from the pre-rename data dir — bots, transcripts,
     // config and keys all carry over
@@ -22,7 +20,7 @@ export function ensureDirs() {
             /* cross-device or busy — fall through to a fresh dir */
         }
     }
-    for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, MEDIA_DIR])
+    for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR])
         mkdirSync(dir, { recursive: true });
 }
 export function loadConfig() {
@@ -34,14 +32,6 @@ export function loadConfig() {
         /* first run — env fallbacks below */
     }
     cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
-    cfg.openrouter = { key: process.env.OPENROUTER_API_KEY, ...cfg.openrouter };
-    cfg.ollamaCloud = { key: process.env.OLLAMA_API_KEY, ...cfg.ollamaCloud };
-    cfg.openaiCompatible = {
-        key: process.env.OPENAI_COMPATIBLE_API_KEY,
-        url: process.env.OPENAI_COMPATIBLE_BASE_URL,
-        model: process.env.OPENAI_COMPATIBLE_MODEL,
-        ...cfg.openaiCompatible,
-    };
     cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
     cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
     return cfg;
@@ -57,15 +47,7 @@ export function saveConfig(patch) {
     catch {
         /* first write */
     }
-    for (const key of [
-        "xai",
-        "openrouter",
-        "ollamaCloud",
-        "openaiCompatible",
-        "composio",
-        "box",
-        "profile",
-    ]) {
+    for (const key of ["xai", "composio", "box", "profile"]) {
         if (patch[key] && typeof patch[key] === "object") {
             disk[key] = { ...disk[key], ...patch[key] };
         }
@@ -91,32 +73,11 @@ export function instanceConfigs(cfg) {
             gemini: { driver: "geminiAgent" },
             claude: { driver: "claudeAgent" },
             codex: { driver: "codex" },
-            openrouter: {
-                driver: "openrouter",
-                config: { url: cfg.openrouter?.url, model: cfg.openrouter?.model },
-            },
-            "ollama-cloud": {
-                driver: "ollamaCloud",
-                config: { url: cfg.ollamaCloud?.url, model: cfg.ollamaCloud?.model },
-            },
-            "openai-compatible": {
-                driver: "openaiCompatible",
-                config: {
-                    url: cfg.openaiCompatible?.url,
-                    model: cfg.openaiCompatible?.model,
-                    modelTasks: cfg.openaiCompatible?.modelTasks,
-                    imagePath: cfg.openaiCompatible?.imagePath,
-                    videoPath: cfg.openaiCompatible?.videoPath,
-                },
-            },
             computer: { driver: "boxAgent" },
         };
     for (const entry of Object.values(map)) {
         entry.environment = {
             ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-            ...(cfg.openrouter?.key ? { OPENROUTER_API_KEY: cfg.openrouter.key } : {}),
-            ...(cfg.ollamaCloud?.key ? { OLLAMA_API_KEY: cfg.ollamaCloud.key } : {}),
-            ...(cfg.openaiCompatible?.key ? { OPENAI_COMPATIBLE_API_KEY: cfg.openaiCompatible.key } : {}),
             ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
             ...entry.environment,
         };

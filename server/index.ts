@@ -17,6 +17,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
+import { completionEvidence, emptyEvidence, type TurnEvidence } from "./verification.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -131,6 +132,7 @@ function broadcast(payload: unknown) {
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+const evidenceByTurn = new Map<string, TurnEvidence>();
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
@@ -169,6 +171,11 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         // the bot just finished acting — refresh its screen preview now
         if (bot) pokeScreenPoller(bot.id);
+        if (event.turnId) {
+          const evidence = evidenceByTurn.get(event.turnId) ?? emptyEvidence();
+          event.ok ? evidence.succeeded++ : evidence.failed++;
+          evidenceByTurn.set(event.turnId, evidence);
+        }
       }
       break;
     case "item.started":
@@ -178,6 +185,11 @@ bus.subscribe((event: RuntimeEvent) => {
         if (event.title?.endsWith("__ask_bot")) break;
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
+        if (event.turnId) {
+          const evidence = evidenceByTurn.get(event.turnId) ?? emptyEvidence();
+          evidence.started++;
+          evidenceByTurn.set(event.turnId, evidence);
+        }
       }
       break;
     case "request.opened": {
@@ -213,6 +225,10 @@ bus.subscribe((event: RuntimeEvent) => {
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       break;
     case "turn.completed": {
+      const evidence = event.turnId ? evidenceByTurn.get(event.turnId) : undefined;
+      if (event.turnId) evidenceByTurn.delete(event.turnId);
+      const summary = completionEvidence(evidence ?? emptyEvidence(), event.ok);
+      if (summary) pushMessage({ role: "bot", kind: "activity", tool: summary });
       if (bot) {
         // the last live frame becomes a settled inline screen message —
         // the screenshot-in-chat moment

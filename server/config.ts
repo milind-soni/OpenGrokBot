@@ -108,6 +108,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           codex: { driver: "codex" },
           antigravity: { driver: "antigravityAgent" },
           opencodeGo: { driver: "opencodeGo" },
+          reasonix: { driver: "reasonix" },
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {

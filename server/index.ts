@@ -815,7 +815,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`openmausbot server on http://0.0.0.0:${PORT} (accessible via Netbird at http://100.78.44.10:${PORT})`);
+  console.log(`openmausbot server on http://0.0.0.0:${PORT} `);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

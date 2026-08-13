@@ -9,6 +9,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import type { MausColor, MausMotion } from "@/lib/mascot";
@@ -42,6 +43,27 @@ export interface Message {
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+  /** rooms: which member said this (sender attribution). */
+  from?: { botId: string; name: string; color: MausColor };
+  /** emoji reactions; by = "user" or a member botId. */
+  reactions?: Array<{ emoji: string; by: string }>;
+  /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
+  comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+}
+
+/** A room: several bots + you in one shared thread. */
+export interface Group {
+  id: string;
+  threadId: string;
+  name: string;
+  memberIds: string[];
+  bulletin: string;
+  unread: boolean;
+  createdAt: number;
+  /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
+  dm?: boolean;
+  busyBotId?: string | null;
+  messages: Message[];
 }
 
 export type ModelTask = "chat" | "image" | "video";
@@ -166,8 +188,10 @@ export interface InstanceInfo {
 
 export interface AppState {
   bots: Bot[];
+  groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** selected chat — a bot id OR a group id */
   selectedId: string;
   settingsOpen: boolean;
   pluginsOpen: boolean;
@@ -175,11 +199,6 @@ export interface AppState {
   openCreationRequest: OpenCreationRequest | null;
   computerOpen: boolean;
   appSettingsOpen: boolean;
-  /** in-flight assistant text per threadId (content.delta fold) */
-  streaming: Record<string, string>;
-  /** in-flight extended-thinking text per threadId (reasoning_text fold) —
-   * ephemeral: shown while the bot thinks, dropped when the turn settles */
-  reasoning: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
@@ -194,7 +213,15 @@ export interface AppState {
 }
 
 export type Action =
-  | { type: "hydrate"; bots: Bot[] }
+  | { type: "hydrate"; bots: Bot[]; groups: Group[] }
+  | { type: "groupPatched"; group: Partial<Group> & { id: string } }
+  | { type: "groupDeleted"; groupId: string }
+  | { type: "createGroup"; memberIds: string[]; name?: string }
+  | { type: "sendGroup"; groupId: string; text: string }
+  | { type: "patchGroup"; groupId: string; patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds">> }
+  | { type: "deleteGroup"; groupId: string }
+  | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string }
+  | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -212,8 +239,6 @@ export type Action =
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
   | { type: "messagePatched"; threadId: string; message: Message }
-  | { type: "streamDelta"; threadId: string; delta: string; reasoning?: string }
-  | { type: "streamClear"; threadId: string }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
   | { type: "setModel"; botId: string; selection: ModelSelection }
@@ -291,22 +316,41 @@ function settleClientMedia(
 export function appReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
-        action.bots.some((b) => b.id === state.selectedId) && state.selectedId
-          ? state.selectedId
-          : (action.bots[0]?.id ?? "");
-      return { ...state, bots: action.bots, selectedId };
+        state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+      return { ...state, bots: action.bots, groups: action.groups, selectedId };
+    }
+    case "groupPatched": {
+      const exists = state.groups.some((g) => g.id === action.group.id);
+      const groups = exists
+        ? state.groups.map((g) => (g.id === action.group.id ? { ...g, ...action.group, messages: action.group.messages ?? g.messages } : g))
+        : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
+      return { ...state, groups };
+    }
+    case "groupDeleted": {
+      const groups = state.groups.filter((g) => g.id !== action.groupId);
+      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
+      return { ...state, groups, selectedId };
     }
     case "instances":
       return { ...state, instances: action.instances };
     case "configStatus":
       return { ...state, config: action.config };
-    case "select":
+    case "select": {
+      if (state.groups.some((g) => g.id === action.id)) {
+        return {
+          ...state,
+          selectedId: action.id,
+          groups: state.groups.map((g) => (g.id === action.id ? { ...g, unread: false } : g)),
+        };
+      }
       return updateBot(
         withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch"),
         action.id,
         (b) => ({ ...b, unread: false }),
       );
+    }
     // optimistic card settle; the server's message.patch confirms it later
     case "answerCard":
       return withMascotMotion(
@@ -355,7 +399,18 @@ export function appReducer(state: AppState, action: Action): AppState {
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        // room thread — plain linear append, no branching/mascot machinery
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        if (group.messages.some((m) => m.id === action.message.id)) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id ? { ...g, messages: [...g.messages, action.message] } : g,
+          ),
+        };
+      }
       // every server-side append chains onto (and becomes) the active leaf
       const next = updateBot(state, bot.id, (b) => {
         if (b.messages.some((m) => m.id === action.message.id)) {
@@ -388,17 +443,22 @@ export function appReducer(state: AppState, action: Action): AppState {
               ? "blink"
               : null;
       const animated = motion ? withMascotMotion(next, bot.id, motion) : next;
-      // a settled assistant bubble replaces the in-flight stream
-      if (action.message.role === "bot" && action.message.kind === "text") {
-        const { [action.threadId]: _, ...rest } = animated.streaming;
-        const { [action.threadId]: __, ...reasoningRest } = animated.reasoning;
-        return { ...animated, streaming: rest, reasoning: reasoningRest };
-      }
       return animated;
     }
     case "messagePatched": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id
+              ? { ...g, messages: g.messages.map((m) => (m.id === action.message.id ? action.message : m)) }
+              : g,
+          ),
+        };
+      }
       const motion =
         action.message.kind === "activity"
           ? action.message.tool?.ok === false
@@ -412,27 +472,6 @@ export function appReducer(state: AppState, action: Action): AppState {
         ...b,
         messages: b.messages.map((m) => (m.id === action.message.id ? action.message : m)),
       }));
-    }
-    case "streamDelta": {
-      const next = { ...state };
-      if (action.delta) {
-        next.streaming = {
-          ...state.streaming,
-          [action.threadId]: (state.streaming[action.threadId] ?? "") + action.delta,
-        };
-      }
-      if (action.reasoning) {
-        next.reasoning = {
-          ...state.reasoning,
-          [action.threadId]: (state.reasoning[action.threadId] ?? "") + action.reasoning,
-        };
-      }
-      return next;
-    }
-    case "streamClear": {
-      const { [action.threadId]: _, ...rest } = state.streaming;
-      const { [action.threadId]: __, ...reasoningRest } = state.reasoning;
-      return { ...state, streaming: rest, reasoning: reasoningRest };
     }
     case "screenFrame":
       return {
@@ -527,10 +566,7 @@ export function appReducer(state: AppState, action: Action): AppState {
     case "threadActive": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) return state;
-      // a rewind also invalidates any half-streamed text from the old branch
-      const { [action.threadId]: _, ...streaming } = state.streaming;
-      const { [action.threadId]: __, ...reasoning } = state.reasoning;
-      return updateBot({ ...state, streaming, reasoning }, bot.id, (b) => ({
+      return updateBot(state, bot.id, (b) => ({
         ...b,
         activeLeafId: action.activeLeafId,
       }));
@@ -547,12 +583,40 @@ export function appReducer(state: AppState, action: Action): AppState {
       }
       return updateBot(state, action.botId, (b) => ({ ...b, activeLeafId: cur }));
     }
+    // optimistic room edits; the server's group frame confirms them later
+    case "patchGroup":
+      return {
+        ...state,
+        groups: state.groups.map((g) => (g.id === action.groupId ? { ...g, ...action.patch } : g)),
+      };
+    case "toggleReaction": {
+      const toggle = (m: Message): Message => {
+        if (m.id !== action.messageId) return m;
+        const reactions = m.reactions ?? [];
+        const at = reactions.findIndex((r) => r.emoji === action.emoji && r.by === "user");
+        const next = at >= 0 ? reactions.filter((_, i) => i !== at) : [...reactions, { emoji: action.emoji, by: "user" }];
+        return { ...m, reactions: next.length ? next : undefined };
+      };
+      return {
+        ...state,
+        bots: state.bots.map((b) =>
+          b.threadId === action.threadId ? { ...b, messages: b.messages.map(toggle) } : b,
+        ),
+        groups: state.groups.map((g) =>
+          g.threadId === action.threadId ? { ...g, messages: g.messages.map(toggle) } : g,
+        ),
+      };
+    }
     // handled entirely by the async wrapper
     case "send":
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
     case "newBot":
     case "duplicateBot":
+    case "createGroup":
+    case "sendGroup":
+    case "deleteGroup":
+    case "interruptGroup":
       return state;
     case "interrupt":
       return updateBot(state, action.botId, (bot) =>
@@ -580,6 +644,7 @@ const MAX_KEPT_SCREEN_FRAMES = 8;
 
 export const initialState: AppState = {
   bots: [],
+  groups: [],
   instances: [],
   config: null,
   selectedId: "",
@@ -589,8 +654,6 @@ export const initialState: AppState = {
   openCreationRequest: null,
   computerOpen: false,
   appSettingsOpen: false,
-  streaming: {},
-  reasoning: {},
   screens: {},
   provisioning: {},
   connected: false,
@@ -609,6 +672,23 @@ export async function api(path: string, init?: RequestInit): Promise<any> {
   return body;
 }
 
+/** Per-frame stream state lives in its OWN context: token frames update only
+ * the components that read this hook (the chat's streaming tail), while every
+ * useStore consumer — sidebar, mascots, pickers, the settled transcript —
+ * keeps its render tree untouched during a stream. */
+interface StreamState {
+  /** in-flight assistant text per threadId */
+  streaming: Record<string, string>;
+  /** in-flight extended thinking per threadId (ephemeral) */
+  reasoning: Record<string, string>;
+}
+const EMPTY_STREAM: StreamState = { streaming: {}, reasoning: {} };
+const StreamContext = createContext<StreamState>(EMPTY_STREAM);
+
+export function useStreaming() {
+  return useContext(StreamContext);
+}
+
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
@@ -618,9 +698,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(appReducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
-  // per-frame stream-delta batching (see the "runtime" SSE case)
+  // per-frame stream-delta batching (see the "runtime" SSE case); stream
+  // state is intentionally OUTSIDE the reducer so token frames re-render
+  // only StreamContext consumers
+  const [stream, setStream] = useState<StreamState>(EMPTY_STREAM);
   const deltaBuffer = useRef(new Map<string, { text: string; reasoning: string }>());
   const deltaFlush = useRef<number | null>(null);
+  const clearStream = (threadId: string) =>
+    setStream((prev) => {
+      if (!(threadId in prev.streaming) && !(threadId in prev.reasoning)) return prev;
+      const { [threadId]: _s, ...streaming } = prev.streaming;
+      const { [threadId]: _r, ...reasoning } = prev.reasoning;
+      return { streaming, reasoning };
+    });
+  const flushDeltas = () => {
+    if (deltaFlush.current !== null) {
+      cancelAnimationFrame(deltaFlush.current);
+      deltaFlush.current = null;
+    }
+    const buf = deltaBuffer.current;
+    if (buf.size === 0) return;
+    const entries = [...buf];
+    buf.clear();
+    setStream((prev) => {
+      const streaming = { ...prev.streaming };
+      const reasoning = { ...prev.reasoning };
+      for (const [threadId, d] of entries) {
+        if (d.text) streaming[threadId] = (streaming[threadId] ?? "") + d.text;
+        if (d.reasoning) reasoning[threadId] = (reasoning[threadId] ?? "") + d.reasoning;
+      }
+      return { streaming, reasoning };
+    });
+  };
 
   // debounced PATCH per bot for text-field edits (name/title/description)
   const patchTimers = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; patch: Record<string, unknown> }>());
@@ -734,11 +843,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "select": {
           const bot = stateRef.current.bots.find((b) => b.id === action.id);
+          const group = stateRef.current.groups.find((g) => g.id === action.id);
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
+          } else if (group?.unread) {
+            api(`/api/groups/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           break;
         }
+        case "createGroup":
+          api(`/api/groups`, {
+            method: "POST",
+            body: JSON.stringify({ memberIds: action.memberIds, name: action.name }),
+          })
+            .then(({ group }) => {
+              rawDispatch({ type: "groupPatched", group });
+              rawDispatch({ type: "select", id: group.id });
+            })
+            .catch(showError);
+          break;
+        case "sendGroup":
+          api(`/api/groups/${action.groupId}/messages`, {
+            method: "POST",
+            body: JSON.stringify({ text: action.text }),
+          }).catch(showError);
+          break;
+        case "patchGroup":
+          api(`/api/groups/${action.groupId}`, {
+            method: "PATCH",
+            body: JSON.stringify(action.patch),
+          }).catch(showError);
+          break;
+        case "deleteGroup":
+          api(`/api/groups/${action.groupId}`, { method: "DELETE" }).catch(showError);
+          break;
+        case "toggleReaction":
+          api(`/api/threads/${action.threadId}/messages/${action.messageId}/reactions`, {
+            method: "POST",
+            body: JSON.stringify({ emoji: action.emoji, by: "user" }),
+          }).catch(showError);
+          break;
         case "setModel":
           api(`/api/bots/${action.botId}`, {
             method: "PATCH",
@@ -748,7 +892,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" })
             .then(() => api("/api/bots"))
-            .then(({ bots }) => rawDispatch({ type: "hydrate", bots }))
+            .then(({ bots, groups }) => rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
             .catch(showError);
           break;
         case "cancelMedia": {
@@ -760,11 +904,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .catch((error) => {
               showError(error);
               api("/api/bots")
-                .then(({ bots }) => rawDispatch({ type: "hydrate", bots }))
+                .then(({ bots, groups }) => rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
                 .catch(() => {});
             });
           break;
         }
+        case "interruptGroup":
+          api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
+          break;
         case "updateBot": {
           const timers = patchTimers.current;
           const pending = timers.get(action.botId);
@@ -791,7 +938,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let alive = true;
     const loadAll = () => {
       api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
+        .then(({ bots, groups }) => alive && rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
         .catch(() => {});
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
@@ -818,12 +965,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       switch (frame.kind) {
         case "message":
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
+          // a settled assistant bubble replaces the in-flight stream
+          if (frame.message?.role === "bot" && frame.message?.kind === "text") clearStream(frame.threadId);
           break;
         case "message.patch":
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           break;
         case "thread":
           rawDispatch({ type: "threadActive", threadId: frame.threadId, activeLeafId: frame.activeLeafId });
+          // a rewind also invalidates any half-streamed text from the old branch
+          clearStream(frame.threadId);
           break;
         case "bot": {
           const bot = frame.bot as Partial<Bot> & { id: string };
@@ -839,6 +990,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "botPatched", bot });
           break;
         }
+        case "group": {
+          const group = frame.group as Partial<Group> & { id: string };
+          // reading the selected room clears its badge immediately
+          if (group.unread && group.id === stateRef.current.selectedId) {
+            group.unread = false;
+            fetch(`/api/groups/${group.id}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ unread: false }),
+            }).catch(() => {});
+          }
+          rawDispatch({ type: "groupPatched", group });
+          break;
+        }
+        case "group.deleted":
+          rawDispatch({ type: "groupDeleted", groupId: frame.groupId });
+          break;
         case "runtime": {
           const event = frame.event;
           if (event.type === "content.delta") {
@@ -853,23 +1021,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (deltaFlush.current === null) {
               deltaFlush.current = requestAnimationFrame(() => {
                 deltaFlush.current = null;
-                for (const [threadId, { text, reasoning }] of deltaBuffer.current) {
-                  rawDispatch({ type: "streamDelta", threadId, delta: text, reasoning: reasoning || undefined });
-                }
-                deltaBuffer.current.clear();
+                flushDeltas();
               });
             }
           } else if (event.type === "turn.completed") {
             // flush any buffered tail before clearing so no tokens are lost
-            if (deltaFlush.current !== null) {
-              cancelAnimationFrame(deltaFlush.current);
-              deltaFlush.current = null;
-            }
-            for (const [threadId, { text, reasoning }] of deltaBuffer.current) {
-              rawDispatch({ type: "streamDelta", threadId, delta: text, reasoning: reasoning || undefined });
-            }
-            deltaBuffer.current.clear();
-            rawDispatch({ type: "streamClear", threadId: event.threadId });
+            flushDeltas();
+            clearStream(event.threadId);
           }
           break;
         }
@@ -910,7 +1068,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(() => ({ state, dispatch }), [state, dispatch]);
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={value}>
+      <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>
+    </StoreContext.Provider>
+  );
 }
 
 export function useStore() {

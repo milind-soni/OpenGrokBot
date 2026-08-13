@@ -1,4 +1,5 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell, systemPreferences, utilityProcess } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
@@ -20,19 +21,44 @@ const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 // our API shape, not just a 200).
 let serverProc = null;
 let serverReady = true;
+
+// The packaged app has no terminal: everything about the server child's life
+// goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
+// Console.app-visible; %APPDATA%\OpenMausBot\logs on Windows), which is also
+// why stdio is piped, not inherited — under a Finder/Explorer launch the
+// parent's stdio leads nowhere and a failed boot is otherwise undiagnosable.
+const LOG_DIR = app.getPath("logs");
+let logStream = null;
+function slog(line) {
+  try {
+    if (!logStream) {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      logStream = fs.createWriteStream(path.join(LOG_DIR, "server.log"), { flags: "a" });
+    }
+    logStream.write(`[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* logging must never break startup */
+  }
+}
+
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
+  slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
     env: {
       ...process.env,
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       OMB_PORT: String(port),
     },
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));
+  proc.stderr?.on("data", (d) => slog(`[err] ${String(d).trimEnd()}`));
+  proc.once("spawn", () => slog(`spawned pid=${proc.pid}`));
   let exited = false;
-  proc.once("exit", () => {
+  proc.once("exit", (code) => {
     exited = true;
+    slog(`exited code=${code}`);
   });
   // wait for the port to answer (fresh machine: first boot writes data dirs).
   // Identity check is by PID: a dev harness server has the same API shape,
@@ -78,7 +104,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 function createWindow() {
@@ -97,7 +123,11 @@ function createWindow() {
       ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
       : {
           titleBarStyle: "hidden",
-          titleBarOverlay: { color: "#070707", symbolColor: "#b5b5b5", height: 40 },
+          // height MUST match the ChatView/GroupView header strip (px-5 py-3
+          // around a 36px control row = 60). Windows draws the caption buttons
+          // to fill the overlay, so anything shorter leaves a dead band under
+          // them and anything taller overhangs the header.
+          titleBarOverlay: { color: "#070707", symbolColor: "#b5b5b5", height: 60 },
         }),
     webPreferences: {
       contextIsolation: true,

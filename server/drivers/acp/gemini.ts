@@ -1,6 +1,12 @@
 // Gemini CLI harness support — Google's `gemini` CLI over ACP stdio
 // (`gemini --experimental-acp`). Rides the generic runtime in acp/core.ts.
 //
+// RETIRED FROM THE DEFAULT FLEET: Google stopped serving Gemini CLI requests
+// for the free/Pro/Ultra tiers on 2026-06-18 and pointed everyone at the
+// Antigravity CLI (see drivers/antigravity.ts), so this only reaches a model
+// on an enterprise licence. Kept registered for exactly that case — add
+// {"instances": {"gemini": {"driver": "geminiAgent"}}} to config.json.
+//
 // Auth is intentionally lenient (authFailure "continue"): the Gemini CLI
 // commonly runs off an ambient login — an OAuth session from a prior
 // `gemini` run (~/.gemini/oauth_creds.json) or GEMINI_API_KEY in the env —

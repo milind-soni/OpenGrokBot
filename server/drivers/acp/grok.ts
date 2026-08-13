@@ -12,9 +12,17 @@ import { createAcpDriver, type AcpSupport } from "./core.ts";
 const support: AcpSupport = {
   driverKind: "grokAgent",
   displayName: "Grok",
-  // The CLI catalog is account-driven (`grok models` reports one today);
-  // eventually read from the initialize result's _meta.modelState.
-  models: { default: "grok-4.5", options: [{ id: "grok-4.5", label: "Grok 4.5" }] },
+  // Mirrors `grok models` (CLI 1.0.3): 4.6 is the account default, 4.5 still
+  // selectable. Static because the catalog is account-driven and we have no
+  // session yet at describe() time; a new model the CLI adds needs a bump
+  // here — eventually read the initialize result's _meta.modelState instead.
+  models: {
+    default: "grok-4.6",
+    options: [
+      { id: "grok-4.6", label: "Grok 4.6" },
+      { id: "grok-4.5", label: "Grok 4.5" },
+    ],
+  },
   defaultCli: "grok",
   nativeSource: "grok.acp",
   loginNote: "Grok CLI is not signed in — run `grok login` in a terminal",

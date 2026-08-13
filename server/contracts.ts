@@ -169,6 +169,11 @@ export interface ProviderAdapter {
     agentsMcp?: boolean;
     /** How this driver exposes configured media specialists to its model. */
     mediaTools?: "mcp" | "native";
+    /** True when the driver mounts turn.integrations.computer (the box's
+     * screenshot/click tools). Same rule as agentsMcp: a bot must never be
+     * told it has a computer whose tools its driver cannot mount — it
+     * burns turns hunting for tools that aren't there. */
+    computerMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

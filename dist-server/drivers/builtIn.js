@@ -1,3 +1,4 @@
+import { AntigravityDriver } from "./antigravity.js";
 import { BoxAgentDriver } from "./boxagent.js";
 import { ClaudeDriver } from "./claude.js";
 import { CodexDriver } from "./codex.js";
@@ -10,5 +11,6 @@ export const BUILT_IN_DRIVERS = [
     GeminiAgentDriver,
     ClaudeDriver,
     CodexDriver,
+    AntigravityDriver,
     BoxAgentDriver,
 ];

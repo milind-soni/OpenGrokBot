@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
 import { newId, type MediaOutput, type MediaStatus, type ModelSelection, type ThreadId } from "./contracts.ts";
+import { pickBotName } from "./names.ts";
 
 export type MausColor =
   | "green"
@@ -55,6 +56,31 @@ export interface Message {
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+  /** group threads: which member said this (sender attribution). */
+  from?: { botId: string; name: string; color: string };
+  /** emoji reactions; by = "user" or a member botId. */
+  reactions?: Array<{ emoji: string; by: string }>;
+  /** comm chips: "Messaged @X" in the caller's chat, linking to the
+   * bot⇄bot channel where the exchange is mirrored. */
+  comm?: { groupId: string; withBotId: string; withName: string; withColor: string };
+}
+
+/** A room: a shared thread where several bots + the user talk. Bots reply
+ * only when @mentioned (the Buzz rule). The bulletin is the room's shared
+ * instructions — every member's turn gets it as part of its system prompt. */
+export interface GroupRecord {
+  id: string;
+  threadId: ThreadId;
+  name: string;
+  memberIds: string[];
+  bulletin: string;
+  unread: boolean;
+  createdAt: number;
+  /** true for auto-created bot⇄bot channels (ask_bot exchanges live here;
+   * the user can open the channel and chip in) */
+  dm?: boolean;
+  /** transient: the member currently running a turn (never persisted) */
+  busyBotId?: string | null;
 }
 
 export interface BotSpecialists {
@@ -99,6 +125,7 @@ export interface BotRecord {
 }
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
+const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 const ACTIVE_MEDIA_STATUSES = new Set<MediaStatus>(["queued", "generating", "downloading"]);
 
@@ -150,6 +177,7 @@ interface ThreadState {
 
 export class Store {
   bots: BotRecord[] = [];
+  groups: GroupRecord[] = [];
   private threads = new Map<string, ThreadState>();
   private defaultSelection: () => ModelSelection;
 
@@ -161,12 +189,85 @@ export class Store {
     } catch {
       this.bots = [];
     }
+    try {
+      this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
+    } catch {
+      this.groups = [];
+    }
     // busy never survives a restart — no turn does either
     for (const b of this.bots) b.busy = false;
+    for (const g of this.groups) g.busyBotId = null;
   }
 
   private saveBots() {
     writeFileSync(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+  }
+
+  private saveGroups() {
+    writeFileSync(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId, ...g }) => g), null, 2));
+  }
+
+  // ── groups ────────────────────────────────────────────────────────────
+  group(id: string): GroupRecord | undefined {
+    return this.groups.find((g) => g.id === id);
+  }
+
+  groupByThread(threadId: string): GroupRecord | undefined {
+    return this.groups.find((g) => g.threadId === threadId);
+  }
+
+  createGroup(name: string, memberIds: string[], dm = false): GroupRecord {
+    const group: GroupRecord = {
+      id: newId(),
+      threadId: newId(),
+      name,
+      memberIds,
+      bulletin: "",
+      unread: false,
+      createdAt: Date.now(),
+      dm: dm || undefined,
+      busyBotId: null,
+    };
+    this.groups.unshift(group);
+    this.saveGroups();
+    return group;
+  }
+
+  /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
+  dmGroup(a: string, b: string): GroupRecord | undefined {
+    return this.groups.find(
+      (g) => g.dm && g.memberIds.length === 2 && g.memberIds.includes(a) && g.memberIds.includes(b),
+    );
+  }
+
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "bulletin" | "unread" | "busyBotId">>): GroupRecord | null {
+    const group = this.group(id);
+    if (!group) return null;
+    Object.assign(group, patch);
+    this.saveGroups();
+    return group;
+  }
+
+  deleteGroup(id: string): boolean {
+    const group = this.group(id);
+    if (!group) return false;
+    this.groups = this.groups.filter((g) => g.id !== id);
+    this.threads.delete(group.threadId);
+    this.saveGroups();
+    try {
+      unlinkSync(messagesFile(group.threadId));
+    } catch {}
+    return true;
+  }
+
+  /** Toggle an emoji reaction on a message ("user" or a member botId). */
+  toggleReaction(threadId: string, messageId: string, emoji: string, by: string): Message | null {
+    const existing = this.messagesFor(threadId).find((m) => m.id === messageId);
+    if (!existing) return null;
+    const reactions = existing.reactions ?? [];
+    const at = reactions.findIndex((r) => r.emoji === emoji && r.by === by);
+    const next = at >= 0 ? reactions.filter((_, i) => i !== at) : [...reactions, { emoji, by }];
+    return this.patchMessage(threadId, messageId, { reactions: next.length ? next : undefined });
   }
 
   private thread(threadId: string): ThreadState {
@@ -230,8 +331,24 @@ export class Store {
     const full = withoutMediaSources({ id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message });
     t.messages.push(full);
     t.activeLeafId = full.id;
+    if (full.kind === "screen") this.pruneScreenFrames(t);
     this.saveThread(threadId);
     return full;
+  }
+
+  /** Screen frames are ~100-500KB of base64 each and the whole thread file
+   * is rewritten on every append, so keeping every frame of a long
+   * computer session makes each later message slower than the last. The
+   * newest few keep their pixels; older ones stay in the transcript as
+   * placeholders. Mirrors the client's own frame cap. */
+  private pruneScreenFrames(t: { messages: Message[] }, keep = 4) {
+    let seen = 0;
+    for (let i = t.messages.length - 1; i >= 0 && seen < t.messages.length; i--) {
+      const m = t.messages[i];
+      if (m.kind !== "screen" || !m.png) continue;
+      seen += 1;
+      if (seen > keep) m.png = undefined;
+    }
   }
 
   /** Fork the conversation: a new user message that replaces `sourceId`
@@ -324,10 +441,11 @@ export class Store {
   }
 
   createBot(): BotRecord {
+    const name = pickBotName(this.bots.map((b) => b.name));
     const bot: BotRecord = {
       id: newId(),
       threadId: newId(),
-      name: "New Bot",
+      name,
       title: "",
       description: "",
       notifications: true,
@@ -342,7 +460,7 @@ export class Store {
     this.appendMessage(bot.threadId, {
       role: "bot",
       kind: "text",
-      text: "Hey — I'm your new bot. Nice to meet you.",
+      text: `Hey — I'm ${name}. Nice to meet you.`,
     });
     this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
     return bot;
@@ -375,10 +493,10 @@ export class Store {
     this.saveBots();
   }
 
-  /** First-run seed: one bot so the app never opens empty. */
+  /** First-run seed: one bot so the app never opens empty — it gets a
+   * random friendly name like every other bot. */
   seedIfEmpty() {
     if (this.bots.length) return;
-    const bot = this.createBot();
-    this.patchBot(bot.id, { name: "Milind", color: "blue" });
+    this.createBot();
   }
 }

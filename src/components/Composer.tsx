@@ -1,7 +1,7 @@
 import { track } from "@/lib/analytics";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Clock, Mic, Square, X } from "lucide-react";
-import { useStore, type Bot } from "@/state/store";
+import { useStore, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
@@ -18,8 +18,24 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => void }) {
+export function Composer({
+  bot,
+  group,
+  members,
+  onEditLast,
+}: {
+  bot?: Bot;
+  group?: Group;
+  members?: Bot[];
+  onEditLast?: () => void;
+}) {
   const { state, dispatch } = useStore();
+  // Unified target: a 1:1 bot thread or a room. In a room the @ picker
+  // offers the members (Buzz rule: only mentioned bots reply).
+  const busy = group ? Boolean(group.busyBotId) : Boolean(bot?.busy);
+  const busyName = group
+    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? "A bot")
+    : (bot?.name ?? "The bot");
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -34,13 +50,13 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const peers = state.bots.filter((b) => b.id !== bot.id && !b.hidden);
+    const pool = group ? (members ?? []) : state.bots.filter((b) => b.id !== bot?.id && !b.hidden);
     const q = mention.query.trim().toLowerCase();
     // "@Scout " — the full name plus a space — is a COMPLETED tag, not a
     // search: keep the picker closed so Enter sends instead of re-picking
-    if (mention.query.endsWith(" ") && peers.some((b) => b.name.toLowerCase() === q)) return [];
-    return peers.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot.id]);
+    if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
+    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
   const pickerOpen = candidates.length > 0;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
@@ -74,22 +90,28 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    if (bot.busy) {
+    if (busy) {
       setQueued(t);
       setText("");
       return;
     }
-    dispatch({ type: "send", botId: bot.id, text: t });
-    track("message_sent", { driver: bot.modelSelection?.instanceId });
+    if (group) {
+      dispatch({ type: "sendGroup", groupId: group.id, text: t });
+      track("message_sent", { room: true });
+    } else if (bot) {
+      dispatch({ type: "send", botId: bot.id, text: t });
+      track("message_sent", { driver: bot.modelSelection?.instanceId });
+    }
     setText("");
   };
   useEffect(() => {
-    if (!bot.busy && queued) {
-      dispatch({ type: "send", botId: bot.id, text: queued });
-      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: true });
+    if (!busy && queued) {
+      if (group) dispatch({ type: "sendGroup", groupId: group.id, text: queued });
+      else if (bot) dispatch({ type: "send", botId: bot.id, text: queued });
+      track("message_sent", { queued: true });
       setQueued(null);
     }
-  }, [bot.busy, queued, bot.id, bot.modelSelection?.instanceId, dispatch]);
+  }, [busy, queued, bot, group, dispatch]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
@@ -146,7 +168,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
             <Clock size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Queued — sends when {bot.name} finishes: “{queued}”
+              Queued — sends when {busyName} finishes: “{queued}”
             </span>
             <button
               onClick={() => setQueued(null)}
@@ -229,16 +251,21 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
           placeholder={
             recording
               ? "Listening…"
-              : bot.busy
-                ? `${bot.name} is working — Enter queues your message`
-                : `Message ${bot.name}`
+              : busy
+                ? `${busyName} is working — Enter queues your message`
+                : group
+                  ? `Message ${group.name} — @ to bring a bot in`
+                  : `Message ${bot?.name ?? ""}`
           }
-          aria-label={`Message ${bot.name}`}
+          aria-label={`Message ${group ? group.name : (bot?.name ?? "")}`}
           className="max-h-40 w-full resize-none self-center bg-transparent py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
-        {bot.busy && (
+        {busy && (
           <button
-            onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
+            onClick={() => {
+              if (group) dispatch({ type: "interruptGroup", groupId: group.id });
+              else if (bot) dispatch({ type: "interrupt", botId: bot.id });
+            }}
             aria-label="Stop this turn"
             className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
             title="Stop"
@@ -246,7 +273,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
             <Square size={14} className="fill-current" />
           </button>
         )}
-        {!bot.busy && !text.trim() && (
+        {!busy && !text.trim() && (
           <button
             onClick={toggleMic}
             aria-label={recording ? "Stop dictation" : "Start dictation"}
@@ -264,14 +291,14 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
         {text.trim() && (
           <button
             onClick={send}
-            aria-label={bot.busy ? "Queue message" : "Send message"}
-            title={bot.busy ? "Queue — sends when the bot finishes" : "Send"}
+            aria-label={busy ? "Queue message" : "Send message"}
+            title={busy ? "Queue — sends when the bot finishes" : "Send"}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
-              bot.busy ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
+              busy ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
             )}
           >
-            {bot.busy ? <Clock size={15} /> : <ArrowUp size={17} />}
+            {busy ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
         )}
         </div>

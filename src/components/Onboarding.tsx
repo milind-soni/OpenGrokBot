@@ -95,6 +95,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const claude = byKind("claudeAgent");
   const codex = byKind("codex");
   const grok = byKind("grokAgent");
+  const antigravity = byKind("antigravityAgent");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
@@ -189,6 +190,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                           ? "Installed and signed in — bots can run on Grok too."
                           : "Installed. Run `grok login` in a terminal to sign in."
                         : "Optional. Install: curl -fsSL https://x.ai/cli/install.sh | bash"
+                    }
+                  />
+                  <StatusRow
+                    ok={antigravity?.snapshot.state === "available"}
+                    warn
+                    title={`Antigravity ${antigravity?.snapshot.version ? `· ${antigravity.snapshot.version.split(" ")[0]}` : ""}`}
+                    detail={
+                      antigravity?.snapshot.state === "available"
+                        ? "Installed — bots can run on Antigravity too."
+                        : "Optional. Install: see antigravity.google/docs/cli"
                     }
                   />
                   </>

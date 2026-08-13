@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -17,7 +17,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useStore, formatTime, messageVersions, visibleMessages, type Bot, type Message } from "@/state/store";
+import { useStore, useStreaming, formatTime, messageVersions, visibleMessages, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -28,6 +28,7 @@ import { MediaMessage } from "./MediaMessage";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
 import { deriveCreations } from "@/lib/creations";
+import { ReactionBar, ReactionChips } from "./Reactions";
 import { cn } from "@/lib/cn";
 import { artifactHeaderMode, toggleArtifactSelection } from "@/lib/creation-navigation";
 
@@ -276,6 +277,7 @@ function Bubble({
             <Pencil size={14} />
           </button>
         )}
+        {user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
         {user && <CopyButton text={text} />}
         <div
           className={cn(
@@ -328,6 +330,7 @@ function Bubble({
             )}
           </div>
         )}
+        {!user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
         <span
           className={cn(
             "self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100",
@@ -337,6 +340,7 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
+      <ReactionChips threadId={bot.threadId} message={message} align={user ? "right" : "left"} />
       {versions.length > 1 && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
           <button
@@ -366,8 +370,26 @@ function Bubble({
 
 /** A tool run: spinner while live, check/cross once settled. */
 function ActivityChip({ message }: { message: Message }) {
+  const { dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
+  // bot⇄bot comm chip: opens the channel where the exchange lives
+  const comm = message.comm;
+  if (comm) {
+    return (
+      <div className="flex justify-start">
+        <button
+          onClick={() => dispatch({ type: "select", id: comm.groupId })}
+          title={`Open the conversation with ${comm.withName}`}
+          className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          <MausAvatar color={comm.withColor} state="happy" size={16} />
+          <span className="max-w-[480px] truncate">{tool.name}</span>
+          <ChevronRight size={13} />
+        </button>
+      </div>
+    );
+  }
   const failed = tool.ok === false;
   return (
     <div className="flex justify-start">
@@ -411,12 +433,15 @@ function StreamingBubble({
   htmlExpanded: boolean;
   onHtmlExpandedChange: (expanded: boolean) => void;
 }) {
+  // Keep markdown parsing behind the token stream while retaining the
+  // expandable live HTML artifact controls.
+  const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
-        <MessageBoundary fallbackText={text}>
+        <MessageBoundary fallbackText={deferred}>
           <ChatMarkdown
-            text={text}
+            text={deferred}
             streaming
             streamingHtmlExpanded={htmlExpanded}
             onStreamingHtmlExpandedChange={onHtmlExpandedChange}
@@ -443,12 +468,121 @@ function WorkingTimer({ since }: { since: number }) {
   return <span ref={ref} className="text-[12.5px] text-ink-secondary" />;
 }
 
+/** The settled transcript, memoized as one unit: during streaming every
+ * frame re-renders ChatView, but all of these props keep their identity
+ * (bot/messages only change on real message events), so the whole list —
+ * every markdown tree, every code block — bails out of React work and only
+ * the streaming tail below it commits. This is the t3code structural-sharing
+ * idea at component granularity. */
+const MessagesList = memo(function MessagesList({
+  bot,
+  messages,
+  editingId,
+  lastBotTextId,
+  canRetryLast,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  onRegenerate,
+  onCancelMedia,
+  requestedMediaMessageId,
+  requestedMediaId,
+  openRequestId,
+  selectedArtifactId,
+  onPreviewArtifact,
+}: {
+  bot: Bot;
+  messages: Message[];
+  editingId: string | null;
+  lastBotTextId: string | undefined;
+  canRetryLast: boolean;
+  onStartEdit: (id: string) => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (id: string, text: string) => void;
+  onRegenerate: () => void;
+  onCancelMedia: (messageId: string) => void;
+  requestedMediaMessageId?: string;
+  requestedMediaId?: string;
+  openRequestId?: string;
+  selectedArtifactId: string | null;
+  onPreviewArtifact: (artifact: HtmlArtifact) => void;
+}) {
+  return (
+    <>
+      {messages.length === 0 && !bot.busy && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
+          <MausAvatar color={bot.color} state="idle" size={64} motion="none" motionKey={0} />
+          <div className="text-[17px] font-semibold text-ink">{bot.name}</div>
+          <div className="max-w-[360px] text-[14px] text-ink-secondary">
+            {bot.description || "Send a message to start the conversation."}
+          </div>
+        </div>
+      )}
+      {messages.map((m, i) => {
+        const prev = messages[i - 1];
+        const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
+        const row = (() => {
+          switch (m.kind) {
+            case "options":
+              return <OptionCard botId={bot.id} message={m} />;
+            case "activity":
+              // a failed turn is an error, not a tool run — render it as one
+              return m.tool?.name.startsWith("error:") ? (
+                <ErrorRow
+                  message={m.tool.name.slice(6).trim()}
+                  onRetry={m.id === messages.at(-1)?.id && canRetryLast ? onRegenerate : undefined}
+                />
+              ) : (
+                <ActivityChip message={m} />
+              );
+            case "screen":
+              return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+            case "media":
+              return (
+                <MediaMessage
+                  message={m}
+                  onRetry={m.id === messages.at(-1)?.id && canRetryLast ? onRegenerate : undefined}
+                  onCancel={() => onCancelMedia(m.id)}
+                  requestedMediaId={requestedMediaMessageId === m.id ? requestedMediaId : undefined}
+                  openRequestId={requestedMediaMessageId === m.id ? openRequestId : undefined}
+                />
+              );
+            default:
+              return (
+                <Bubble
+                  bot={bot}
+                  message={m}
+                  editing={editingId === m.id}
+                  isLastBotText={m.id === lastBotTextId}
+                  onStartEdit={() => onStartEdit(m.id)}
+                  onCancelEdit={onCancelEdit}
+                  onSubmitEdit={(text) => onSubmitEdit(m.id, text)}
+                  onRegenerate={onRegenerate}
+                  selectedArtifactId={selectedArtifactId}
+                  onPreviewArtifact={onPreviewArtifact}
+                />
+              );
+          }
+        })();
+        if (!row) return null;
+        return (
+          <div key={m.id} className="contents" data-message-id={m.id}>
+            {newDay && <DaySeparator at={m.at} />}
+            {row}
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const streaming = state.streaming[bot.threadId];
-  const reasoning = state.reasoning[bot.threadId];
+  const stream = useStreaming();
+  const streaming = stream.streaming[bot.threadId];
+  const reasoning = stream.reasoning[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
@@ -513,12 +647,12 @@ export function ChatView({ bot }: { bot: Bot }) {
         ?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   }, [bot.id, state.openCreationRequest]);
-  const openArtifact = (artifact: HtmlArtifact) => {
+  const openArtifact = useCallback((artifact: HtmlArtifact) => {
     setArtifactSelections((current) => ({
       ...current,
       [bot.threadId]: toggleArtifactSelection(current[bot.threadId] ?? null, artifact.id),
     }));
-  };
+  }, [bot.threadId]);
   const resizeArtifact = (width: number) => {
     setArtifactWidth(width);
     window.localStorage.setItem("openmausbot.artifactWidth", String(width));
@@ -531,18 +665,31 @@ export function ChatView({ bot }: { bot: Bot }) {
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [bot.id]);
-  const submitEdit = (messageId: string, text: string) => {
-    setEditingId(null); // closes the editor first — a double Enter can't fork twice
-    dispatch({ type: "editMessage", botId: bot.id, messageId, text });
-  };
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user" && m.kind === "text");
+  // stable handler identities — MessagesList is memo'd on them
+  const startEdit = useCallback((id: string) => setEditingId(id), []);
+  const cancelEdit = useCallback(() => setEditingId(null), []);
+  const submitEdit = useCallback(
+    (messageId: string, text: string) => {
+      setEditingId(null); // closes the editor first — a double Enter can't fork twice
+      dispatch({ type: "editMessage", botId: bot.id, messageId, text });
+    },
+    [bot.id, dispatch],
+  );
+  const lastUserMessage = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "user" && m.kind === "text"),
+    [messages],
+  );
   // regenerate = fork the last user message with the same text — reuses the
   // existing branch machinery, so the old answer stays reachable via ‹ ›
-  const regenerate = () => {
+  const regenerate = useCallback(() => {
     if (lastUserMessage?.text && !bot.busy) {
       dispatch({ type: "editMessage", botId: bot.id, messageId: lastUserMessage.id, text: lastUserMessage.text });
     }
-  };
+  }, [lastUserMessage, bot.busy, bot.id, dispatch]);
+  const cancelMedia = useCallback(
+    (messageId: string) => dispatch({ type: "cancelMedia", botId: bot.id, messageId }),
+    [bot.id, dispatch],
+  );
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
@@ -576,7 +723,6 @@ export function ChatView({ bot }: { bot: Bot }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   };
 
-  const first = messages[0];
   // on Windows the frameless window's min/max/close overlay sits at the
   // top-right: the header becomes the drag strip and clears room for it
   const isWin = window.ogb?.platform === "win32";
@@ -685,69 +831,23 @@ export function ChatView({ bot }: { bot: Bot }) {
           aria-live="polite"
           aria-label={`Conversation with ${bot.name}`}
         >
-          {!first && !bot.busy && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
-              <MausAvatar color={bot.color} state="idle" size={64} motion="none" motionKey={0} />
-              <div className="text-[17px] font-semibold text-ink">{bot.name}</div>
-              <div className="max-w-[360px] text-[14px] text-ink-secondary">
-                {bot.description || "Send a message to start the conversation."}
-              </div>
-            </div>
-          )}
-          {messages.map((m, i) => {
-            const prev = messages[i - 1];
-            const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
-            const row = (() => {
-              switch (m.kind) {
-                case "options":
-                  return <OptionCard botId={bot.id} message={m} />;
-                case "activity":
-                  // a failed turn is an error, not a tool run — render it as one
-                  return m.tool?.name.startsWith("error:") ? (
-                    <ErrorRow
-                      message={m.tool.name.slice(6).trim()}
-                      onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
-                    />
-                  ) : (
-                    <ActivityChip message={m} />
-                  );
-                case "screen":
-                  return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
-                case "media":
-                  return (
-                    <MediaMessage
-                      message={m}
-                      onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
-                      onCancel={() => dispatch({ type: "cancelMedia", botId: bot.id, messageId: m.id })}
-                      requestedMediaId={requestedMediaCreation?.messageId === m.id ? requestedMediaCreation.media?.id : undefined}
-                      openRequestId={requestedMediaCreation?.messageId === m.id ? state.openCreationRequest?.requestId : undefined}
-                    />
-                  );
-                default:
-                  return (
-                    <Bubble
-                      bot={bot}
-                      message={m}
-                      editing={editingId === m.id}
-                      isLastBotText={m.id === lastBotTextId}
-                      onStartEdit={() => setEditingId(m.id)}
-                      onCancelEdit={() => setEditingId(null)}
-                      onSubmitEdit={(text) => submitEdit(m.id, text)}
-                      onRegenerate={regenerate}
-                      selectedArtifactId={selectedArtifactId}
-                      onPreviewArtifact={openArtifact}
-                    />
-                  );
-              }
-            })();
-            if (!row) return null;
-            return (
-              <div key={m.id} className="contents" data-message-id={m.id}>
-                {newDay && <DaySeparator at={m.at} />}
-                {row}
-              </div>
-            );
-          })}
+          <MessagesList
+            bot={bot}
+            messages={messages}
+            editingId={editingId}
+            lastBotTextId={lastBotTextId}
+            canRetryLast={!bot.busy && Boolean(lastUserMessage)}
+            onStartEdit={startEdit}
+            onCancelEdit={cancelEdit}
+            onSubmitEdit={submitEdit}
+            onRegenerate={regenerate}
+            onCancelMedia={cancelMedia}
+            requestedMediaMessageId={requestedMediaCreation?.messageId}
+            requestedMediaId={requestedMediaCreation?.media?.id}
+            openRequestId={requestedMediaCreation ? state.openCreationRequest?.requestId : undefined}
+            selectedArtifactId={selectedArtifactId}
+            onPreviewArtifact={openArtifact}
+          />
           {provisioning && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">

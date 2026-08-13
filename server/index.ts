@@ -214,6 +214,16 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "turn.completed": {
       if (bot) {
+        const checkpoint = store.runningCheckpoint(bot.id);
+        if (checkpoint) {
+          const settled = store.updateCheckpoint(bot.id, checkpoint.id, {
+            status: event.ok ? "completed" : "interrupted",
+            ...(event.ok ? {} : { reason: event.stopReason || "turn stopped" }),
+            activeLeafId: store.activeLeaf(bot.threadId),
+            lastMessageId: store.messagesFor(bot.threadId).at(-1)?.id,
+          });
+          if (settled) broadcast({ kind: "checkpoint", botId: bot.id, checkpoint: settled });
+        }
         // the last live frame becomes a settled inline screen message —
         // the screenshot-in-chat moment
         const frame = stopScreenPoller(bot.id);
@@ -312,7 +322,7 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 async function startTurn(
   botId: string,
   text: string,
-  opts?: { commsDepth?: number; userMessage?: Message },
+  opts?: { commsDepth?: number; userMessage?: Message; checkpointId?: string },
 ) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
@@ -333,6 +343,11 @@ async function startTurn(
     userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
     broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
   }
+  const checkpoint = opts?.checkpointId
+    ? store.updateCheckpoint(bot.id, opts.checkpointId, { status: "running", reason: undefined, activeLeafId: store.activeLeaf(bot.threadId), lastMessageId: userMessage.id })
+    : store.createCheckpoint(bot.id);
+  if (!checkpoint) throw Object.assign(new Error("checkpoint unavailable"), { status: 409 });
+  broadcast({ kind: "checkpoint", botId: bot.id, checkpoint });
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
   // branch only — abandoned forks never reach the model
@@ -450,6 +465,8 @@ async function startTurn(
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (integrations.computer) startScreenPoller(bot.id);
     } catch (e) {
+      const failed = store.updateCheckpoint(bot.id, checkpoint.id, { status: "failed", reason: "turn dispatch failed" });
+      if (failed) broadcast({ kind: "checkpoint", botId: bot.id, checkpoint: failed });
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
@@ -999,9 +1016,43 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const checkpoint = store.runningCheckpoint(bot.id);
+      if (checkpoint) {
+        const stopped = store.updateCheckpoint(bot.id, checkpoint.id, { status: "interrupted", reason: "user interrupted" });
+        if (stopped) broadcast({ kind: "checkpoint", botId: bot.id, checkpoint: stopped });
+      }
       const instance = registry.get(bot.modelSelection.instanceId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
+    }
+
+    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints$/);
+    if (m && method === "GET") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { checkpoints: store.checkpoints(bot.id) });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints\/([\w-]+)\/resume$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (bot.busy) return json(res, 409, { error: "the bot is already working" });
+      const checkpoint = store.checkpoint(bot.id, m[2]);
+      if (!checkpoint) return json(res, 404, { error: "no such checkpoint" });
+      if (checkpoint.status === "completed") return json(res, 409, { error: "completed checkpoints cannot be resumed" });
+      if (checkpoint.modelSelection.instanceId !== bot.modelSelection.instanceId || checkpoint.modelSelection.model !== bot.modelSelection.model) {
+        return json(res, 409, { error: "switch back to the checkpoint's model before resuming" });
+      }
+      if (!registry.get(bot.modelSelection.instanceId)) return json(res, 409, { error: "checkpoint provider is unavailable" });
+      if (checkpoint.activeLeafId && !store.setActiveLeaf(bot.threadId, checkpoint.activeLeafId)) {
+        return json(res, 409, { error: "checkpoint conversation branch is no longer available" });
+      }
+      const body = await readBody(req);
+      const instruction = typeof body.instruction === "string" && body.instruction.trim()
+        ? body.instruction.trim()
+        : "Continue the interrupted task from this checkpoint. Review the conversation and complete the next safe step.";
+      await startTurn(bot.id, instruction, { checkpointId: checkpoint.id });
+      return json(res, 202, { ok: true, checkpoint: store.checkpoint(bot.id, checkpoint.id) });
     }
 
     // identity handshake for the packaged app's port fallback: the forked

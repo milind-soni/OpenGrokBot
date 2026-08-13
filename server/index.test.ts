@@ -143,6 +143,14 @@ describe("harness HTTP API", () => {
     expect(send.body.error).toContain("unavailable");
   });
 
+  it("validates an optional per-task budget before dispatch", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+    const invalid = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello?", budget: { maxToolCalls: 0 } });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toContain("budget");
+  });
+
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];

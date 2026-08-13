@@ -17,6 +17,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
+import { normalizeTaskBudget, TaskBudgetGuard, type TaskBudget } from "./task-budget.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -131,6 +132,7 @@ function broadcast(payload: unknown) {
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+const taskBudgetGuards = new Map<string, TaskBudgetGuard>();
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
@@ -138,6 +140,10 @@ const groupSpeakers = new Map<string, { botId: string; name: string; color: stri
 
 bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
+  const budgetGuard = taskBudgetGuards.get(event.threadId);
+  if (event.type === "thread.token-usage.updated") budgetGuard?.noteTokenUsage(event.input, event.output);
+  if (event.type === "item.started" && event.itemType === "tool") budgetGuard?.noteToolStarted(event.title);
+  if (event.type === "item.completed" && event.itemType === "tool" && !event.ok) budgetGuard?.noteFailedTool();
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
   if (!bot && !group) return;
@@ -213,6 +219,8 @@ bus.subscribe((event: RuntimeEvent) => {
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       break;
     case "turn.completed": {
+      taskBudgetGuards.get(event.threadId)?.dispose();
+      taskBudgetGuards.delete(event.threadId);
       if (bot) {
         // the last live frame becomes a settled inline screen message —
         // the screenshot-in-chat moment
@@ -312,7 +320,7 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 async function startTurn(
   botId: string,
   text: string,
-  opts?: { commsDepth?: number; userMessage?: Message },
+  opts?: { commsDepth?: number; userMessage?: Message; budget?: TaskBudget },
 ) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
@@ -378,6 +386,31 @@ async function startTurn(
 
   void (async () => {
     try {
+      if (opts?.budget) {
+        const guard = new TaskBudgetGuard(opts.budget, (status) => {
+          bus.publish({
+            eventId: `budget-${Date.now().toString(36)}`,
+            provider: instance.driverKind,
+            providerInstanceId: instance.instanceId,
+            threadId: bot.threadId,
+            createdAt: new Date().toISOString(),
+            type: status.kind === "exhausted" ? "task.budget.exhausted" : "task.budget.updated",
+            budget: status.budget as Record<string, number>,
+            usage: { ...status.usage },
+            limit: status.limit,
+          });
+          if (status.kind !== "exhausted") return;
+          const message = store.appendMessage(bot.threadId, {
+            role: "bot",
+            kind: "activity",
+            tool: { name: `task budget reached: ${status.limit.replace(/_/g, " ")}`, ok: false },
+          });
+          broadcast({ kind: "message", threadId: bot.threadId, message });
+          void instance.adapter.interruptTurn(bot.threadId).catch(() => {});
+        });
+        taskBudgetGuards.set(bot.threadId, guard);
+        guard.start();
+      }
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
       const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
@@ -450,6 +483,8 @@ async function startTurn(
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (integrations.computer) startScreenPoller(bot.id);
     } catch (e) {
+      taskBudgetGuards.get(bot.threadId)?.dispose();
+      taskBudgetGuards.delete(bot.threadId);
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
@@ -930,8 +965,10 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
-      return json(res, 202, { ok: true });
+      const budget = body.budget === undefined ? undefined : normalizeTaskBudget(body.budget);
+      if (body.budget !== undefined && !budget) return json(res, 400, { error: "budget needs one or more supported positive limits within documented bounds" });
+      await startTurn(m[1], text, { budget: budget ?? undefined });
+      return json(res, 202, { ok: true, ...(budget ? { budget } : {}) });
     }
 
     // edit a user message → fork the conversation there and rerun the turn.
@@ -1000,6 +1037,8 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const instance = registry.get(bot.modelSelection.instanceId);
+      taskBudgetGuards.get(bot.threadId)?.dispose();
+      taskBudgetGuards.delete(bot.threadId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
     }

@@ -109,6 +109,17 @@ export interface SendTurnInput {
      * through the harness so this bot can message other bots. The harness
      * owns turns, permissions, and recursion limits; the proxy only forwards. */
     agents?: { command: string; args: string[]; env: Record<string, string> };
+    /** User-configured MCP servers selected by the harness. Their credentials
+     * stay server-side; drivers receive these only for the active turn. */
+    mcp?: Array<{
+      id: string;
+      name: string;
+      transport: "stdio" | "http";
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+    }>;
   };
   cwd?: string;
 }
@@ -125,6 +136,8 @@ export interface ProviderAdapter {
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
     agentsMcp?: boolean;
+    /** True when the driver can receive user-configured MCP servers. */
+    configuredMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

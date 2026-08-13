@@ -102,6 +102,39 @@ describe("harness HTTP API", () => {
     expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
   });
 
+  it("manages MCP servers without returning local environment secrets", async () => {
+    const created = await api("POST", "/api/mcp/servers", {
+      id: "test-mcp",
+      name: "Test MCP",
+      transport: "stdio",
+      command: "node",
+      args: ["fake-mcp.js"],
+      env: { MCP_TOKEN: "do-not-return" },
+      botIds: ["only-this-bot"],
+    });
+    expect(created.status).toBe(201);
+    expect(JSON.stringify(created.body)).not.toContain("do-not-return");
+    expect(created.body.server).toMatchObject({ id: "test-mcp", enabled: true, assignedBotIds: ["only-this-bot"] });
+
+    const listed = await api("GET", "/api/mcp/servers");
+    expect(listed.status).toBe(200);
+    expect(JSON.stringify(listed.body)).not.toContain("MCP_TOKEN");
+
+    const disabled = await api("PATCH", "/api/mcp/servers/test-mcp", { enabled: false });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.server.enabled).toBe(false);
+
+    const invalidRemote = await api("POST", "/api/mcp/servers", {
+      name: "Unsafe remote",
+      transport: "http",
+      url: "http://remote.example.test/mcp",
+    });
+    expect(invalidRemote.status).toBe(400);
+
+    const removed = await api("DELETE", "/api/mcp/servers/test-mcp");
+    expect(removed.status).toBe(200);
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);

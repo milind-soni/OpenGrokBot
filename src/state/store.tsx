@@ -124,6 +124,17 @@ export interface ConfigStatus {
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
+  mcp?: {
+    servers: Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      transport: "stdio" | "http";
+      configured: boolean;
+      assignedBotIds: string[];
+      url?: string;
+    }>;
+  };
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -897,7 +908,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile, mcp: frame.mcp },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))

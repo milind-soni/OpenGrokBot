@@ -161,6 +161,37 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     expect(allowed).toContain("mcp__agents");
   });
 
+  it("mounts configured MCP servers with their per-turn local environment", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-user-mcp",
+      text: "hi",
+      integrations: {
+        mcp: [{
+          id: "docs-server",
+          name: "Docs",
+          transport: "stdio",
+          command: "node",
+          args: ["/fake/docs.js"],
+          env: { DOCS_TOKEN: "only-in-cli-config" },
+        }],
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const mcpConfig = JSON.parse(seen.argv[seen.argv.indexOf("--mcp-config") + 1]);
+    expect(mcpConfig.mcpServers.user_docs_server).toMatchObject({
+      command: "node",
+      args: ["/fake/docs.js"],
+      env: { DOCS_TOKEN: "only-in-cli-config" },
+    });
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__user_docs_server");
+  });
+
   it("resumes with --resume when a cursor exists and reports that session id", async () => {
     await create();
     const dump = join(scratch, "dump.json");

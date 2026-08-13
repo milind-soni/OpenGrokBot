@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, Copy, Download, Loader2, Maximize2, RefreshCw, X } from "lucide-react";
 
 import type { MediaOutput, Message } from "@/state/store";
@@ -54,9 +54,60 @@ function MediaProgress({ media }: { media: MediaOutput[] }) {
   );
 }
 
-export function MediaMessage({ message, onRetry }: { message: Message; onRetry?: () => void }) {
+export function MediaViewer({ media, onClose }: { media: MediaOutput; onClose: () => void }) {
+  if (!media.cacheKey) return null;
+  const video = media.kind === "video";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Generated ${media.kind} viewer`}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-8"
+      onClick={onClose}
+    >
+      <button onClick={onClose} className="absolute right-5 top-5 rounded-full bg-black/60 p-2 text-white hover:bg-black" title={`Close ${media.kind} viewer`}>
+        <X size={20} />
+      </button>
+      {video ? (
+        <video
+          controls
+          autoPlay
+          src={mediaUrl(media.cacheKey)}
+          className="max-h-full max-w-full bg-black object-contain"
+          onClick={(event) => event.stopPropagation()}
+        />
+      ) : (
+        <img
+          src={mediaUrl(media.cacheKey)}
+          alt="Generated image enlarged"
+          className="max-h-full max-w-full object-contain"
+          onClick={(event) => event.stopPropagation()}
+        />
+      )}
+    </div>
+  );
+}
+
+export function MediaMessage({
+  message,
+  onRetry,
+  requestedMediaId,
+  openRequestId,
+}: {
+  message: Message;
+  onRetry?: () => void;
+  requestedMediaId?: string;
+  openRequestId?: string;
+}) {
   const media = message.media ?? [];
   const [viewer, setViewer] = useState<MediaOutput | null>(null);
+  useEffect(() => {
+    if (!openRequestId || !requestedMediaId) return;
+    const requested = media.find(
+      (item) => item.id === requestedMediaId && item.status === "ready" && item.cacheKey,
+    );
+    if (requested) setViewer(requested);
+  }, [media, openRequestId, requestedMediaId]);
   const terminalFailure =
     media.length > 0 && media.every((item) => item.status === "failed" || item.status === "cancelled");
   if (terminalFailure) return <MediaFailure media={media} onRetry={onRetry} />;
@@ -80,19 +131,24 @@ export function MediaMessage({ message, onRetry }: { message: Message; onRetry?:
           const src = mediaUrl(item.cacheKey!);
           if (item.kind === "video") {
             return (
-              <div key={item.id} className="group/media overflow-hidden rounded-2xl border border-hairline/40 bg-card">
+              <div key={item.id} data-media-id={item.id} className="group/media overflow-hidden rounded-2xl border border-hairline/40 bg-card">
                 <video controls preload="metadata" src={src} className="max-h-[520px] w-full bg-black object-contain" />
                 <div className="flex items-center justify-between px-3 py-2 text-[12px] text-ink-secondary">
                   <span>{item.durationSeconds ? `${item.durationSeconds}s generated video` : "Generated video"}</span>
-                  <a href={src} download={`generated-video-${index + 1}`} className="rounded p-1 hover:bg-raised hover:text-ink" title="Download video">
-                    <Download size={14} />
-                  </a>
+                  <span className="flex items-center gap-1">
+                    <button onClick={() => setViewer(item)} className="rounded p-1 hover:bg-raised hover:text-ink" title="Open video viewer">
+                      <Maximize2 size={14} />
+                    </button>
+                    <a href={src} download={`generated-video-${index + 1}`} className="rounded p-1 hover:bg-raised hover:text-ink" title="Download video">
+                      <Download size={14} />
+                    </a>
+                  </span>
                 </div>
               </div>
             );
           }
           return (
-            <div key={item.id} className="group/media relative overflow-hidden rounded-2xl border border-hairline/40 bg-card">
+            <div key={item.id} data-media-id={item.id} className="group/media relative overflow-hidden rounded-2xl border border-hairline/40 bg-card">
               <button onClick={() => setViewer(item)} className="block w-full cursor-zoom-in" title="Open image viewer">
                 <img
                   src={src}
@@ -118,25 +174,7 @@ export function MediaMessage({ message, onRetry }: { message: Message; onRetry?:
           );
         })}
       </div>
-      {viewer?.cacheKey && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Generated image viewer"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-8"
-          onClick={() => setViewer(null)}
-        >
-          <button onClick={() => setViewer(null)} className="absolute right-5 top-5 rounded-full bg-black/60 p-2 text-white hover:bg-black" title="Close image viewer">
-            <X size={20} />
-          </button>
-          <img
-            src={mediaUrl(viewer.cacheKey)}
-            alt="Generated image enlarged"
-            className="max-h-full max-w-full object-contain"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      )}
+      {viewer && <MediaViewer media={viewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }

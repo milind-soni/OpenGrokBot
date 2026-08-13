@@ -25,6 +25,7 @@ import { ModelPicker } from "./ModelPicker";
 import { MediaMessage } from "./MediaMessage";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
+import { deriveCreations } from "@/lib/creations";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -446,6 +447,11 @@ export function ChatView({ bot }: { bot: Bot }) {
       ),
     [messages],
   );
+  const requestedMediaCreation = useMemo(() => {
+    const request = state.openCreationRequest;
+    if (!request || request.botId !== bot.id || request.kind === "html") return null;
+    return deriveCreations([bot]).find((creation) => creation.id === request.creationId) ?? null;
+  }, [bot, state.openCreationRequest]);
   const [artifactSelections, setArtifactSelections] = useState<Record<string, string | null>>({});
   const autoOpenedArtifact = useRef<Record<string, string>>({});
   const [artifactWidth, setArtifactWidth] = useState(() => {
@@ -668,6 +674,8 @@ export function ChatView({ bot }: { bot: Bot }) {
                     <MediaMessage
                       message={m}
                       onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
+                      requestedMediaId={requestedMediaCreation?.messageId === m.id ? requestedMediaCreation.media?.id : undefined}
+                      openRequestId={requestedMediaCreation?.messageId === m.id ? state.openCreationRequest?.requestId : undefined}
                     />
                   );
                 default:

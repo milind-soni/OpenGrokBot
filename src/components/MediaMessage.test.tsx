@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { Message } from "@/state/store";
-import { MediaMessage } from "./MediaMessage";
+import { MediaMessage, MediaViewer } from "./MediaMessage";
 
 function message(media: NonNullable<Message["media"]>): Message {
   return { id: "message-1", role: "bot", kind: "media", media, at: 1 };
@@ -66,5 +66,43 @@ describe("MediaMessage", () => {
 
     expect(html).toContain("Provider rejected the prompt");
     expect(html).toContain("Retry");
+  });
+
+  it("marks ready media as externally reopenable", () => {
+    const html = renderToStaticMarkup(
+      <MediaMessage
+        message={message([
+          {
+            id: "video-1",
+            kind: "video",
+            status: "ready",
+            cacheKey: "22222222-2222-4222-8222-222222222222.mp4",
+          },
+        ])}
+        requestedMediaId="video-1"
+        openRequestId="request-1"
+      />,
+    );
+
+    expect(html).toContain('data-media-id="video-1"');
+    expect(html).toContain("Open video viewer");
+  });
+
+  it("renders videos in the shared viewer shell", () => {
+    const html = renderToStaticMarkup(
+      <MediaViewer
+        media={{
+          id: "video-1",
+          kind: "video",
+          status: "ready",
+          cacheKey: "22222222-2222-4222-8222-222222222222.mp4",
+        }}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain("Generated video viewer");
+    expect(html).toContain("<video");
   });
 });

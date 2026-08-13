@@ -124,6 +124,10 @@ export interface ConfigStatus {
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
+  /** Metadata-only template catalog. Workflow instructions never enter app state. */
+  templates?: {
+    items: Array<{ id: string; name: string; description?: string; title?: string; computer?: "cloud" | "local" | "off" }>;
+  };
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -897,7 +901,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile, templates: frame.templates },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))

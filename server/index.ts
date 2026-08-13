@@ -17,6 +17,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
+import { normalizeTemplate, templateSnapshot } from "./templates.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -623,6 +624,7 @@ function configStatus() {
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    templates: { items: (cfg.templates?.items ?? []).map(templateSnapshot) },
   };
 }
 
@@ -867,9 +869,43 @@ const server = createServer(async (req, res) => {
       broadcast({ kind: "message.patch", threadId: m[1], message: patched });
       return json(res, 200, { message: patched });
     }
+    if (method === "GET" && path === "/api/templates") {
+      return json(res, 200, { items: (cfg.templates?.items ?? []).map(templateSnapshot) });
+    }
+    if (method === "POST" && path === "/api/templates") {
+      try {
+        const item = normalizeTemplate(await readBody(req));
+        saveConfig({ templates: { items: [...(cfg.templates?.items ?? []), item] } });
+        Object.assign(cfg, loadConfig());
+        broadcast({ kind: "config", ...configStatus() });
+        return json(res, 201, { item: templateSnapshot(item) });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : "Invalid template" });
+      }
+    }
+    m = path.match(/^\/api\/templates\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      const items = cfg.templates?.items ?? [];
+      if (!items.some((item) => item.id === m![1])) return json(res, 404, { error: "no such template" });
+      saveConfig({ templates: { items: items.filter((item) => item.id !== m![1]) } });
+      Object.assign(cfg, loadConfig());
+      broadcast({ kind: "config", ...configStatus() });
+      return json(res, 200, { ok: true });
+    }
     if (method === "POST" && path === "/api/bots") {
+      const body = await readBody(req);
+      const template = typeof body.templateId === "string" ? (cfg.templates?.items ?? []).find((item) => item.id === body.templateId) : undefined;
+      if (body.templateId && !template) return json(res, 404, { error: "no such template" });
       const bot = store.createBot();
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
+      if (template) {
+        store.patchBot(bot.id, {
+          name: template.name,
+          title: template.title ?? "",
+          description: template.instructions,
+          computer: template.computer,
+        });
+      }
       return json(res, 201, {
         bot: {
           ...store.bot(bot.id)!,

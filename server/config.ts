@@ -7,6 +7,17 @@ import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
 
+/** A reusable starting configuration for a new bot. Instructions remain in
+ * the local config and are only read by the harness when instantiated. */
+export interface TaskTemplateConfig {
+  id: string;
+  name: string;
+  description?: string;
+  title?: string;
+  instructions: string;
+  computer?: "cloud" | "local" | "off";
+}
+
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   /** key = ck_… Connect consumer key (connections + agent tools);
@@ -17,6 +28,7 @@ export interface AppConfig {
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
+  templates?: { items?: TaskTemplateConfig[] };
   instances?: InstanceConfigMap;
 }
 
@@ -62,7 +74,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "profile", "templates"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }

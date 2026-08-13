@@ -140,6 +140,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
           });
         }
+        const watchSkill = turn.integrations?.watchSkill;
+        if (watchSkill) servers.push({ name: "watch_skill", command: watchSkill.command, args: watchSkill.args, env: [] });
         return servers;
       };
 

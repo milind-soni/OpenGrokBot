@@ -17,6 +17,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
+import { hasWatchSkill, videoReferences, watchSkillIntegration } from "./watch-skill.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -412,6 +413,8 @@ async function startTurn(
       ) {
         integrations.agents = agentsIntegration(bot.id, commsDepth);
       }
+      const videos = videoReferences(text);
+      if (videos.length && hasWatchSkill()) integrations.watchSkill = watchSkillIntegration();
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
@@ -438,6 +441,9 @@ async function startTurn(
               : "") +
           (integrations.agents
             ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
+            : "") +
+          (integrations.watchSkill
+            ? ` The user included ${videos.length} video reference${videos.length === 1 ? "" : "s"}. Use the watch_skill tools to index it once, cite timestamped evidence, and reuse its index for follow-up questions.`
             : "") +
           (tagged.length
             ? ` The user tagged ${tagged

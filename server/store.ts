@@ -49,6 +49,9 @@ export interface Message {
   png?: string;
   mime?: string;
   at: number;
+  /** the message this one follows; null = thread root. Edited messages
+   * share a parentId with the version they replace — that's a fork. */
+  parentId?: string | null;
 }
 
 export interface BotRecord {
@@ -71,6 +74,10 @@ export interface BotRecord {
    * section id that no longer exists reads as ungrouped rather than
    * hiding the bot. */
   sectionId?: string | null;
+  /** true after an edit/branch-switch rewound the visible conversation:
+   * provider sessions still hold the abandoned branch, so the next turn
+   * must start fresh (drop cursors) and replay the surviving path. */
+  rewound?: boolean;
   pinned?: boolean;
   hidden?: boolean;
   busy?: boolean;
@@ -132,10 +139,17 @@ const onboardingCard = (): OptionCardData => ({
   options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
 });
 
+/** Messages form a tree (forks appear when a message is edited); the
+ * visible conversation is the path from the root to activeLeafId. */
+interface ThreadState {
+  messages: Message[];
+  activeLeafId: string | null;
+}
+
 export class Store {
   bots: BotRecord[] = [];
   sections: SectionRecord[] = [];
-  private messages = new Map<string, Message[]>();
+  private threads = new Map<string, ThreadState>();
   private defaultSelection: () => ModelSelection;
 
   constructor(defaultSelection: () => ModelSelection) {
@@ -212,34 +226,114 @@ export class Store {
     return true;
   }
 
-  messagesFor(threadId: string): Message[] {
-    let list = this.messages.get(threadId);
-    if (!list) {
-      try {
-        list = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
-      } catch {
-        list = [];
+  private thread(threadId: string): ThreadState {
+    let t = this.threads.get(threadId);
+    if (t) return t;
+    let messages: Message[] = [];
+    let activeLeafId: string | null = null;
+    try {
+      const raw = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
+      if (Array.isArray(raw)) messages = raw; // pre-branching flat file
+      else {
+        messages = raw.messages ?? [];
+        activeLeafId = raw.activeLeafId ?? null;
       }
-      this.messages.set(threadId, list!);
+    } catch {
+      /* fresh thread */
     }
-    return list!;
+    // legacy rows carry no parentId — chain them in array order
+    let prev: string | null = null;
+    for (const m of messages) {
+      if (m.parentId === undefined) m.parentId = prev;
+      prev = m.id;
+    }
+    if (!activeLeafId) activeLeafId = messages.at(-1)?.id ?? null;
+    t = { messages, activeLeafId };
+    this.threads.set(threadId, t);
+    return t;
+  }
+
+  private saveThread(threadId: string) {
+    const t = this.thread(threadId);
+    writeFileSync(
+      messagesFile(threadId),
+      JSON.stringify({ activeLeafId: t.activeLeafId, messages: t.messages }, null, 2),
+    );
+  }
+
+  messagesFor(threadId: string): Message[] {
+    return this.thread(threadId).messages;
+  }
+
+  activeLeaf(threadId: string): string | null {
+    return this.thread(threadId).activeLeafId;
+  }
+
+  /** The visible conversation: root → activeLeafId. */
+  activePath(threadId: string): Message[] {
+    const t = this.thread(threadId);
+    const byId = new Map(t.messages.map((m) => [m.id, m]));
+    const path: Message[] = [];
+    let cur = t.activeLeafId ? byId.get(t.activeLeafId) : undefined;
+    while (cur) {
+      path.push(cur);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+    return path.reverse();
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
-    const full: Message = { id: newId(), at: Date.now(), ...message };
-    const list = this.messagesFor(threadId);
-    list.push(full);
-    writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
+    const t = this.thread(threadId);
+    const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
+    t.messages.push(full);
+    t.activeLeafId = full.id;
+    this.saveThread(threadId);
     return full;
   }
 
+  /** Fork the conversation: a new user message that replaces `sourceId`
+   * (same parent, new text) and becomes the active leaf. */
+  branchMessage(threadId: string, sourceId: string, text: string): Message | null {
+    const t = this.thread(threadId);
+    const source = t.messages.find((m) => m.id === sourceId);
+    if (!source) return null;
+    const full: Message = {
+      id: newId(),
+      at: Date.now(),
+      role: "user",
+      kind: "text",
+      text,
+      parentId: source.parentId ?? null,
+    };
+    t.messages.push(full);
+    t.activeLeafId = full.id;
+    this.saveThread(threadId);
+    return full;
+  }
+
+  /** Point the visible conversation at the branch containing `messageId`,
+   * descending to that branch's most recently active leaf. */
+  setActiveLeaf(threadId: string, messageId: string): string | null {
+    const t = this.thread(threadId);
+    if (!t.messages.some((m) => m.id === messageId)) return null;
+    let cur = messageId;
+    for (;;) {
+      const children = t.messages.filter((m) => m.parentId === cur);
+      if (!children.length) break;
+      cur = children.reduce((a, b) => (b.at >= a.at ? b : a)).id;
+    }
+    t.activeLeafId = cur;
+    this.saveThread(threadId);
+    return cur;
+  }
+
   patchMessage(threadId: string, messageId: string, patch: Partial<Message>): Message | null {
-    const list = this.messagesFor(threadId);
-    const idx = list.findIndex((m) => m.id === messageId);
+    const t = this.thread(threadId);
+    const idx = t.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
-    list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
-    writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
-    return list[idx];
+    t.messages[idx] = { ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card };
+    this.saveThread(threadId);
+    return t.messages[idx];
   }
 
   bot(id: string) {
@@ -279,7 +373,7 @@ export class Store {
     const bot = this.bot(id);
     if (!bot) return false;
     this.bots = this.bots.filter((b) => b.id !== id);
-    this.messages.delete(bot.threadId);
+    this.threads.delete(bot.threadId);
     this.saveBots();
     try {
       unlinkSync(messagesFile(bot.threadId));

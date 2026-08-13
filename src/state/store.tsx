@@ -37,6 +37,9 @@ export interface Message {
   png?: string;
   mime?: string;
   at: number;
+  /** the message this one follows; null = thread root. Edited messages
+   * share a parentId with the version they replace — that's a fork. */
+  parentId?: string | null;
 }
 
 export interface ModelSelection {
@@ -63,6 +66,35 @@ export interface Bot {
   pinned?: boolean;
   hidden?: boolean;
   messages: Message[];
+  /** leaf of the visible conversation branch (see visibleMessages) */
+  activeLeafId?: string | null;
+}
+
+/** The visible conversation: walk parentId links from the active leaf back
+ * to the root. Falls back to the flat list for pre-branching payloads. */
+export function visibleMessages(bot: Bot): Message[] {
+  const leafId = bot.activeLeafId;
+  if (!leafId) return bot.messages;
+  const byId = new Map(bot.messages.map((m) => [m.id, m]));
+  if (!byId.has(leafId)) return bot.messages;
+  const path: Message[] = [];
+  let cur = byId.get(leafId);
+  while (cur) {
+    path.push(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return path.reverse();
+}
+
+/** All versions of a user message (itself + the forks that replaced it),
+ * oldest first. Length 1 = never edited. */
+export function messageVersions(bot: Bot, message: Message): Message[] {
+  if (message.role !== "user" || message.kind !== "text") return [message];
+  return bot.messages
+    .filter(
+      (m) => m.role === "user" && m.kind === "text" && (m.parentId ?? null) === (message.parentId ?? null),
+    )
+    .sort((a, b) => a.at - b.at);
 }
 
 /** A named, collapsible sidebar group. Membership lives on the bot. */
@@ -138,6 +170,9 @@ type Action =
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | { type: "send"; botId: string; text: string }
+  | { type: "editMessage"; botId: string; messageId: string; text: string }
+  | { type: "switchBranch"; botId: string; messageId: string }
+  | { type: "threadActive"; threadId: string; activeLeafId: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot" }
@@ -271,10 +306,11 @@ function reducer(state: AppState, action: Action): AppState {
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) return state;
+      // every server-side append chains onto (and becomes) the active leaf
       const next = updateBot(state, bot.id, (b) =>
         b.messages.some((m) => m.id === action.message.id)
-          ? b
-          : { ...b, messages: [...b.messages, action.message] },
+          ? { ...b, activeLeafId: action.message.id }
+          : { ...b, messages: [...b.messages, action.message], activeLeafId: action.message.id },
       );
       const motion =
         action.message.kind === "options"
@@ -387,8 +423,31 @@ function reducer(state: AppState, action: Action): AppState {
         : state;
       return updateBot(next, action.botId, (b) => ({ ...b, ...action.patch }));
     }
+    case "threadActive": {
+      const bot = state.bots.find((b) => b.threadId === action.threadId);
+      if (!bot) return state;
+      // a rewind also invalidates any half-streamed text from the old branch
+      const { [action.threadId]: _, ...streaming } = state.streaming;
+      return updateBot({ ...state, streaming }, bot.id, (b) => ({
+        ...b,
+        activeLeafId: action.activeLeafId,
+      }));
+    }
+    // optimistic leaf move; the server's thread frame confirms it later
+    case "switchBranch": {
+      const bot = state.bots.find((b) => b.id === action.botId);
+      if (!bot) return state;
+      let cur = action.messageId;
+      for (;;) {
+        const children = bot.messages.filter((m) => m.parentId === cur);
+        if (!children.length) break;
+        cur = children.reduce((a, b) => (b.at >= a.at ? b : a)).id;
+      }
+      return updateBot(state, action.botId, (b) => ({ ...b, activeLeafId: cur }));
+    }
     // handled entirely by the async wrapper
     case "send":
+    case "editMessage":
       return withMascotMotion(state, action.botId, "working");
     case "newBot":
     case "duplicateBot":
@@ -465,6 +524,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
             body: JSON.stringify({ text: action.text }),
+          }).catch(showError);
+          break;
+        case "editMessage":
+          api(`/api/bots/${action.botId}/messages/${action.messageId}/edit`, {
+            method: "POST",
+            body: JSON.stringify({ text: action.text }),
+          }).catch(showError);
+          break;
+        case "switchBranch":
+          api(`/api/bots/${action.botId}/active-branch`, {
+            method: "POST",
+            body: JSON.stringify({ messageId: action.messageId }),
           }).catch(showError);
           break;
         case "answerCard": {
@@ -645,6 +716,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "message.patch":
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
+          break;
+        case "thread":
+          rawDispatch({ type: "threadActive", threadId: frame.threadId, activeLeafId: frame.activeLeafId });
           break;
         case "bot": {
           const bot = frame.bot as Partial<Bot> & { id: string };

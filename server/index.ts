@@ -265,14 +265,27 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
+// Where Electron's app.getPath("userData") lands, per platform — the
+// hardcoded macOS path found nothing anywhere else, and threw the
+// non-ENOENT errors into the same silent catch.
+// `||`, not `??`: a set-but-empty APPDATA/XDG_CONFIG_HOME would otherwise
+// join into a RELATIVE path resolved against the server's cwd — the same
+// silent ENOENT this function exists to stop. Electron ignores empty values
+// the same way.
+function userDataRoot(): string {
+  if (process.platform === "win32") return process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support");
+  return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+}
+
 // Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/OpenMausBot/cua-connection.json). Read
-// fresh each turn — Electron may restart or permissions may change.
+// (<userData>/cua-connection.json). Read fresh each turn — Electron may
+// restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
   // new name first; pre-rename desktop builds used the old directory
   for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
     try {
-      const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
+      const p = join(userDataRoot(), dir, "cua-connection.json");
       const conn = JSON.parse(readFileSync(p, "utf8"));
       if (!conn || conn.mode === "unavailable" || !conn.mcpCommand) continue;
       return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
@@ -284,7 +297,11 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string, opts?: { commsDepth?: number }) {
+async function startTurn(
+  botId: string,
+  text: string,
+  opts?: { commsDepth?: number; userMessage?: Message },
+) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -298,15 +315,40 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     );
   }
 
-  const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
-  broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  // an edit hands us its already-branched user message; a plain send appends
+  let userMessage = opts?.userMessage;
+  if (!userMessage) {
+    userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+    broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  }
 
-  // transcript for API-backed drivers: settled text turns only
+  // transcript for API-backed drivers: settled text turns on the ACTIVE
+  // branch only — abandoned forks never reach the model
   const transcript = store
-    .messagesFor(bot.threadId)
+    .activePath(bot.threadId)
     .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
     .slice(-40)
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+
+  // After a rewind (edit / branch switch) the provider's native session
+  // still contains the abandoned branch: start a fresh session instead of
+  // resuming, and for cursor-resuming drivers replay the surviving path
+  // inline (transcript-replay drivers get it via transcript). The flag is
+  // cleared only once the turn is actually dispatched — clearing it here
+  // would cost the next attempt its history if this dispatch fails.
+  const rewound = Boolean(bot.rewound);
+  const turnText =
+    rewound && instance.driverKind !== "grok" && transcript.length
+      ? [
+          "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
+          "",
+          ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
+          "",
+          "[Now reply to the user's latest message:]",
+          "",
+          text,
+        ].join("\n")
+      : text;
 
   const persona = [
     `You are ${bot.name}, a personal bot in OpenMausBot.`,
@@ -370,9 +412,10 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
 
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
-        text,
+        text: turnText,
         model: bot.modelSelection.model,
-        resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
+        // a rewound thread never resumes the abandoned branch's session
+        resumeCursor: rewound ? undefined : bot.resumeCursors[bot.modelSelection.instanceId],
         transcript,
         system:
           persona +
@@ -391,6 +434,8 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
             : ""),
         integrations,
       });
+      // dispatched: the rewind is spent, and the old cursors are dead
+      if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (integrations.computer) startScreenPoller(bot.id);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -581,13 +626,23 @@ const server = createServer(async (req, res) => {
     // ── bots ──
     if (method === "GET" && path === "/api/bots") {
       return json(res, 200, {
-        bots: store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId) })),
+        bots: store.bots.map((b) => ({
+          ...b,
+          messages: store.messagesFor(b.threadId),
+          activeLeafId: store.activeLeaf(b.threadId),
+        })),
       });
     }
     if (method === "POST" && path === "/api/bots") {
       const bot = store.createBot();
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
-      return json(res, 201, { bot: { ...store.bot(bot.id)!, messages: store.messagesFor(bot.threadId) } });
+      return json(res, 201, {
+        bot: {
+          ...store.bot(bot.id)!,
+          messages: store.messagesFor(bot.threadId),
+          activeLeafId: store.activeLeaf(bot.threadId),
+        },
+      });
     }
     let m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -649,6 +704,55 @@ const server = createServer(async (req, res) => {
       if (!text) return json(res, 400, { error: "text required" });
       await startTurn(m[1], text);
       return json(res, 202, { ok: true });
+    }
+
+    // edit a user message → fork the conversation there and rerun the turn.
+    // Rewinding a live thread is refused, exactly like switching versions
+    // below: interrupting mid-flight and branching under the dying turn is
+    // how a conversation ends up with two tails. Stop, then edit.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)\/edit$/);
+    if (m && method === "POST") {
+      const messageId = m[2];
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = await readBody(req);
+      const text = String(body.text ?? "").trim();
+      if (!text) return json(res, 400, { error: "text required" });
+      // everything from here down is synchronous, so two racing edits can
+      // never both get past this check: startTurn flips busy before the
+      // next request is handled
+      if (bot.busy) return json(res, 409, { error: "the bot is working — stop it before editing" });
+      const source = store.messagesFor(bot.threadId).find((msg) => msg.id === messageId);
+      if (!source || source.role !== "user" || source.kind !== "text") {
+        return json(res, 404, { error: "only user messages can be edited" });
+      }
+      if (!registry.get(bot.modelSelection.instanceId)) {
+        return json(res, 409, {
+          error: `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`,
+        });
+      }
+      const message = store.branchMessage(bot.threadId, messageId, text);
+      if (!message) return json(res, 404, { error: "no such message" });
+      store.patchBot(bot.id, { rewound: true });
+      broadcast({ kind: "message", threadId: bot.threadId, message });
+      broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: message.id });
+      await startTurn(bot.id, text, { userMessage: message });
+      return json(res, 202, { ok: true });
+    }
+
+    // switch which fork of the conversation is visible (no new turn)
+    m = path.match(/^\/api\/bots\/([\w-]+)\/active-branch$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (bot.busy) return json(res, 409, { error: "the bot is working — stop it before switching versions" });
+      const body = await readBody(req);
+      const leaf = store.setActiveLeaf(bot.threadId, String(body.messageId ?? ""));
+      if (!leaf) return json(res, 404, { error: "no such message" });
+      // provider sessions still hold the other branch — next turn replays
+      store.patchBot(bot.id, { rewound: true });
+      broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: leaf });
+      return json(res, 200, { activeLeafId: leaf });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);
     if (m && method === "POST") {

@@ -18,7 +18,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-export function Composer({ bot }: { bot: Bot }) {
+export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => void }) {
   const { state, dispatch } = useStore();
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
@@ -26,7 +26,7 @@ export function Composer({ bot }: { bot: Bot }) {
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
 
@@ -44,6 +44,14 @@ export function Composer({ bot }: { bot: Bot }) {
   const pickerOpen = candidates.length > 0;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
+
+  // grow the textarea with its content (capped by max-h in the className)
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
 
   const pickMention = (peer: Bot) => {
     if (!mention) return;
@@ -135,23 +143,24 @@ export function Composer({ bot }: { bot: Bot }) {
             ))}
           </div>
         )}
-        <div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-raised/60 py-2 pl-2 pr-2">
+        <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-2 pr-2">
         <button
           className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
           title="Attach"
         >
           <Plus size={20} />
         </button>
-        <input
+        <textarea
           ref={inputRef}
+          rows={1}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
             setDismissedAt(null);
           }}
-          onKeyUp={(e) => setCaret((e.target as HTMLInputElement).selectionStart ?? 0)}
-          onClick={(e) => setCaret((e.target as HTMLInputElement).selectionStart ?? 0)}
+          onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+          onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
             if (pickerOpen) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -171,13 +180,23 @@ export function Composer({ bot }: { bot: Bot }) {
                 return;
               }
             }
-            if (e.key === "Enter") send();
+            // an empty composer + ArrowUp = edit your last message (like a chat app)
+            if (e.key === "ArrowUp" && !text && onEditLast) {
+              e.preventDefault();
+              onEditLast();
+              return;
+            }
+            // Shift+Enter inserts a newline; plain Enter sends
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              send();
+            }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
           placeholder={
             recording ? "Listening…" : bot.busy ? `${bot.name} is working…` : `Message ${bot.name}`
           }
-          className="w-full bg-transparent text-[15px] text-ink placeholder:text-ink-secondary focus:outline-none"
+          className="max-h-40 w-full resize-none self-center bg-transparent py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
         {bot.busy ? (
           <button

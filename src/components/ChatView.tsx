@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Check, Loader2, Monitor, Square, X } from "lucide-react";
-import { useStore, formatTime, type Bot, type Message } from "@/state/store";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, Check, ChevronLeft, ChevronRight, Loader2, Monitor, Pencil, Square, X } from "lucide-react";
+import { useStore, formatTime, messageVersions, visibleMessages, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -14,37 +14,161 @@ import { cn } from "@/lib/cn";
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
 
-function Bubble({ message }: { message: Message }) {
+/** Inline editor a user bubble turns into: Enter sends (forking the
+ * conversation), Esc cancels. Shift+Enter for a newline, like everywhere. */
+function BubbleEditor({
+  initial,
+  onCancel,
+  onSubmit,
+}: {
+  initial: string;
+  onCancel: () => void;
+  onSubmit: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  const submit = () => {
+    if (draft.trim()) onSubmit(draft.trim());
+  };
+  return (
+    <div className="w-full max-w-[70%] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3">
+      <textarea
+        ref={ref}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+          if (e.key === "Escape") onCancel();
+        }}
+        rows={Math.min(10, Math.max(2, draft.split("\n").length))}
+        className="w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink focus:outline-none"
+      />
+      <div className="mt-2 flex items-center justify-end gap-2">
+        <button
+          onClick={onCancel}
+          className="rounded-full px-3 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={!draft.trim()}
+          className="rounded-full bg-accent px-3 py-1 text-[13px] font-medium text-white disabled:opacity-40"
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Bubble({
+  bot,
+  message,
+  editing,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+}: {
+  bot: Bot;
+  message: Message;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (text: string) => void;
+}) {
+  const { dispatch } = useStore();
   const user = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   const text = message.text ?? "";
   const collapsible =
     user && !expanded && (text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES);
-  return (
-    <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
-          user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
-        )}
-      >
-        {user ? (
-          <>
-            <div
-              className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
-            >
-              {text}
-            </div>
-            {collapsible && (
-              <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                Show full message
-              </button>
-            )}
-          </>
-        ) : (
-          <ChatMarkdown text={text} />
-        )}
+
+  if (user && editing) {
+    return (
+      <div className="flex w-full justify-end">
+        <BubbleEditor initial={text} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />
       </div>
+    );
+  }
+
+  // "‹ 2/3 ›" under an edited message — every fork it belongs to
+  const versions = user ? messageVersions(bot, message) : [message];
+  const versionIndex = versions.findIndex((v) => v.id === message.id);
+  const switchTo = (v: Message | undefined) => {
+    if (v && !bot.busy) dispatch({ type: "switchBranch", botId: bot.id, messageId: v.id });
+  };
+
+  return (
+    <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
+      <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
+        {/* editing rewinds the thread, so it waits for the turn to end —
+            same rule as the version switcher below */}
+        {user && message.kind === "text" && !bot.busy && (
+          <button
+            onClick={onStartEdit}
+            className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink group-hover:opacity-100"
+            title="Edit message"
+          >
+            <Pencil size={14} />
+          </button>
+        )}
+        <div
+          className={cn(
+            "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+            user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+          )}
+        >
+          {user ? (
+            <>
+              <div
+                className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
+              >
+                {text}
+              </div>
+              {collapsible && (
+                <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+                  Show full message
+                </button>
+              )}
+            </>
+          ) : (
+            <ChatMarkdown text={text} />
+          )}
+        </div>
+      </div>
+      {versions.length > 1 && (
+        <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
+          <button
+            onClick={() => switchTo(versions[versionIndex - 1])}
+            disabled={versionIndex <= 0 || bot.busy}
+            className="rounded p-0.5 hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Previous version"
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <span className="tabular-nums">
+            {versionIndex + 1}/{versions.length}
+          </span>
+          <button
+            onClick={() => switchTo(versions[versionIndex + 1])}
+            disabled={versionIndex >= versions.length - 1 || bot.busy}
+            className="rounded p-0.5 hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Next version"
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -123,6 +247,18 @@ export function ChatView({ bot }: { bot: Bot }) {
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
+  // only the active branch is rendered; forks stay reachable via ‹ › nav
+  const messages = useMemo(() => visibleMessages(bot), [bot]);
+
+  // one message at a time may be in edit mode
+  const [editingId, setEditingId] = useState<string | null>(null);
+  useEffect(() => setEditingId(null), [bot.id]);
+  const submitEdit = (messageId: string, text: string) => {
+    setEditingId(null); // closes the editor first — a double Enter can't fork twice
+    dispatch({ type: "editMessage", botId: bot.id, messageId, text });
+  };
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user" && m.kind === "text");
+
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
   // scroll position checks — streamed content growth flickers "at bottom"
@@ -134,7 +270,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   useEffect(() => setFollow(true), [bot.id]);
   useEffect(() => {
     if (follow) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [bot.id, bot.messages.length, streaming, bot.busy, follow]);
+  }, [bot.id, messages.length, streaming, bot.busy, follow]);
 
   const atEnd = () => {
     const el = scrollRef.current;
@@ -145,7 +281,7 @@ export function ChatView({ bot }: { bot: Bot }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   };
 
-  const first = bot.messages[0];
+  const first = messages[0];
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -158,7 +294,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         >
           <MausAvatar
             color={bot.color}
-            state={stateForBot(bot)}
+            state={stateForBot({ ...bot, messages })}
             size={28}
             motion={mascotMotion?.kind ?? "none"}
             motionKey={mascotMotion?.nonce ?? 0}
@@ -224,7 +360,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               Today {formatTime(first.at)}
             </div>
           )}
-          {bot.messages.map((m) => {
+          {messages.map((m) => {
             switch (m.kind) {
               case "options":
                 return <OptionCard key={m.id} botId={bot.id} message={m} />;
@@ -233,7 +369,17 @@ export function ChatView({ bot }: { bot: Bot }) {
               case "screen":
                 return m.png ? <ScreenFrame key={m.id} png={m.png} mime={m.mime} /> : null;
               default:
-                return <Bubble key={m.id} message={m} />;
+                return (
+                  <Bubble
+                    key={m.id}
+                    bot={bot}
+                    message={m}
+                    editing={editingId === m.id}
+                    onStartEdit={() => setEditingId(m.id)}
+                    onCancelEdit={() => setEditingId(null)}
+                    onSubmitEdit={(text) => submitEdit(m.id, text)}
+                  />
+                );
             }
           })}
           {provisioning && (
@@ -255,7 +401,7 @@ export function ChatView({ bot }: { bot: Bot }) {
                     <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:150ms]" />
                     <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:300ms]" />
                   </span>
-                  <WorkingTimer since={[...bot.messages].reverse().find((m) => m.role === "user")?.at ?? Date.now()} />
+                  <WorkingTimer since={lastUserMessage?.at ?? Date.now()} />
                 </div>
               </div>
             )
@@ -273,7 +419,15 @@ export function ChatView({ bot }: { bot: Bot }) {
         </button>
       )}
 
-      <Composer bot={bot} />
+      {/* keyed by bot: a draft belongs to the conversation it was typed in,
+          so switching bots starts from an empty composer instead of carrying
+          the previous bot's half-written message over */}
+      <Composer
+        key={bot.id}
+        bot={bot}
+        onEditLast={lastUserMessage ? () => setEditingId(lastUserMessage.id) : undefined}
+      />
+
     </main>
   );
 }

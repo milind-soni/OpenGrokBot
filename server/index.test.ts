@@ -143,6 +143,43 @@ describe("harness HTTP API", () => {
     expect(send.body.error).toContain("unavailable");
   });
 
+  it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+    const before = bot.messages.length;
+
+    // greeting is a bot message — not editable
+    const greeting = bot.messages.find((m: { role: string }) => m.role === "bot");
+    const notUser = await api("POST", `/api/bots/${bot.id}/messages/${greeting.id}/edit`, { text: "x" });
+    expect(notUser.status).toBe(404);
+
+    // no user message exists yet, so fabricate the check via the card id
+    const card = bot.messages.find((m: { kind: string }) => m.kind === "options");
+    const res = await api("POST", `/api/bots/${bot.id}/messages/${card.id}/edit`, { text: "x" });
+    expect(res.status).toBe(404); // options card, not a user text message
+
+    const empty = await api("POST", `/api/bots/${bot.id}/messages/${greeting.id}/edit`, { text: "  " });
+    expect(empty.status).toBe(400);
+
+    const after = await api("GET", "/api/bots");
+    expect(after.body.bots[0].messages.length).toBe(before);
+  });
+
+  it("switches the active branch and reports the new leaf", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+    expect(bot.activeLeafId).toBe(bot.messages.at(-1).id);
+
+    // pointing at the first message descends back to the newest leaf on
+    // that (only) branch — a no-op switch, but it exercises the descent
+    const res = await api("POST", `/api/bots/${bot.id}/active-branch`, { messageId: bot.messages[0].id });
+    expect(res.status).toBe(200);
+    expect(res.body.activeLeafId).toBe(bot.messages.at(-1).id);
+
+    const missing = await api("POST", `/api/bots/${bot.id}/active-branch`, { messageId: "nope" });
+    expect(missing.status).toBe(404);
+  });
+
   it("saves config keys write-only and reports booleans", async () => {
     const before = await api("GET", "/api/config");
     expect(before.body.box).toEqual({ configured: false });

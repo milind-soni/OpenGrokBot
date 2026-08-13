@@ -95,6 +95,82 @@ describe("Store", () => {
     expect(reloaded.bots).toHaveLength(1);
   });
 
+  it("chains appended messages and keeps the newest as active leaf", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const user = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+
+    const messages = store.messagesFor(bot.threadId);
+    expect(user.parentId).toBe(messages[1].id); // follows the onboarding card
+    expect(store.activeLeaf(bot.threadId)).toBe(user.id);
+    expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
+  });
+
+  it("branchMessage forks at the edited message and hides the old tail", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const original = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "v1" });
+    const reply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "answer to v1" });
+
+    const edited = store.branchMessage(bot.threadId, original.id, "v2")!;
+    expect(edited.parentId).toBe(original.parentId); // sibling, not child
+    expect(store.activeLeaf(bot.threadId)).toBe(edited.id);
+
+    const path = store.activePath(bot.threadId);
+    expect(path.map((m) => m.text)).toContain("v2");
+    expect(path.map((m) => m.text)).not.toContain("v1");
+    expect(path.map((m) => m.id)).not.toContain(reply.id);
+    // the abandoned branch still exists in the tree
+    expect(store.messagesFor(bot.threadId).map((m) => m.id)).toContain(original.id);
+
+    expect(store.branchMessage(bot.threadId, "nope", "x")).toBeNull();
+  });
+
+  it("setActiveLeaf switches branches and descends to the newest leaf", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const original = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "v1" });
+    const reply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "answer to v1" });
+    store.branchMessage(bot.threadId, original.id, "v2");
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "answer to v2" });
+
+    // back to the original branch: the leaf is v1's reply, not v1 itself
+    expect(store.setActiveLeaf(bot.threadId, original.id)).toBe(reply.id);
+    const path = store.activePath(bot.threadId);
+    expect(path.map((m) => m.text)).toContain("v1");
+    expect(path.map((m) => m.text)).not.toContain("v2");
+
+    expect(store.setActiveLeaf(bot.threadId, "nope")).toBeNull();
+  });
+
+  it("persists the branch tree and active leaf across a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const original = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "v1" });
+    const edited = store.branchMessage(bot.threadId, original.id, "v2")!;
+
+    const reloaded = new Store(selection);
+    expect(reloaded.activeLeaf(bot.threadId)).toBe(edited.id);
+    expect(reloaded.messagesFor(bot.threadId).map((m) => m.text)).toContain("v1");
+    expect(reloaded.activePath(bot.threadId).map((m) => m.text)).not.toContain("v1");
+  });
+
+  it("migrates a pre-branching flat transcript file", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const legacy = [
+      { id: "m1", role: "bot", kind: "text", text: "hello", at: 1 },
+      { id: "m2", role: "user", kind: "text", text: "hi", at: 2 },
+    ];
+    writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
+
+    const reloaded = new Store(selection);
+    const messages = reloaded.messagesFor(bot.threadId);
+    expect(messages.map((m) => m.parentId)).toEqual([null, "m1"]);
+    expect(reloaded.activeLeaf(bot.threadId)).toBe("m2");
+    expect(reloaded.activePath(bot.threadId).map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
   it("tolerates a corrupt bots.json by starting empty", () => {
     const store = new Store(selection);
     store.createBot();

@@ -47,8 +47,9 @@ const support: AcpSupport = {
         : join(homedir(), ".reasonix"));
     try {
       const content = readFileSync(join(home, ".env"), "utf8");
-      // at least one non-comment KEY=value line with a non-empty value
-      return /^\s*[A-Za-z_][A-Za-z0-9_]*=.+\S/m.test(content);
+      // one KEY=value assignment with a non-empty value; `export` prefix and
+      // quoted values are accepted by Reasonix's own reader
+      return /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\s*\S/m.test(content);
     } catch {
       return false;
     }

@@ -58,18 +58,20 @@ function ActivityChip({ message }: { message: Message }) {
     <div className="flex justify-start">
       <div
         className={cn(
-          "flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
+          // min-w-0 lets the label truncate at the column width — a long
+          // tool name (or routine title) must never widen the transcript
+          "flex min-w-0 max-w-full items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
           failed ? "text-danger" : "text-ink-secondary",
         )}
       >
         {tool.ok === undefined ? (
           <Loader2 size={13} className="animate-spin" />
         ) : failed ? (
-          <X size={13} />
+          <X size={13} className="shrink-0" />
         ) : (
-          <Check size={13} className="text-success" />
+          <Check size={13} className="shrink-0 text-success" />
         )}
-        <span className="max-w-[480px] truncate font-mono">{tool.name}</span>
+        <span className="min-w-0 max-w-[480px] truncate font-mono">{tool.name}</span>
       </div>
     </div>
   );

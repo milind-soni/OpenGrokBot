@@ -120,9 +120,11 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 </tr>
 </table>
 
-**Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
-composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
-expressions · screenshots of the bot's work folded into the transcript.
+**Also in the box:** routines — recurring tasks a bot runs on a schedule (hourly, daily, or weekly),
+fired by the harness as ordinary turns so they hit the same approvals and transcript · streaming replies
+with tool-run activity chips · native macOS dictation from the composer mic (on-device Apple speech
+recognition — desktop app) · SupaMaus cursor mascots with role-aware expressions · screenshots of the
+bot's work folded into the transcript.
 
 ## How it works
 
@@ -155,7 +157,7 @@ flowchart LR
 |---|---|---|
 | Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
-| API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
+| API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, routines, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
 | Desktop | `electron/` | macOS shell: dictation helper (SFSpeechRecognizer), local screen capture, CUA bridge. |
 
@@ -195,8 +197,8 @@ pnpm build         # typecheck + production build
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use. Rough edges to expect: routines (scheduled tasks) are a placeholder, sidebar sections aren't
-built yet, and Windows/Linux shells haven't been attempted (the harness itself is portable Node).
+computer use → routines on a schedule. Rough edges to expect: sidebar sections aren't built yet, and
+Windows/Linux shells haven't been attempted (the harness itself is portable Node).
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

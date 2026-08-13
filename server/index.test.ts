@@ -169,6 +169,114 @@ describe("harness HTTP API", () => {
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
   });
 
+  it("creates, lists, re-schedules, and deletes a routine", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+
+    const created = await api("POST", `/api/bots/${bot.id}/routines`, {
+      prompt: "  summarize what changed today  ",
+      schedule: { kind: "daily", hour: 9, minute: 30 },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.routine).toMatchObject({
+      botId: bot.id,
+      prompt: "summarize what changed today",
+      title: "summarize what changed today",
+      enabled: true,
+      schedule: { kind: "daily", hour: 9, minute: 30 },
+    });
+    expect(created.body.routine.nextRunAt).toBeGreaterThan(Date.now());
+    const routineId = created.body.routine.id;
+
+    const listed = await api("GET", `/api/bots/${bot.id}/routines`);
+    expect(listed.body.routines.map((r: { id: string }) => r.id)).toEqual([routineId]);
+
+    const paused = await api("PATCH", `/api/routines/${routineId}`, { enabled: false, title: "Daily digest" });
+    expect(paused.body.routine).toMatchObject({ enabled: false, title: "Daily digest" });
+
+    const rescheduled = await api("PATCH", `/api/routines/${routineId}`, {
+      schedule: { kind: "interval", minutes: 90 },
+    });
+    expect(rescheduled.body.routine.nextRunAt).toBeGreaterThan(Date.now() + 89 * 60_000);
+
+    expect((await api("DELETE", `/api/routines/${routineId}`)).status).toBe(200);
+    expect((await api("GET", `/api/bots/${bot.id}/routines`)).body.routines).toEqual([]);
+  });
+
+  it("rejects an invalid routine and 404s unknown ids", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+
+    const noPrompt = await api("POST", `/api/bots/${bot.id}/routines`, {
+      prompt: "  ",
+      schedule: { kind: "daily", hour: 9, minute: 0 },
+    });
+    expect(noPrompt.status).toBe(400);
+    expect(noPrompt.body.error).toContain("prompt");
+
+    const badSchedule = await api("POST", `/api/bots/${bot.id}/routines`, {
+      prompt: "do a thing",
+      schedule: { kind: "fortnightly" },
+    });
+    expect(badSchedule.status).toBe(400);
+    expect(badSchedule.body.error).toContain("schedule.kind");
+
+    expect((await api("GET", "/api/bots/nope/routines")).status).toBe(404);
+    expect((await api("PATCH", "/api/routines/nope", { enabled: false })).status).toBe(404);
+    expect((await api("POST", "/api/routines/nope/run")).status).toBe(404);
+  });
+
+  it("deletes a bot's routines along with the bot", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const routine = (
+      await api("POST", `/api/bots/${bot.id}/routines`, {
+        prompt: "check in",
+        schedule: { kind: "interval", minutes: 30 },
+      })
+    ).body.routine;
+
+    await api("DELETE", `/api/bots/${bot.id}`);
+    expect((await api("PATCH", `/api/routines/${routine.id}`, { enabled: false })).status).toBe(404);
+  });
+
+  it("fires a routine on demand: marks the transcript, advances the clock, reports the failure", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+    const created = await api("POST", `/api/bots/${bot.id}/routines`, {
+      prompt: "run the morning check",
+      title: "Morning check",
+      schedule: { kind: "interval", minutes: 60 },
+    });
+    const routine = created.body.routine;
+
+    expect((await api("POST", `/api/routines/${routine.id}/run`)).status).toBe(202);
+
+    // the fire path is async — wait on the transcript that proves it ran
+    const deadline = Date.now() + 10_000;
+    let activity: Array<{ tool?: { name: string; ok?: boolean } }> = [];
+    for (;;) {
+      const bots = await api("GET", "/api/bots");
+      const messages = bots.body.bots.find((b: { id: string }) => b.id === bot.id).messages;
+      activity = messages.filter((msg: { kind: string }) => msg.kind === "activity");
+      if (activity.length >= 2 || Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // the marker says which routine fired…
+    expect(activity[0].tool!.name).toBe("routine: Morning check (every hour)");
+    // …and the seeded bot points at the ghost instance, so the turn fails
+    // loudly as an activity chip instead of hanging
+    expect(activity[1].tool!.name).toContain("routine skipped");
+    expect(activity[1].tool!.ok).toBe(false);
+
+    // the clock advanced from the firing, so it cannot hot-loop
+    const after = (await api("GET", `/api/bots/${bot.id}/routines`)).body.routines[0];
+    expect(after.lastRunAt).toBeGreaterThan(0);
+    expect(after.nextRunAt).toBeGreaterThan(routine.nextRunAt - 1);
+
+    await api("DELETE", `/api/routines/${routine.id}`);
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

@@ -6,7 +6,6 @@
 // prefers the cloud box when one exists, else local inside the app.
 import { useEffect, useRef, useState } from "react";
 import {
-  CalendarClock,
   ExternalLink,
   Loader2,
   Monitor,
@@ -17,6 +16,7 @@ import {
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
+import { Routines } from "./Routines";
 import { cn } from "@/lib/cn";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
@@ -317,22 +317,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
 
         {/* Routines */}
-        <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
-            <CalendarClock size={16} className="text-ink-secondary" />
-            Routines
-          </div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Routines are recurring tasks this agent runs on a schedule.
-          </div>
-          <button
-            disabled
-            className="mt-3 w-full cursor-not-allowed rounded-lg bg-raised py-2 text-[13px] text-ink-secondary opacity-60"
-            title="Coming soon"
-          >
-            Create Routine
-          </button>
-        </div>
+        <Routines botId={bot.id} />
       </div>
     </aside>
   );

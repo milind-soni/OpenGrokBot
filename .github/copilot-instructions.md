@@ -56,7 +56,8 @@ Rules that hold the design together:
   into an `unavailable` shadow snapshot so a config written by a newer build round-trips
   safely. Do not "fix" this by validating driver slugs up front.
 - **`~/.openmausbot/`** holds everything: `config.json` (keys), `bots.json` (bot records,
-  thread→instance binding, per-instance `resumeCursors`), transcripts, event logs.
+  thread→instance binding, per-instance `resumeCursors`), `routines.json` (scheduled turns),
+  transcripts, event logs.
 
 ## Conventions
 
@@ -90,6 +91,11 @@ MCP channel — never `console.log` there**).
 **Peer comms are depth-capped.** A user-initiated turn is depth 0 and may get the `agents` MCP
 tools; a turn invoked through `ask_bot` runs at depth 1 with no agents tools, so A→B works but
 B→C and A→B→A loops never start (`MAX_COMMS_DEPTH` in `server/index.ts`).
+
+**Routines are turns, not a side channel.** A scheduled routine (`server/routines.ts`) fires through
+the same `startTurn` as a typed message, so it inherits the permission broker, event bus, and
+transcript. Schedule math is pure and lives in `routines.ts`; the ticking scheduler lives in
+`index.ts` and advances the clock *before* running, so a slow or failing turn can't hot-loop.
 
 **UI** uses Tailwind v4 with the palette defined as `@theme` tokens in `src/styles.css` (e.g.
 `bg-panel`, `text-ink-secondary`, `text-accent`) — use the tokens, not raw hex. Compose classes

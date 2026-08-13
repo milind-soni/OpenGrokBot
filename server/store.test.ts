@@ -115,3 +115,76 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.busy).toBe(false);
   });
 });
+
+describe("Store sections", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("appends new sections to the end of the order and persists them", () => {
+    const store = new Store(selection);
+    const work = store.createSection("Work");
+    const life = store.createSection("Life");
+
+    expect(work.order).toBeLessThan(life.order);
+    expect(work.collapsed).toBe(false);
+    expect(new Store(selection).sectionList().map((s) => s.name)).toEqual(["Work", "Life"]);
+  });
+
+  it("orders by `order`, breaking ties on creation so the list is always total", () => {
+    const store = new Store(selection);
+    const a = store.createSection("A");
+    const b = store.createSection("B");
+    store.patchSection(b.id, { order: a.order });
+
+    // same order value: the older section still sorts first
+    expect(store.sectionList().map((s) => s.id)).toEqual([a.id, b.id]);
+  });
+
+  it("renames and collapses without touching membership", () => {
+    const store = new Store(selection);
+    const section = store.createSection("Work");
+    const bot = store.createBot();
+    store.patchBot(bot.id, { sectionId: section.id });
+
+    store.patchSection(section.id, { name: "Deep work", collapsed: true });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.section(section.id)).toMatchObject({ name: "Deep work", collapsed: true });
+    expect(reloaded.bot(bot.id)?.sectionId).toBe(section.id);
+  });
+
+  it("deleting a section returns its bots to ungrouped instead of deleting them", () => {
+    const store = new Store(selection);
+    const section = store.createSection("Work");
+    const filed = store.createBot();
+    const loose = store.createBot();
+    store.patchBot(filed.id, { sectionId: section.id });
+
+    expect(store.deleteSection(section.id)).toBe(true);
+    expect(store.deleteSection(section.id)).toBe(false);
+
+    const reloaded = new Store(selection);
+    expect(reloaded.sectionList()).toEqual([]);
+    expect(reloaded.bots.map((b) => b.id).sort()).toEqual([filed.id, loose.id].sort());
+    expect(reloaded.bot(filed.id)?.sectionId).toBeNull();
+  });
+
+  it("tolerates a corrupt sections.json by starting with no sections", () => {
+    const store = new Store(selection);
+    store.createSection("Work");
+    writeFileSync(join(DATA_DIR, "sections.json"), "{not json");
+
+    expect(new Store(selection).sectionList()).toEqual([]);
+  });
+
+  it("keeps a bot whose section no longer exists — it just reads as ungrouped", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, { sectionId: "section-from-another-machine" });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)).not.toBeNull();
+    expect(reloaded.section("section-from-another-machine")).toBeNull();
+  });
+});

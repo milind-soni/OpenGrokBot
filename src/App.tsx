@@ -9,6 +9,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
+import { CommandPalette } from "@/components/CommandPalette";
 import { UpdateBanner } from "@/components/UpdateBanner";
 
 function Shell() {
@@ -40,6 +41,7 @@ function Shell() {
       {state.appSettingsOpen && <AppSettingsPanel />}
       {state.pluginsOpen && <PluginsPanel />}
       </div>
+      <CommandPalette />
     </div>
   );
 }

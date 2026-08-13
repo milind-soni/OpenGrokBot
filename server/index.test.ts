@@ -277,6 +277,43 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/routines/${routine.id}`);
   });
 
+  it("groups bots into sections and keeps them when a section is deleted", async () => {
+    const created = await api("POST", "/api/sections", { name: "  Work  " });
+    expect(created.status).toBe(201);
+    expect(created.body.section).toMatchObject({ name: "Work", collapsed: false });
+    const sectionId = created.body.section.id;
+
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const filed = await api("PATCH", `/api/bots/${bot.id}`, { sectionId });
+    expect(filed.body.bot.sectionId).toBe(sectionId);
+
+    const renamed = await api("PATCH", `/api/sections/${sectionId}`, { name: "Deep work", collapsed: true });
+    expect(renamed.body.section).toMatchObject({ name: "Deep work", collapsed: true });
+
+    expect((await api("GET", "/api/sections")).body.sections).toHaveLength(1);
+
+    // deleting the section must NOT take the bot with it
+    expect((await api("DELETE", `/api/sections/${sectionId}`)).status).toBe(200);
+    expect((await api("GET", "/api/sections")).body.sections).toEqual([]);
+    const after = (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id);
+    expect(after).toBeDefined();
+    expect(after.sectionId).toBeNull();
+
+    await api("DELETE", `/api/bots/${bot.id}`);
+  });
+
+  it("rejects an unnamed section and filing a bot under one that does not exist", async () => {
+    expect((await api("POST", "/api/sections", { name: "   " })).status).toBe(400);
+    expect((await api("POST", "/api/sections", { name: "x".repeat(61) })).status).toBe(400);
+    expect((await api("PATCH", "/api/sections/nope", { name: "x" })).status).toBe(404);
+    expect((await api("DELETE", "/api/sections/nope")).status).toBe(404);
+
+    const { body } = await api("GET", "/api/bots");
+    const bad = await api("PATCH", `/api/bots/${body.bots[0].id}`, { sectionId: "not-a-section" });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toContain("section");
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

@@ -58,9 +58,20 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "local" | "off";
+  /** Sidebar group; unset/null or an id with no matching section = ungrouped. */
+  sectionId?: string | null;
   pinned?: boolean;
   hidden?: boolean;
   messages: Message[];
+}
+
+/** A named, collapsible sidebar group. Membership lives on the bot. */
+export interface Section {
+  id: string;
+  name: string;
+  order: number;
+  collapsed: boolean;
+  createdAt: number;
 }
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
@@ -88,9 +99,13 @@ export interface InstanceInfo {
 
 interface AppState {
   bots: Bot[];
+  sections: Section[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
   selectedId: string;
+  /** live sidebar filter; empty = show everything */
+  search: string;
+  paletteOpen: boolean;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
@@ -112,6 +127,13 @@ interface AppState {
 
 type Action =
   | { type: "hydrate"; bots: Bot[] }
+  | { type: "sections"; sections: Section[] }
+  | { type: "search"; value: string }
+  | { type: "togglePalette"; open?: boolean }
+  | { type: "createSection"; name: string; botId?: string }
+  | { type: "renameSection"; sectionId: string; name: string }
+  | { type: "deleteSection"; sectionId: string }
+  | { type: "toggleSection"; sectionId: string }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -144,7 +166,7 @@ type Action =
       patch: Partial<
         Pick<
           Bot,
-          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden"
+          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden" | "sectionId"
         >
       >;
     };
@@ -188,6 +210,20 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "instances":
       return { ...state, instances: action.instances };
+    case "sections":
+      return { ...state, sections: action.sections };
+    case "search":
+      return { ...state, search: action.value };
+    case "togglePalette":
+      return { ...state, paletteOpen: action.open ?? !state.paletteOpen };
+    case "toggleSection":
+      // optimistic; the PATCH echoes back over SSE
+      return {
+        ...state,
+        sections: state.sections.map((s) =>
+          s.id === action.sectionId ? { ...s, collapsed: !s.collapsed } : s,
+        ),
+      };
     case "configStatus":
       return { ...state, config: action.config };
     case "select":
@@ -357,15 +393,21 @@ function reducer(state: AppState, action: Action): AppState {
     case "newBot":
     case "duplicateBot":
     case "interrupt":
+    case "createSection":
+    case "renameSection":
+    case "deleteSection":
       return state;
   }
 }
 
 const initialState: AppState = {
   bots: [],
+  sections: [],
   instances: [],
   config: null,
   selectedId: "",
+  search: "",
+  paletteOpen: false,
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
@@ -512,6 +554,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
           break;
+        case "createSection":
+          api("/api/sections", { method: "POST", body: JSON.stringify({ name: action.name }) })
+            .then(({ section }) => {
+              // creating a section straight from a bot's menu files it there
+              if (action.botId) {
+                rawDispatch({ type: "botPatched", bot: { id: action.botId, sectionId: section.id } });
+                return api(`/api/bots/${action.botId}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ sectionId: section.id }),
+                });
+              }
+            })
+            .catch(showError);
+          break;
+        case "renameSection":
+          api(`/api/sections/${action.sectionId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: action.name }),
+          }).catch(showError);
+          break;
+        case "deleteSection":
+          api(`/api/sections/${action.sectionId}`, { method: "DELETE" }).catch(showError);
+          break;
+        case "toggleSection": {
+          const section = stateRef.current.sections.find((s) => s.id === action.sectionId);
+          if (!section) break;
+          api(`/api/sections/${action.sectionId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ collapsed: !section.collapsed }),
+          }).catch(showError);
+          break;
+        }
         case "updateBot": {
           const timers = patchTimers.current;
           const pending = timers.get(action.botId);
@@ -542,6 +616,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
+        .catch(() => {});
+      api("/api/sections")
+        .then(({ sections }) => alive && rawDispatch({ type: "sections", sections }))
         .catch(() => {});
       api("/api/config")
         .then((config) => alive && rawDispatch({ type: "configStatus", config }))
@@ -594,6 +671,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         case "screen":
           rawDispatch({ type: "screenFrame", botId: frame.botId, png: frame.png, mime: frame.mime ?? "image/png" });
+          break;
+        case "sections":
+          rawDispatch({ type: "sections", sections: frame.sections });
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });

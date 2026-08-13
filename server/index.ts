@@ -593,8 +593,13 @@ const server = createServer(async (req, res) => {
     if (m && method === "PATCH") {
       const body = await readBody(req);
       const patch: Record<string, unknown> = {};
-      for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden"] as const) {
+      for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden", "sectionId"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
+      }
+      // a bot may only be filed under a section that exists; anything else
+      // reads as ungrouped rather than stranding it in a phantom group
+      if (patch.sectionId !== undefined && patch.sectionId !== null && !store.section(String(patch.sectionId))) {
+        return json(res, 400, { error: "no such section" });
       }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -665,6 +670,50 @@ const server = createServer(async (req, res) => {
       const instance = registry.get(bot.modelSelection.instanceId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
+    }
+
+    // ── sidebar sections ──
+    // Membership lives on the bot (bot.sectionId); a section is just a
+    // named, ordered, collapsible group, so deleting one never deletes bots.
+    if (method === "GET" && path === "/api/sections") {
+      return json(res, 200, { sections: store.sectionList() });
+    }
+    if (method === "POST" && path === "/api/sections") {
+      const body = await readBody(req);
+      const name = String(body.name ?? "").trim();
+      if (!name) return json(res, 400, { error: "name required" });
+      if (name.length > 60) return json(res, 400, { error: "name must be under 60 characters" });
+      const section = store.createSection(name);
+      broadcast({ kind: "sections", sections: store.sectionList() });
+      return json(res, 201, { section });
+    }
+    m = path.match(/^\/api\/sections\/([\w-]+)$/);
+    if (m && (method === "PATCH" || method === "DELETE")) {
+      if (!store.section(m[1])) return json(res, 404, { error: "no such section" });
+      if (method === "DELETE") {
+        store.deleteSection(m[1]);
+        broadcast({ kind: "sections", sections: store.sectionList() });
+        // the bots that fell back to ungrouped changed too
+        for (const bot of store.bots) broadcast({ kind: "bot", bot });
+        return json(res, 200, { ok: true });
+      }
+      const body = await readBody(req);
+      const patch: { name?: string; order?: number; collapsed?: boolean } = {};
+      if (body.name !== undefined) {
+        const name = String(body.name).trim();
+        if (!name) return json(res, 400, { error: "name required" });
+        if (name.length > 60) return json(res, 400, { error: "name must be under 60 characters" });
+        patch.name = name;
+      }
+      if (body.order !== undefined) {
+        const order = Number(body.order);
+        if (!Number.isFinite(order)) return json(res, 400, { error: "order must be a number" });
+        patch.order = order;
+      }
+      if (body.collapsed !== undefined) patch.collapsed = Boolean(body.collapsed);
+      const section = store.patchSection(m[1], patch);
+      broadcast({ kind: "sections", sections: store.sectionList() });
+      return json(res, 200, { section });
     }
 
     // ── routines (scheduled turns) ──

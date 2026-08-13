@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { newId } from "./contracts.js";
 const BOTS_FILE = join(DATA_DIR, "bots.json");
-const SECTIONS_FILE = join(DATA_DIR, "sections.json");
 const messagesFile = (threadId) => join(DATA_DIR, `messages-${threadId}.json`);
 const COLORS = [
     "green",
@@ -49,7 +48,6 @@ const onboardingCard = () => ({
 });
 export class Store {
     bots = [];
-    sections = [];
     messages = new Map();
     defaultSelection;
     constructor(defaultSelection) {
@@ -61,68 +59,12 @@ export class Store {
         catch {
             this.bots = [];
         }
-        try {
-            const raw = JSON.parse(readFileSync(SECTIONS_FILE, "utf8"));
-            this.sections = Array.isArray(raw) ? raw : [];
-        }
-        catch {
-            this.sections = [];
-        }
         // busy never survives a restart — no turn does either
         for (const b of this.bots)
             b.busy = false;
     }
     saveBots() {
         writeFileSync(BOTS_FILE, JSON.stringify(this.bots, null, 2));
-    }
-    saveSections() {
-        writeFileSync(SECTIONS_FILE, JSON.stringify(this.sections, null, 2));
-    }
-    /** Sections in display order. */
-    sectionList() {
-        return [...this.sections].sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
-    }
-    section(id) {
-        return this.sections.find((s) => s.id === id) ?? null;
-    }
-    createSection(name) {
-        const section = {
-            id: newId(),
-            name,
-            // new sections land at the end of the current order
-            order: this.sections.reduce((max, s) => Math.max(max, s.order), -1) + 1,
-            collapsed: false,
-            createdAt: Date.now(),
-        };
-        this.sections.push(section);
-        this.saveSections();
-        return section;
-    }
-    patchSection(id, patch) {
-        const section = this.section(id);
-        if (!section)
-            return null;
-        Object.assign(section, patch);
-        this.saveSections();
-        return section;
-    }
-    /** Removing a section never removes its bots — they fall back to
-     * ungrouped, which is also what an unknown sectionId already reads as. */
-    deleteSection(id) {
-        if (!this.section(id))
-            return false;
-        this.sections = this.sections.filter((s) => s.id !== id);
-        let movedBots = false;
-        for (const bot of this.bots) {
-            if (bot.sectionId === id) {
-                bot.sectionId = null;
-                movedBots = true;
-            }
-        }
-        this.saveSections();
-        if (movedBots)
-            this.saveBots();
-        return true;
     }
     messagesFor(threadId) {
         let list = this.messages.get(threadId);

@@ -13,7 +13,6 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { EventBus } from "./harness/bus.js";
 import { ProviderRegistry } from "./harness/registry.js";
-import { decodePrompt, decodeSchedule, describeSchedule, RoutineStore } from "./routines.js";
 import { mentionedBots, Store } from "./store.js";
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -105,7 +104,6 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
-const routines = new RoutineStore();
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 const sseClients = new Set();
 function broadcast(payload) {
@@ -386,58 +384,6 @@ async function startTurn(botId, text, opts) {
         }
     })();
 }
-// ── routines (scheduled turns) ────────────────────────────────────────
-// A routine firing is just a user-less startTurn, so it flows through the
-// same permission broker, event bus, and transcript as anything typed.
-const ROUTINE_TICK_MS = 30_000;
-function broadcastRoutines(botId) {
-    broadcast({ kind: "routines", botId, routines: routines.forBot(botId) });
-}
-async function runRoutine(routineId) {
-    const routine = routines.get(routineId);
-    if (!routine)
-        return;
-    const bot = store.bot(routine.botId);
-    if (!bot) {
-        routines.deleteForBot(routine.botId);
-        return;
-    }
-    // advance the clock BEFORE the turn: a failing or slow routine must not
-    // hot-loop on the next tick
-    routines.markRan(routine.id);
-    broadcastRoutines(bot.id);
-    const marker = store.appendMessage(bot.threadId, {
-        role: "bot",
-        kind: "activity",
-        tool: { name: `routine: ${routine.title} (${describeSchedule(routine.schedule)})`, ok: true },
-    });
-    broadcast({ kind: "message", threadId: bot.threadId, message: marker });
-    try {
-        await startTurn(bot.id, routine.prompt);
-    }
-    catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        const failure = store.appendMessage(bot.threadId, {
-            role: "bot",
-            kind: "activity",
-            tool: { name: `routine skipped: ${message.slice(0, 160)}`, ok: false },
-        });
-        broadcast({ kind: "message", threadId: bot.threadId, message: failure });
-    }
-}
-async function routineTick() {
-    for (const routine of routines.due()) {
-        const bot = store.bot(routine.botId);
-        // a bot mid-turn keeps its slot: the routine simply waits for the next
-        // tick rather than stacking a second turn on top of a live one
-        if (bot?.busy)
-            continue;
-        await runRoutine(routine.id);
-    }
-}
-const routineTimer = setInterval(() => void routineTick(), ROUTINE_TICK_MS);
-routineTimer.unref?.();
-void routineTick();
 // ── config hot-reload ─────────────────────────────────────────────────
 function configStatus() {
     return {
@@ -571,14 +517,9 @@ const server = createServer(async (req, res) => {
         if (m && method === "PATCH") {
             const body = await readBody(req);
             const patch = {};
-            for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden", "sectionId"]) {
+            for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden"]) {
                 if (body[key] !== undefined)
                     patch[key] = body[key];
-            }
-            // a bot may only be filed under a section that exists; anything else
-            // reads as ungrouped rather than stranding it in a phantom group
-            if (patch.sectionId !== undefined && patch.sectionId !== null && !store.section(String(patch.sectionId))) {
-                return json(res, 400, { error: "no such section" });
             }
             const bot = store.patchBot(m[1], patch);
             if (!bot)
@@ -595,7 +536,6 @@ const server = createServer(async (req, res) => {
             await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => { });
             stopScreenPoller(bot.id);
             store.deleteBot(bot.id);
-            routines.deleteForBot(bot.id);
             for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
                 try {
                     unlinkSync(join(dir, `${bot.threadId}.ndjson`));
@@ -657,121 +597,6 @@ const server = createServer(async (req, res) => {
             const instance = registry.get(bot.modelSelection.instanceId);
             await instance?.adapter.interruptTurn(bot.threadId);
             return json(res, 200, { ok: true });
-        }
-        // ── sidebar sections ──
-        // Membership lives on the bot (bot.sectionId); a section is just a
-        // named, ordered, collapsible group, so deleting one never deletes bots.
-        if (method === "GET" && path === "/api/sections") {
-            return json(res, 200, { sections: store.sectionList() });
-        }
-        if (method === "POST" && path === "/api/sections") {
-            const body = await readBody(req);
-            const name = String(body.name ?? "").trim();
-            if (!name)
-                return json(res, 400, { error: "name required" });
-            if (name.length > 60)
-                return json(res, 400, { error: "name must be under 60 characters" });
-            const section = store.createSection(name);
-            broadcast({ kind: "sections", sections: store.sectionList() });
-            return json(res, 201, { section });
-        }
-        m = path.match(/^\/api\/sections\/([\w-]+)$/);
-        if (m && (method === "PATCH" || method === "DELETE")) {
-            if (!store.section(m[1]))
-                return json(res, 404, { error: "no such section" });
-            if (method === "DELETE") {
-                store.deleteSection(m[1]);
-                broadcast({ kind: "sections", sections: store.sectionList() });
-                // the bots that fell back to ungrouped changed too
-                for (const bot of store.bots)
-                    broadcast({ kind: "bot", bot });
-                return json(res, 200, { ok: true });
-            }
-            const body = await readBody(req);
-            const patch = {};
-            if (body.name !== undefined) {
-                const name = String(body.name).trim();
-                if (!name)
-                    return json(res, 400, { error: "name required" });
-                if (name.length > 60)
-                    return json(res, 400, { error: "name must be under 60 characters" });
-                patch.name = name;
-            }
-            if (body.order !== undefined) {
-                const order = Number(body.order);
-                if (!Number.isFinite(order))
-                    return json(res, 400, { error: "order must be a number" });
-                patch.order = order;
-            }
-            if (body.collapsed !== undefined)
-                patch.collapsed = Boolean(body.collapsed);
-            const section = store.patchSection(m[1], patch);
-            broadcast({ kind: "sections", sections: store.sectionList() });
-            return json(res, 200, { section });
-        }
-        // ── routines (scheduled turns) ──
-        m = path.match(/^\/api\/bots\/([\w-]+)\/routines$/);
-        if (m && method === "GET") {
-            if (!store.bot(m[1]))
-                return json(res, 404, { error: "no such bot" });
-            return json(res, 200, { routines: routines.forBot(m[1]) });
-        }
-        if (m && method === "POST") {
-            const botId = m[1];
-            if (!store.bot(botId))
-                return json(res, 404, { error: "no such bot" });
-            const body = await readBody(req);
-            let routine;
-            try {
-                routine = routines.create({
-                    botId,
-                    prompt: decodePrompt(body.prompt),
-                    schedule: decodeSchedule(body.schedule),
-                    title: body.title === undefined ? undefined : String(body.title),
-                });
-            }
-            catch (e) {
-                return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
-            }
-            broadcastRoutines(botId);
-            return json(res, 201, { routine });
-        }
-        m = path.match(/^\/api\/routines\/([\w-]+)$/);
-        if (m && (method === "PATCH" || method === "DELETE")) {
-            const existing = routines.get(m[1]);
-            if (!existing)
-                return json(res, 404, { error: "no such routine" });
-            if (method === "DELETE") {
-                routines.delete(existing.id);
-                broadcastRoutines(existing.botId);
-                return json(res, 200, { ok: true });
-            }
-            const body = await readBody(req);
-            let routine;
-            try {
-                routine = routines.patch(existing.id, {
-                    ...(body.prompt !== undefined ? { prompt: decodePrompt(body.prompt) } : {}),
-                    ...(body.schedule !== undefined ? { schedule: decodeSchedule(body.schedule) } : {}),
-                    ...(body.title !== undefined ? { title: String(body.title) } : {}),
-                    ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
-                });
-            }
-            catch (e) {
-                return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
-            }
-            broadcastRoutines(existing.botId);
-            return json(res, 200, { routine });
-        }
-        m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
-        if (m && method === "POST") {
-            const routine = routines.get(m[1]);
-            if (!routine)
-                return json(res, 404, { error: "no such routine" });
-            if (store.bot(routine.botId)?.busy) {
-                return json(res, 409, { error: "the bot is already working — interrupt it first" });
-            }
-            void runRoutine(routine.id);
-            return json(res, 202, { ok: true });
         }
         // identity handshake for the packaged app's port fallback: the forked
         // child proves it is OURS by echoing its pid (a stray dev server has

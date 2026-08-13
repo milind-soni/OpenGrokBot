@@ -8,6 +8,28 @@ export interface HtmlArtifact {
 
 const HTML_LANGUAGES = new Set<HtmlArtifact["language"]>(["html", "htm", "html_preview"]);
 
+export interface StreamingHtmlFence {
+  language: HtmlArtifact["language"];
+  code: string;
+}
+
+export function findStreamingHtmlFence(markdown: string): StreamingHtmlFence | null {
+  const lines = markdown.split(/\r?\n/);
+  for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+    const opening = /^\s{0,3}(`{3,}|~{3,})\s*([^\s]*)?.*$/.exec(lines[lineIndex]!);
+    if (!opening) continue;
+    const fence = opening[1]!;
+    const language = (opening[2] ?? "").toLowerCase();
+    if (!HTML_LANGUAGES.has(language as HtmlArtifact["language"])) continue;
+    const character = fence[0]!;
+    const closing = new RegExp(`^\\s{0,3}${character === "`" ? "`" : "~"}{${fence.length},}\\s*$`);
+    const body = lines.slice(lineIndex + 1);
+    if (body.some((line) => closing.test(line))) return null;
+    return { language: language as HtmlArtifact["language"], code: body.join("\n") };
+  }
+  return null;
+}
+
 export function extractHtmlArtifacts(markdown: string, messageId: string): HtmlArtifact[] {
   const lines = markdown.split(/\r?\n/);
   const artifacts: HtmlArtifact[] = [];

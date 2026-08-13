@@ -461,6 +461,31 @@ export function ChatView({ bot }: { bot: Bot }) {
   }, [bot.threadId, newestArtifact]);
   const selectedArtifactId = artifactSelections[bot.threadId] ?? null;
   const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const handledHtmlRequest = useRef<string | null>(null);
+  useEffect(() => {
+    const request = state.openCreationRequest;
+    if (
+      !request ||
+      request.botId !== bot.id ||
+      request.kind !== "html" ||
+      handledHtmlRequest.current === request.requestId
+    ) return;
+    if (!artifacts.some((artifact) => artifact.id === request.creationId)) return;
+    handledHtmlRequest.current = request.requestId;
+    setArtifactSelections((current) => ({ ...current, [bot.threadId]: request.creationId }));
+  }, [artifacts, bot.id, bot.threadId, state.openCreationRequest]);
+
+  const handledScrollRequest = useRef<string | null>(null);
+  useEffect(() => {
+    const request = state.openCreationRequest;
+    if (!request || request.botId !== bot.id || handledScrollRequest.current === request.requestId) return;
+    handledScrollRequest.current = request.requestId;
+    requestAnimationFrame(() => {
+      scrollRef.current
+        ?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(request.messageId)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [bot.id, state.openCreationRequest]);
   const openArtifact = (artifact: HtmlArtifact) => {
     setArtifactSelections((current) => ({ ...current, [bot.threadId]: artifact.id }));
   };
@@ -664,7 +689,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             })();
             if (!row) return null;
             return (
-              <div key={m.id} className="contents">
+              <div key={m.id} className="contents" data-message-id={m.id}>
                 {newDay && <DaySeparator at={m.at} />}
                 {row}
               </div>

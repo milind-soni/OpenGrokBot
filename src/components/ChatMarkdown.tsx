@@ -7,8 +7,8 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, PanelRightOpen } from "lucide-react";
-import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
+import { Check, ChevronDown, ChevronUp, Code2, Copy, PanelRightOpen } from "lucide-react";
+import { extractHtmlArtifacts, findStreamingHtmlFence, type HtmlArtifact } from "@/lib/html-artifacts";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed, capped, never written while streaming
@@ -40,6 +40,8 @@ function CodeBlock({
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const htmlLanguage = /^(?:html|htm|html_preview)$/i.test(lang);
 
   useEffect(() => {
     if (streaming) return;
@@ -77,20 +79,86 @@ function CodeBlock({
     setTimeout(() => setCopied(false), 1200);
   };
 
+  const source = html ? (
+    <div
+      className="overflow-x-auto text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:m-0 [&_pre]:p-3"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  ) : (
+    <pre className="overflow-x-auto p-3 text-[13px] leading-relaxed text-ink">{code}</pre>
+  );
+
+  if (streaming && htmlLanguage) {
+    return (
+      <div className="my-2 overflow-hidden rounded-lg border border-accent/20 bg-inset">
+        <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1.5">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-accent">
+            <Code2 size={13} /> Building creation…
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              {expanded ? "Collapse" : "Expand"}
+            </button>
+            <button onClick={copy} className="rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink" title="Copy code">
+              {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            </button>
+          </div>
+        </div>
+        <div className={expanded ? "overflow-auto" : "max-h-[9.75rem] overflow-auto"}>
+          <pre className="p-3 text-[13px] leading-relaxed text-ink">{code}</pre>
+        </div>
+      </div>
+    );
+  }
+
+  if (artifact) {
+    return (
+      <div className="my-2 overflow-hidden rounded-xl border border-accent/20 bg-inset">
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+            <Code2 size={17} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium text-ink">HTML creation</span>
+            <span className="block truncate text-[11px] text-ink-secondary">artifact-{artifact.index + 1}.html</span>
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            {onPreview && (
+              <button
+                onClick={() => onPreview(artifact)}
+                className="flex items-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[11px] font-medium text-white hover:opacity-90"
+                title={selected ? "Reopen HTML preview" : "Open HTML preview"}
+              >
+                <PanelRightOpen size={13} /> <span>{selected ? "Reopen" : "Open"}</span>
+              </button>
+            )}
+            <button
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              {expanded ? "Hide code" : "View code"}
+            </button>
+            <button onClick={copy} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink" title="Copy HTML">
+              {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            </button>
+          </div>
+        </div>
+        {expanded && <div className="border-t border-hairline/30">{source}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
       <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1">
         <span className="text-[11px] uppercase tracking-wide text-ink-secondary">{lang || "code"}</span>
         <div className="flex items-center gap-1">
-          {artifact && onPreview && (
-            <button
-              onClick={() => onPreview(artifact)}
-              className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-accent hover:bg-raised"
-              title={selected ? "Reopen HTML preview" : "Preview HTML"}
-            >
-              <PanelRightOpen size={13} /> {selected ? "Reopen" : "Preview"}
-            </button>
-          )}
           <button
             onClick={copy}
             className="rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -100,14 +168,7 @@ function CodeBlock({
           </button>
         </div>
       </div>
-      {html ? (
-        <div
-          className="overflow-x-auto text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:m-0 [&_pre]:p-3"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      ) : (
-        <pre className="overflow-x-auto p-3 text-[13px] leading-relaxed text-ink">{code}</pre>
-      )}
+      {source}
     </div>
   );
 }
@@ -131,6 +192,7 @@ function ChatMarkdownComponent({
     () => (!streaming && messageId ? extractHtmlArtifacts(text, messageId) : []),
     [messageId, streaming, text],
   );
+  const streamingHtml = useMemo(() => (streaming ? findStreamingHtmlFence(text) : null), [streaming, text]);
   let artifactIndex = 0;
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
@@ -148,9 +210,10 @@ function ChatMarkdownComponent({
               typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
             const code = flat(child?.props?.children).replace(/\n$/, "");
             const artifact = /^(?:html|htm|html_preview)$/i.test(lang) ? artifacts[artifactIndex++] : undefined;
+            const streamedCode = streamingHtml && /^(?:html|htm|html_preview)$/i.test(lang) ? streamingHtml.code : code;
             return (
               <CodeBlock
-                code={code}
+                code={streamedCode}
                 lang={lang}
                 streaming={streaming}
                 artifact={artifact}

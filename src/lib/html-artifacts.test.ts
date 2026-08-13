@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildArtifactDocument, extractHtmlArtifacts } from "./html-artifacts";
+import { buildArtifactDocument, extractHtmlArtifacts, findStreamingHtmlFence } from "./html-artifacts";
 
 describe("HTML artifact extraction", () => {
   it("extracts completed HTML fences with stable message-based IDs", () => {
@@ -46,6 +46,19 @@ describe("HTML artifact extraction", () => {
         html: "<button>Go</button>",
       },
     ]);
+  });
+
+  it("finds only an unfinished HTML fence at the end of a stream", () => {
+    expect(findStreamingHtmlFence("Intro\n```html\n<section>work")).toEqual({
+      language: "html",
+      code: "<section>work",
+    });
+    expect(findStreamingHtmlFence("~~~HTM\n<p>still writing")).toEqual({
+      language: "htm",
+      code: "<p>still writing",
+    });
+    expect(findStreamingHtmlFence("```js\nwork")).toBeNull();
+    expect(findStreamingHtmlFence("```html\nready\n```" )).toBeNull();
   });
 });
 

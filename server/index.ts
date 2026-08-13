@@ -266,10 +266,14 @@ function stopScreenPoller(botId: string): Frame | null {
 // Where Electron's app.getPath("userData") lands, per platform — the
 // hardcoded macOS path found nothing anywhere else, and threw the
 // non-ENOENT errors into the same silent catch.
+// `||`, not `??`: a set-but-empty APPDATA/XDG_CONFIG_HOME would otherwise
+// join into a RELATIVE path resolved against the server's cwd — the same
+// silent ENOENT this function exists to stop. Electron ignores empty values
+// the same way.
 function userDataRoot(): string {
-  if (process.platform === "win32") return process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
+  if (process.platform === "win32") return process.env.APPDATA || join(homedir(), "AppData", "Roaming");
   if (process.platform === "darwin") return join(homedir(), "Library", "Application Support");
-  return process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
 }
 
 // Local computer-use contract written by Electron main on startup

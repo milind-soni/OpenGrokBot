@@ -1,7 +1,7 @@
 # HTML Artifacts and Generated Media Design
 
-**Date:** 2026-08-13  
-**Status:** Approved design  
+**Date:** 2026-08-13
+**Status:** Approved design
 **Scope:** HTML artifact previews plus image/video generation and display for OpenRouter and configurable OpenAI-compatible providers
 
 ## Context

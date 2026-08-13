@@ -210,6 +210,12 @@ The model picker marks image and video generation models. Routing is automatic: 
 and the next prompt uses image generation; select a **Video** model and it creates and tracks the provider's
 asynchronous video job. There is no prompt-keyword guessing or separate generation mode.
 
+For a bot that should chat or code with one model and create media with another, open **Bot Settings →
+Model team**. Keep any chat model as the primary model, then optionally choose one image specialist and one
+video specialist from any configured provider. The primary model calls the appropriate specialist when the
+conversation needs media, so the same bot can combine local Ollama or vLLM for text with OpenRouter media
+models without manual model switching.
+
 Generated images appear inline with copy, download, and a larger viewer. Videos appear as native players
 with seeking and download controls. Long-running video jobs stay visible in the transcript with their live
 status. Completed assets are validated and copied to `~/.openmausbot/media` so signed provider links can
@@ -232,9 +238,11 @@ you explicitly assign a task. Custom image/video route paths can be changed in t
 ### HTML artifacts
 
 A completed fenced block labeled `html`, `htm`, or `html_preview` automatically opens in a resizable
-side-by-side preview workspace. The code stays in the chat with **Preview/Reopen**, while the workspace adds
-refresh, copy, download, and close controls. Each conversation remembers its open artifact and the app
-remembers the chosen panel width. On narrow windows, the preview uses the full window.
+side-by-side preview workspace. While HTML is streaming, its compact code card can be expanded without
+interrupting generation. The code stays in the chat with **Open/Reopen**, and **Open artifact** in the chat
+header restores the latest preview after it is closed. The workspace adds refresh, copy, download, and close
+controls. Each conversation remembers its open artifact and the app remembers the chosen panel width. On
+narrow windows, the preview uses the full window.
 
 Artifact scripts run in a sandboxed opaque-origin iframe without access to the OpenMausBot document,
 Electron APIs, forms, popups, downloads, or top-level navigation. Explicit HTTP(S) assets in generated HTML

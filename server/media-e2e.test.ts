@@ -19,6 +19,7 @@ let provider: ReturnType<typeof createServer>;
 let child: ChildProcess;
 let home: string;
 let stderr = "";
+let stdout = "";
 
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -38,6 +39,40 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: response.status, body: await response.json() };
+}
+
+async function observeEvents(
+  run: () => Promise<void>,
+  done: (frames: any[]) => boolean,
+): Promise<any[]> {
+  const response = await fetch(`${HARNESS}/api/events`, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok || !response.body) throw new Error(`events stream failed with HTTP ${response.status}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const frames: any[] = [];
+  let buffer = "";
+  await run();
+  try {
+    for (;;) {
+      const { done: ended, value } = await reader.read();
+      if (ended) throw new Error("events stream ended before the expected frame");
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = block
+          .split("\n")
+          .find((line) => line.startsWith("data: "))
+          ?.slice(6);
+        if (data) frames.push(JSON.parse(data));
+        if (done(frames)) return frames;
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
 }
 
 beforeAll(async () => {
@@ -108,16 +143,23 @@ beforeAll(async () => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stderr!.on("data", (chunk) => (stderr += chunk));
-
-  const deadline = Date.now() + 20_000;
-  for (;;) {
-    try {
-      if ((await fetch(`${HARNESS}/api/health`)).ok) break;
-    } catch {}
-    if (child.exitCode !== null) throw new Error(`harness exited ${child.exitCode}: ${stderr}`);
-    if (Date.now() > deadline) throw new Error(`harness did not start: ${stderr}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`harness did not start. stdout: ${stdout}\nstderr: ${stderr}`)),
+      20_000,
+    );
+    timeout.unref?.();
+    child.stdout!.on("data", (chunk) => {
+      stdout += chunk;
+      if (!stdout.includes("openmausbot server on")) return;
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`harness exited ${code}. stdout: ${stdout}\nstderr: ${stderr}`));
+    });
+  });
 }, 30_000);
 
 afterAll(async () => {
@@ -137,18 +179,17 @@ describe("generated media e2e", () => {
     const bot = before.body.bots[0];
     expect(bot.modelSelection).toEqual({ instanceId: "media", model: "fixture-image" });
 
-    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "draw one pixel" });
-    expect(sent.status).toBe(202);
-
-    const deadline = Date.now() + 10_000;
-    let mediaMessage: any = null;
-    while (Date.now() < deadline) {
-      const snapshot = await api("GET", "/api/bots");
-      const current = snapshot.body.bots.find((candidate: any) => candidate.id === bot.id);
-      mediaMessage = current.messages.find((message: any) => message.kind === "media");
-      if (mediaMessage?.media?.[0]?.status === "ready") break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    let sent: Awaited<ReturnType<typeof api>> | null = null;
+    const frames = await observeEvents(
+      async () => {
+        sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "draw one pixel" });
+      },
+      (seen) => seen.some((frame) => frame.kind === "message.patch" && frame.message?.media?.[0]?.status === "ready"),
+    );
+    expect(sent!.status).toBe(202);
+    const mediaMessage = frames.find(
+      (frame) => frame.kind === "message.patch" && frame.message?.media?.[0]?.status === "ready",
+    )!.message;
 
     expect(mediaMessage).toMatchObject({
       role: "bot",
@@ -184,24 +225,33 @@ describe("generated media e2e", () => {
     });
     expect(configured.status).toBe(200);
 
-    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "please create a specialist image" });
-    expect(sent.status).toBe(202);
-
-    const deadline = Date.now() + 10_000;
-    let mediaMessage: any = null;
-    let assistantText = "";
-    while (Date.now() < deadline) {
-      const snapshot = await api("GET", "/api/bots");
-      const current = snapshot.body.bots.find((candidate: any) => candidate.id === bot.id);
-      mediaMessage = current.messages.find(
-        (message: any) => message.kind === "media" && !existingMediaIds.has(message.id),
-      );
-      assistantText = current.messages
-        .filter((message: any) => message.role === "bot" && message.kind === "text")
-        .at(-1)?.text;
-      if (!current.busy && mediaMessage?.media?.[0]?.status === "ready") break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    let sent: Awaited<ReturnType<typeof api>> | null = null;
+    const frames = await observeEvents(
+      async () => {
+        sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: "please create a specialist image" });
+      },
+      (seen) =>
+        seen.some(
+          (frame) =>
+            frame.kind === "message.patch" &&
+            !existingMediaIds.has(frame.message?.id) &&
+            frame.message?.media?.[0]?.status === "ready",
+        ) &&
+        seen.some(
+          (frame) => frame.kind === "message" && frame.message?.text === "Made it with the image specialist.",
+        ) &&
+        seen.some((frame) => frame.kind === "bot" && frame.bot?.id === bot.id && frame.bot?.busy === false),
+    );
+    expect(sent!.status).toBe(202);
+    const mediaMessage = frames.find(
+      (frame) =>
+        frame.kind === "message.patch" &&
+        !existingMediaIds.has(frame.message?.id) &&
+        frame.message?.media?.[0]?.status === "ready",
+    )!.message;
+    const assistantText = frames.find(
+      (frame) => frame.kind === "message" && frame.message?.text === "Made it with the image specialist.",
+    )!.message.text;
 
     expect(mediaMessage).toMatchObject({
       kind: "media",

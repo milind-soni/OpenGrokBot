@@ -6,12 +6,24 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection =
+  | "openrouter"
+  | "ollamaCloud"
+  | "openaiCompatible"
+  | "composio"
+  | "composioApi"
+  | "box";
 
 const SECTIONS: Record<
   ConfigSection,
   { body: (value: string) => unknown; flag: (config: ConfigStatus) => boolean }
 > = {
+  openrouter: { body: (v) => ({ openrouter: { key: v } }), flag: (c) => c.openrouter.configured },
+  ollamaCloud: { body: (v) => ({ ollamaCloud: { key: v } }), flag: (c) => c.ollamaCloud.configured },
+  openaiCompatible: {
+    body: (v) => ({ openaiCompatible: { key: v } }),
+    flag: (c) => c.openaiCompatible.apiKeyConfigured,
+  },
   composio: { body: (v) => ({ composio: { key: v } }), flag: (c) => c.composio.configured },
   composioApi: {
     body: (v) => ({ composio: { apiKey: v } }),

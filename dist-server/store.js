@@ -6,6 +6,14 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { newId } from "./contracts.js";
+function withoutMediaSources(message) {
+    if (!message.media)
+        return message;
+    return {
+        ...message,
+        media: message.media.map(({ source: _source, ...media }) => media),
+    };
+}
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId) => join(DATA_DIR, `messages-${threadId}.json`);
 const COLORS = [
@@ -121,7 +129,7 @@ export class Store {
     }
     appendMessage(threadId, message) {
         const t = this.thread(threadId);
-        const full = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
+        const full = withoutMediaSources({ id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message });
         t.messages.push(full);
         t.activeLeafId = full.id;
         this.saveThread(threadId);
@@ -169,7 +177,11 @@ export class Store {
         const idx = t.messages.findIndex((m) => m.id === messageId);
         if (idx === -1)
             return null;
-        t.messages[idx] = { ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card };
+        t.messages[idx] = withoutMediaSources({
+            ...t.messages[idx],
+            ...patch,
+            card: patch.card ?? t.messages[idx].card,
+        });
         this.saveThread(threadId);
         return t.messages[idx];
     }

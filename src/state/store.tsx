@@ -28,7 +28,7 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "media";
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome */
@@ -36,10 +36,30 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
+  media?: MediaOutput[];
   at: number;
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+}
+
+export type ModelTask = "chat" | "image" | "video";
+export type MediaKind = "image" | "video";
+export type MediaStatus = "queued" | "generating" | "downloading" | "ready" | "failed" | "cancelled";
+
+export interface MediaOutput {
+  id: string;
+  kind: MediaKind;
+  status: MediaStatus;
+  mime?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  bytes?: number;
+  progress?: number;
+  cacheKey?: string;
+  providerJobId?: string;
+  error?: string;
 }
 
 export interface ModelSelection {
@@ -98,6 +118,16 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
+  openrouter: { configured: boolean };
+  ollamaCloud: { configured: boolean };
+  openaiCompatible: {
+    apiKeyConfigured: boolean;
+    url: string;
+    model: string;
+    modelTasks: Record<string, ModelTask>;
+    imagePath: string;
+    videoPath: string;
+  };
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
@@ -115,7 +145,16 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
-  models: { default: string; options: Array<{ id: string; label: string }> };
+  models: {
+    default: string;
+    options: Array<{
+      id: string;
+      label: string;
+      task?: ModelTask;
+      inputModalities?: string[];
+      outputModalities?: string[];
+    }>;
+  };
 }
 
 interface AppState {
@@ -739,7 +778,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            config: {
+              xai: frame.xai,
+              openrouter: frame.openrouter,
+              ollamaCloud: frame.ollamaCloud,
+              openaiCompatible: frame.openaiCompatible,
+              composio: frame.composio,
+              box: frame.box,
+              profile: frame.profile,
+            },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))

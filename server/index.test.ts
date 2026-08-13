@@ -28,6 +28,15 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
   return { status: res.status, body: await res.json() };
 };
 
+const rawApi = async (path: string, headers?: Record<string, string>) => {
+  const res = await fetch(`${BASE}${path}`, { headers });
+  return {
+    status: res.status,
+    headers: res.headers,
+    body: Buffer.from(await res.arrayBuffer()),
+  };
+};
+
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
   // a fleet of exactly one unknown driver: no CLI probes, no network
@@ -80,6 +89,30 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.app).toBe("openmausbot");
     expect(typeof body.pid).toBe("number");
+  });
+
+  it("serves cached media with byte-range support", async () => {
+    const objects = join(home, ".openmausbot", "media", "objects");
+    mkdirSync(objects, { recursive: true });
+    const cacheKey = "11111111-1111-4111-8111-111111111111.mp4";
+    const bytes = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+    writeFileSync(join(objects, cacheKey), bytes);
+
+    const full = await rawApi(`/api/media/${cacheKey}`);
+    expect(full.status).toBe(200);
+    expect(full.headers.get("content-type")).toBe("video/mp4");
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect(full.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(full.body).toEqual(bytes);
+
+    const partial = await rawApi(`/api/media/${cacheKey}`, { range: "bytes=4-7" });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("content-range")).toBe(`bytes 4-7/${bytes.length}`);
+    expect(partial.body).toEqual(bytes.subarray(4, 8));
+
+    const unsatisfiable = await rawApi(`/api/media/${cacheKey}`, { range: "bytes=99-100" });
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${bytes.length}`);
   });
 
   it("seeds one starter bot with its greeting", async () => {
@@ -195,6 +228,65 @@ describe("harness HTTP API", () => {
 
     const nothing = await api("PUT", "/api/config", {});
     expect(nothing.status).toBe(400);
+  });
+
+  it("persists model-provider settings without echoing provider secrets", async () => {
+    const before = await api("GET", "/api/config");
+    expect(before.body.openrouter).toEqual({ configured: false });
+    expect(before.body.ollamaCloud).toEqual({ configured: false });
+    expect(before.body.openaiCompatible).toEqual({
+      apiKeyConfigured: false,
+      url: "http://127.0.0.1:11434/v1",
+      model: "gpt-oss:20b",
+      modelTasks: {},
+      imagePath: "/images/generations",
+      videoPath: "/videos",
+    });
+
+    const put = await api("PUT", "/api/config", {
+      openrouter: { key: "sk-or-super-secret" },
+      ollamaCloud: { key: "ollama-super-secret" },
+      openaiCompatible: {
+        key: "lan-super-secret",
+        url: "http://192.168.1.25:8000/v1",
+        model: "org/open-model",
+        modelTasks: { "org/image": "image", "org/video": "video" },
+        imagePath: "/generate/image",
+        videoPath: "/generate/video",
+      },
+    });
+    expect(put.status).toBe(200);
+    expect(put.body).toMatchObject({
+      openrouter: { configured: true },
+      ollamaCloud: { configured: true },
+      openaiCompatible: {
+        apiKeyConfigured: true,
+        url: "http://192.168.1.25:8000/v1",
+        model: "org/open-model",
+        modelTasks: { "org/image": "image", "org/video": "video" },
+        imagePath: "/generate/image",
+        videoPath: "/generate/video",
+      },
+    });
+    const serialized = JSON.stringify(put.body);
+    expect(serialized).not.toContain("sk-or-super-secret");
+    expect(serialized).not.toContain("ollama-super-secret");
+    expect(serialized).not.toContain("lan-super-secret");
+
+    const after = await api("GET", "/api/config");
+    expect(after.body.openaiCompatible.url).toBe("http://192.168.1.25:8000/v1");
+    expect(JSON.stringify(after.body)).not.toContain("super-secret");
+  });
+
+  it("rejects an invalid OpenAI-compatible endpoint before persisting it", async () => {
+    const invalid = await api("PUT", "/api/config", {
+      openaiCompatible: { url: "file:///tmp/not-an-api", model: "bad" },
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toContain("http or https");
+
+    const after = await api("GET", "/api/config");
+    expect(after.body.openaiCompatible.url).toBe("http://192.168.1.25:8000/v1");
   });
 
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {

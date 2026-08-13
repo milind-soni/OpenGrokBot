@@ -2,7 +2,7 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
-import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, MEDIA_DIR, NATIVE_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import { createMediaCache, parseRange } from "./media-cache.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -32,6 +33,8 @@ const MIME: Record<string, string> = {
 };
 
 ensureDirs();
+const mediaCache = createMediaCache({ rootDir: MEDIA_DIR });
+mediaCache.removeStalePartials();
 const cfg = loadConfig();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
@@ -130,10 +133,41 @@ function broadcast(payload: unknown) {
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
+const mediaMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
 
+function providerOrigin(event: RuntimeEvent): URL {
+  const fallback = "http://127.0.0.1";
+  const raw =
+    event.provider === "openrouter"
+      ? (cfg.openrouter?.url ?? "https://openrouter.ai/api/v1")
+      : event.provider === "ollamaCloud"
+        ? (cfg.ollamaCloud?.url ?? "https://ollama.com/v1")
+        : event.provider === "openaiCompatible"
+          ? (cfg.openaiCompatible?.url ?? "http://127.0.0.1:11434/v1")
+          : fallback;
+  try {
+    return new URL(raw);
+  } catch {
+    return new URL(fallback);
+  }
+}
+
+function publicRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
+  if (
+    (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") &&
+    event.itemType === "media"
+  ) {
+    return {
+      ...event,
+      media: event.media.map(({ source: _source, ...media }) => media),
+    } as RuntimeEvent;
+  }
+  return event;
+}
+
 bus.subscribe((event: RuntimeEvent) => {
-  broadcast({ kind: "runtime", event });
+  broadcast({ kind: "runtime", event: publicRuntimeEvent(event) });
   const bot = store.botByThread(event.threadId);
   if (!bot) return;
 
@@ -152,6 +186,41 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.completed":
       if (event.itemType === "assistant_text") {
         pushMessage({ role: "bot", kind: "text", text: event.text });
+      } else if (event.itemType === "media" && event.itemId) {
+        const messageId = mediaMessageByItem.get(event.itemId);
+        if (!messageId) break;
+        const downloading = event.media.map(({ source: _source, ...media }) => ({
+          ...media,
+          status: media.status === "ready" ? ("downloading" as const) : media.status,
+        }));
+        const patched = store.patchMessage(event.threadId, messageId, { media: downloading });
+        if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
+        void Promise.all(
+          event.media.map(async (media) => {
+            if (!media.source) return { ...media, status: media.cacheKey ? ("ready" as const) : media.status };
+            try {
+              const stored = await mediaCache.store(media.source, {
+                threadId: event.threadId,
+                messageId,
+                kind: media.kind,
+                providerOrigin: providerOrigin(event),
+              });
+              const { source: _source, ...safe } = media;
+              return { ...safe, ...stored, status: "ready" as const };
+            } catch (error) {
+              const { source: _source, ...safe } = media;
+              return {
+                ...safe,
+                status: "failed" as const,
+                error: `Could not store generated media safely: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
+              };
+            }
+          }),
+        ).then((media) => {
+          const ready = store.patchMessage(event.threadId, messageId, { media });
+          if (ready) broadcast({ kind: "message.patch", threadId: event.threadId, message: ready });
+          mediaMessageByItem.delete(event.itemId!);
+        });
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
         if (messageId) {
@@ -169,6 +238,18 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "tool") {
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
+      } else if (event.itemType === "media" && event.itemId) {
+        const message = pushMessage({ role: "bot", kind: "media", media: event.media });
+        mediaMessageByItem.set(event.itemId, message.id);
+      }
+      break;
+    case "item.updated":
+      if (event.itemType === "media" && event.itemId) {
+        const messageId = mediaMessageByItem.get(event.itemId);
+        if (messageId) {
+          const patched = store.patchMessage(event.threadId, messageId, { media: event.media });
+          if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
+        }
       }
       break;
     case "request.opened": {
@@ -337,7 +418,7 @@ async function startTurn(
   // would cost the next attempt its history if this dispatch fails.
   const rewound = Boolean(bot.rewound);
   const turnText =
-    rewound && instance.driverKind !== "grok" && transcript.length
+    rewound && !instance.adapter.capabilities.transcriptReplay && transcript.length
       ? [
           "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
           "",
@@ -454,6 +535,16 @@ async function startTurn(
 function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
+    openrouter: { configured: Boolean(cfg.openrouter?.key) },
+    ollamaCloud: { configured: Boolean(cfg.ollamaCloud?.key) },
+    openaiCompatible: {
+      apiKeyConfigured: Boolean(cfg.openaiCompatible?.key),
+      url: cfg.openaiCompatible?.url?.trim() || "http://127.0.0.1:11434/v1",
+      model: cfg.openaiCompatible?.model?.trim() || "gpt-oss:20b",
+      modelTasks: cfg.openaiCompatible?.modelTasks ?? {},
+      imagePath: cfg.openaiCompatible?.imagePath ?? "/images/generations",
+      videoPath: cfg.openaiCompatible?.videoPath ?? "/videos",
+    },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
@@ -720,6 +811,38 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
+    // Guarded local media cache. The renderer receives opaque cache keys,
+    // never provider URLs or filesystem paths. Single ranges keep native
+    // video seeking memory-efficient.
+    m = path.match(/^\/api\/media\/([0-9a-f-]+\.(?:png|jpg|gif|webp|mp4|webm))$/);
+    if (m && method === "GET") {
+      const media = mediaCache.resolve(m[1]);
+      if (!media) return json(res, 404, { error: "media not found" });
+      const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : undefined;
+      const range = rangeHeader ? parseRange(rangeHeader, media.bytes) : null;
+      const commonHeaders = {
+        "content-type": media.mime,
+        "accept-ranges": "bytes",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'",
+        "cache-control": "private, max-age=31536000, immutable",
+      };
+      if (rangeHeader && !range) {
+        res.writeHead(416, { ...commonHeaders, "content-range": `bytes */${media.bytes}` });
+        return res.end();
+      }
+      if (range) {
+        res.writeHead(206, {
+          ...commonHeaders,
+          "content-length": String(range.end - range.start + 1),
+          "content-range": `bytes ${range.start}-${range.end}/${media.bytes}`,
+        });
+        return createReadStream(media.path, { start: range.start, end: range.end }).pipe(res);
+      }
+      res.writeHead(200, { ...commonHeaders, "content-length": String(media.bytes) });
+      return createReadStream(media.path).pipe(res);
+    }
+
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
       return json(res, 200, { instances: await registry.describe() });
@@ -732,10 +855,28 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "profile"] as const) {
+      for (const key of [
+        "xai",
+        "openrouter",
+        "ollamaCloud",
+        "openaiCompatible",
+        "composio",
+        "box",
+        "profile",
+      ] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      if (patch.openaiCompatible) {
+        const driver = BUILT_IN_DRIVERS.find((candidate) => candidate.driverKind === "openaiCompatible")!;
+        try {
+          driver.decodeConfig(patch.openaiCompatible);
+        } catch (error) {
+          return json(res, 400, {
+            error: `invalid OpenAI-compatible endpoint: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
       saveConfig(patch);
       Object.assign(cfg, loadConfig());
       // provider keys change the fleet; a profile edit must not kill

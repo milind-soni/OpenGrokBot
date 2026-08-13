@@ -22,6 +22,9 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { MediaMessage } from "./MediaMessage";
+import { ArtifactPanel } from "./ArtifactPanel";
+import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -218,6 +221,8 @@ function Bubble({
   onCancelEdit,
   onSubmitEdit,
   onRegenerate,
+  selectedArtifactId,
+  onPreviewArtifact,
 }: {
   bot: Bot;
   message: Message;
@@ -227,6 +232,8 @@ function Bubble({
   onCancelEdit: () => void;
   onSubmitEdit: (text: string) => void;
   onRegenerate?: () => void;
+  selectedArtifactId?: string | null;
+  onPreviewArtifact?: (artifact: HtmlArtifact) => void;
 }) {
   const { dispatch } = useStore();
   const user = message.role === "user";
@@ -293,7 +300,12 @@ function Bubble({
             </>
           ) : (
             <MessageBoundary fallbackText={text}>
-              <ChatMarkdown text={text} />
+              <ChatMarkdown
+                text={text}
+                messageId={message.id}
+                selectedArtifactId={selectedArtifactId}
+                onPreviewArtifact={onPreviewArtifact}
+              />
             </MessageBoundary>
           )}
         </div>
@@ -425,6 +437,37 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
+  const artifacts = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        message.role === "bot" && message.kind === "text" && message.text
+          ? extractHtmlArtifacts(message.text, message.id)
+          : [],
+      ),
+    [messages],
+  );
+  const [artifactSelections, setArtifactSelections] = useState<Record<string, string | null>>({});
+  const autoOpenedArtifact = useRef<Record<string, string>>({});
+  const [artifactWidth, setArtifactWidth] = useState(() => {
+    if (typeof window === "undefined") return 560;
+    const saved = Number(window.localStorage.getItem("openmausbot.artifactWidth"));
+    return Number.isFinite(saved) && saved >= 320 ? saved : 560;
+  });
+  const newestArtifact = artifacts.at(-1);
+  useEffect(() => {
+    if (!newestArtifact || autoOpenedArtifact.current[bot.threadId] === newestArtifact.id) return;
+    autoOpenedArtifact.current[bot.threadId] = newestArtifact.id;
+    setArtifactSelections((current) => ({ ...current, [bot.threadId]: newestArtifact.id }));
+  }, [bot.threadId, newestArtifact]);
+  const selectedArtifactId = artifactSelections[bot.threadId] ?? null;
+  const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const openArtifact = (artifact: HtmlArtifact) => {
+    setArtifactSelections((current) => ({ ...current, [bot.threadId]: artifact.id }));
+  };
+  const resizeArtifact = (width: number) => {
+    setArtifactWidth(width);
+    window.localStorage.setItem("openmausbot.artifactWidth", String(width));
+  };
   const lastBotTextId = useMemo(
     () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
     [messages],
@@ -486,6 +529,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
+    <div className="flex h-full min-w-0 flex-1">
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {/* Header */}
       <div
@@ -594,6 +638,13 @@ export function ChatView({ bot }: { bot: Bot }) {
                   );
                 case "screen":
                   return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+                case "media":
+                  return (
+                    <MediaMessage
+                      message={m}
+                      onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
+                    />
+                  );
                 default:
                   return (
                     <Bubble
@@ -605,6 +656,8 @@ export function ChatView({ bot }: { bot: Bot }) {
                       onCancelEdit={() => setEditingId(null)}
                       onSubmitEdit={(text) => submitEdit(m.id, text)}
                       onRegenerate={regenerate}
+                      selectedArtifactId={selectedArtifactId}
+                      onPreviewArtifact={openArtifact}
                     />
                   );
               }
@@ -666,5 +719,14 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+    {selectedArtifact && (
+      <ArtifactPanel
+        artifact={selectedArtifact}
+        width={artifactWidth}
+        onWidthChange={resizeArtifact}
+        onClose={() => setArtifactSelections((current) => ({ ...current, [bot.threadId]: null }))}
+      />
+    )}
+    </div>
   );
 }

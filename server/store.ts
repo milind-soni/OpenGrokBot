@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
-import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
+import { newId, type MediaOutput, type ModelSelection, type ThreadId } from "./contracts.ts";
 
 export type MausColor =
   | "green"
@@ -40,7 +40,7 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "media";
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome */
@@ -48,10 +48,21 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  /** Generated media metadata. Raw base64/remote sources are stripped
+   * before the message is persisted; only guarded cache keys survive. */
+  media?: MediaOutput[];
   at: number;
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+}
+
+function withoutMediaSources(message: Message): Message {
+  if (!message.media) return message;
+  return {
+    ...message,
+    media: message.media.map(({ source: _source, ...media }) => media),
+  };
 }
 
 export interface BotRecord {
@@ -208,7 +219,7 @@ export class Store {
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const t = this.thread(threadId);
-    const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
+    const full = withoutMediaSources({ id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message });
     t.messages.push(full);
     t.activeLeafId = full.id;
     this.saveThread(threadId);
@@ -255,7 +266,11 @@ export class Store {
     const t = this.thread(threadId);
     const idx = t.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
-    t.messages[idx] = { ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card };
+    t.messages[idx] = withoutMediaSources({
+      ...t.messages[idx],
+      ...patch,
+      card: patch.card ?? t.messages[idx].card,
+    });
     this.saveThread(threadId);
     return t.messages[idx];
   }

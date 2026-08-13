@@ -49,6 +49,47 @@ describe("Store", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
 
+  it("persists media metadata without raw provider sources", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "media",
+      text: "Generated image",
+      media: [
+        {
+          id: "image-1",
+          kind: "image",
+          status: "ready",
+          mime: "image/png",
+          width: 1024,
+          height: 1024,
+          cacheKey: "11111111-1111-4111-8111-111111111111.png",
+          source: { type: "base64", data: "secret-raw-payload", mime: "image/png" },
+        },
+      ],
+    });
+
+    const serialized = readFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), "utf8");
+    expect(serialized).not.toContain("secret-raw-payload");
+    const reloaded = new Store(selection);
+    expect(reloaded.messagesFor(bot.threadId).at(-1)).toMatchObject({
+      kind: "media",
+      media: [
+        {
+          id: "image-1",
+          kind: "image",
+          status: "ready",
+          mime: "image/png",
+          width: 1024,
+          height: 1024,
+          cacheKey: "11111111-1111-4111-8111-111111111111.png",
+        },
+      ],
+    });
+    expect(reloaded.messagesFor(bot.threadId).at(-1)?.media?.[0]).not.toHaveProperty("source");
+  });
+
   it("patchMessage merges card patches and returns null for unknown ids", () => {
     const store = new Store(selection);
     const bot = store.createBot();

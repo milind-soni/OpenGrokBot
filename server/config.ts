@@ -1,14 +1,28 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
-//   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
-//     "instances": { "<instanceId>": {"driver":"grok", …} } }
+//   { "openrouter": {"key":"sk-or-…"}, "ollamaCloud": {"key":"…"},
+//     "openaiCompatible": {"url":"http://127.0.0.1:11434/v1", "model":"gpt-oss:20b"},
+//     "instances": { "<instanceId>": {"driver":"openaiCompatible", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { InstanceConfigMap } from "./contracts.ts";
+import type { InstanceConfigMap, ModelTask } from "./contracts.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
+  openrouter?: { key?: string; url?: string; model?: string };
+  ollamaCloud?: { key?: string; url?: string; model?: string };
+  /** Any local, LAN, or remote server implementing OpenAI's /v1 API.
+   * The key is optional (local Ollama needs none); url + model are safe to
+   * echo while the key remains write-only. */
+  openaiCompatible?: {
+    key?: string;
+    url?: string;
+    model?: string;
+    modelTasks?: Record<string, ModelTask>;
+    imagePath?: string;
+    videoPath?: string;
+  };
   /** key = ck_… Connect consumer key (connections + agent tools);
    * apiKey = ak_… project API key — optional, unlocks the full toolkit
    * catalog with official logos in the plugins marketplace. */
@@ -25,6 +39,7 @@ export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbo
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
+export const MEDIA_DIR = join(DATA_DIR, "media");
 
 export function ensureDirs() {
   // one-time migration from the pre-rename data dir — bots, transcripts,
@@ -36,7 +51,7 @@ export function ensureDirs() {
       /* cross-device or busy — fall through to a fresh dir */
     }
   }
-  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
+  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, MEDIA_DIR]) mkdirSync(dir, { recursive: true });
 }
 
 export function loadConfig(): AppConfig {
@@ -47,6 +62,14 @@ export function loadConfig(): AppConfig {
     /* first run — env fallbacks below */
   }
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
+  cfg.openrouter = { key: process.env.OPENROUTER_API_KEY, ...cfg.openrouter };
+  cfg.ollamaCloud = { key: process.env.OLLAMA_API_KEY, ...cfg.ollamaCloud };
+  cfg.openaiCompatible = {
+    key: process.env.OPENAI_COMPATIBLE_API_KEY,
+    url: process.env.OPENAI_COMPATIBLE_BASE_URL,
+    model: process.env.OPENAI_COMPATIBLE_MODEL,
+    ...cfg.openaiCompatible,
+  };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
   return cfg;
@@ -62,7 +85,15 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of [
+    "xai",
+    "openrouter",
+    "ollamaCloud",
+    "openaiCompatible",
+    "composio",
+    "box",
+    "profile",
+  ] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -90,11 +121,32 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           gemini: { driver: "geminiAgent" },
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
+          openrouter: {
+            driver: "openrouter",
+            config: { url: cfg.openrouter?.url, model: cfg.openrouter?.model },
+          },
+          "ollama-cloud": {
+            driver: "ollamaCloud",
+            config: { url: cfg.ollamaCloud?.url, model: cfg.ollamaCloud?.model },
+          },
+          "openai-compatible": {
+            driver: "openaiCompatible",
+            config: {
+              url: cfg.openaiCompatible?.url,
+              model: cfg.openaiCompatible?.model,
+              modelTasks: cfg.openaiCompatible?.modelTasks,
+              imagePath: cfg.openaiCompatible?.imagePath,
+              videoPath: cfg.openaiCompatible?.videoPath,
+            },
+          },
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
+      ...(cfg.openrouter?.key ? { OPENROUTER_API_KEY: cfg.openrouter.key } : {}),
+      ...(cfg.ollamaCloud?.key ? { OLLAMA_API_KEY: cfg.ollamaCloud.key } : {}),
+      ...(cfg.openaiCompatible?.key ? { OPENAI_COMPATIBLE_API_KEY: cfg.openaiCompatible.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
       ...entry.environment,
     };

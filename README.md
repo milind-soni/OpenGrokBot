@@ -42,8 +42,8 @@ it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each
 memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
 already have:
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your Mac — your
-  existing logins and subscriptions, no new accounts, no proxy in the middle.
+- **Bring your own agents and models.** Bots can run on the `claude`, `codex`, and `grok` CLIs installed on
+  your computer, or use OpenRouter, Ollama Cloud, local Ollama, vLLM, and other OpenAI-compatible servers.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
@@ -57,8 +57,8 @@ already have:
 
 ### 🧠 Pick a brain per bot
 
-A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
-providers dimmed with the reason. Switch a bot's model mid-conversation.
+A searchable model picker with a provider rail — CLI agents and live API catalogs side by side, defaults
+marked, unavailable providers dimmed with the reason. Switch a bot's model mid-conversation.
 
 <img src="docs/screenshots/model-picker.png" alt="Model picker with provider rail" width="100%">
 
@@ -122,7 +122,8 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 
 **Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
 composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
-expressions · screenshots of the bot's work folded into the transcript.
+expressions · screenshots of the bot's work folded into the transcript · generated images and videos
+rendered directly in chat · side-by-side previews for generated HTML artifacts.
 
 ## How it works
 
@@ -153,7 +154,7 @@ flowchart LR
 
 | Layer | Where | What it does |
 |---|---|---|
-| Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
+| Drivers | `server/drivers/` | Claude, Codex, and Grok Build over local CLIs, plus OpenRouter, Ollama Cloud, generic OpenAI-compatible APIs, and a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
@@ -175,17 +176,88 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
-[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
-in the model picker automatically.
+Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and either an agent CLI —
+[`claude`](https://claude.com/claude-code), [`codex`](https://github.com/openai/codex), or
+[`grok`](https://x.ai/cli) — or one of the model API connections below. Available providers appear in the
+model picker automatically.
 
 Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
 | Key | Unlocks |
 |---|---|
+| OpenRouter API key (`sk-or-…`) | OpenRouter's live model catalog |
+| Ollama API key | Direct Ollama Cloud models |
+| OpenAI-compatible endpoint + optional bearer token | Local/LAN/remote Ollama, vLLM, or another compatible server |
 | Composio Connect key (`ck_…`) | The connected-apps marketplace |
 | Composio API key (`ak_…`) | The full 500+ app catalog with official logos |
 | Box token ([box.ascii.dev](https://box.ascii.dev)) | Cloud computers for your bots |
+
+### Open models and compatible endpoints
+
+Open **App Settings → Model providers** and choose any of these paths:
+
+| Provider | Configuration |
+|---|---|
+| OpenRouter | Paste an API key. The app uses `https://openrouter.ai/api/v1` and discovers chat, image, and video catalogs automatically. |
+| Ollama Cloud | Paste an Ollama API key. The app connects directly to `https://ollama.com/v1`. |
+| Local Ollama | Leave the bearer token empty; use `http://127.0.0.1:11434/v1` and a pulled model such as `gpt-oss:20b`. |
+| vLLM on this computer or another IP | Use `http://<host>:8000/v1`, the served model ID, and the API key only if the server was started with one. |
+| Other OpenAI-compatible server | Enter its base URL ending in `/v1`, model ID, and optional bearer token. Text models use `/models` and `/chat/completions`; media paths and model tasks are configurable. |
+
+### Generated images and videos
+
+The model picker marks image and video generation models. Routing is automatic: select an **Image** model
+and the next prompt uses image generation; select a **Video** model and it creates and tracks the provider's
+asynchronous video job. There is no prompt-keyword guessing or separate generation mode.
+
+Generated images appear inline with copy, download, and a larger viewer. Videos appear as native players
+with seeking and download controls. Long-running video jobs stay visible in the transcript with their live
+status. Completed assets are validated and copied to `~/.openmausbot/media` so signed provider links can
+expire without breaking the conversation. The default safety limits are 25 MiB per image and 512 MiB per
+video; unsafe file signatures, oversized responses, and untrusted private-network redirects are rejected.
+
+OpenRouter uses its dedicated `/images`, `/images/models`, `/videos`, and `/videos/models` APIs. For another
+OpenAI-compatible service, the defaults are `/images/generations` and `/videos`. If its `/models` response
+does not declare output modalities, add overrides in **App Settings → Model providers**, one per line:
+
+```text
+stable-diffusion-xl=image
+wan-2.2=video
+local-assistant=chat
+```
+
+Local Ollama and regular vLLM models remain text/chat models unless their server reports a media output or
+you explicitly assign a task. Custom image/video route paths can be changed in the same settings panel.
+
+### HTML artifacts
+
+A completed fenced block labeled `html`, `htm`, or `html_preview` automatically opens in a resizable
+side-by-side preview workspace. The code stays in the chat with **Preview/Reopen**, while the workspace adds
+refresh, copy, download, and close controls. Each conversation remembers its open artifact and the app
+remembers the chosen panel width. On narrow windows, the preview uses the full window.
+
+Artifact scripts run in a sandboxed opaque-origin iframe without access to the OpenMausBot document,
+Electron APIs, forms, popups, downloads, or top-level navigation. Explicit HTTP(S) assets in generated HTML
+can still access the network, which is indicated in the preview toolbar.
+
+For local Ollama, pull a model first:
+
+```sh
+ollama pull gpt-oss:20b
+```
+
+For a LAN vLLM host, a typical server command is:
+
+```sh
+vllm serve NousResearch/Meta-Llama-3-8B-Instruct --host 0.0.0.0 --api-key your-lan-token
+```
+
+Then configure `http://<that-computer-ip>:8000/v1`, the exact served model ID, and `your-lan-token`.
+Use HTTPS rather than plain HTTP when the endpoint crosses an untrusted network.
+
+The equivalent environment variables are `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`,
+`OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_MODEL`, and the optional
+`OPENAI_COMPATIBLE_API_KEY`.
 
 ```sh
 pnpm typecheck     # app + server

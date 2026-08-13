@@ -9,6 +9,29 @@ export type DriverKind = string;
 export type InstanceId = string;
 export type ThreadId = string;
 export type TurnId = string;
+export type ModelTask = "chat" | "image" | "video";
+export type MediaKind = "image" | "video";
+export type MediaStatus = "queued" | "generating" | "downloading" | "ready" | "failed" | "cancelled";
+
+export type MediaSource =
+  | { type: "base64"; data: string; mime?: string }
+  | { type: "url"; url: string; mime?: string; headers?: Record<string, string> };
+
+export interface MediaOutput {
+  id: string;
+  kind: MediaKind;
+  status: MediaStatus;
+  mime?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  bytes?: number;
+  progress?: number;
+  cacheKey?: string;
+  source?: MediaSource;
+  providerJobId?: string;
+  error?: string;
+}
 
 // ── model selection ────────────────────────────────────────────────────
 // "Which model" is a data value carried on the request, never a service
@@ -63,9 +86,12 @@ export type RuntimeEvent = RuntimeEventBase &
         denials?: string[];
       }
     | { type: "item.started"; itemType: "tool" | "reasoning"; title?: string }
+    | { type: "item.started"; itemType: "media"; media: MediaOutput[] }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
+    | { type: "item.updated"; itemType: "media"; media: MediaOutput[] }
     | { type: "item.completed"; itemType: "tool"; ok: boolean }
     | { type: "item.completed"; itemType: "assistant_text"; text: string }
+    | { type: "item.completed"; itemType: "media"; media: MediaOutput[] }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {
         type: "request.opened";
@@ -121,6 +147,9 @@ export interface ProviderAdapter {
   readonly provider: DriverKind;
   readonly capabilities: {
     sessionModelSwitch: "in-session" | "unsupported";
+    /** The server should supply the folded transcript on every turn instead
+     * of treating resumeCursor as provider-native conversation state. */
+    transcriptReplay?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
@@ -152,7 +181,15 @@ export interface ProviderSnapshot {
 // a rejection to an unavailable shadow snapshot.
 export interface ModelCatalog {
   default: string;
-  options: Array<{ id: string; label: string }>;
+  options: ModelOption[];
+}
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  task?: ModelTask;
+  inputModalities?: string[];
+  outputModalities?: string[];
 }
 
 export interface DriverCreateInput<Config> {

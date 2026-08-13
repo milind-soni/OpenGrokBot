@@ -4,10 +4,11 @@
 // HTML: no rehype-raw, so HTML in the text renders as text; Shiki's output is
 // generator-escaped. While a message is still streaming, code blocks render
 // as plain <pre> and nothing is cached — partial fences would poison it.
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, PanelRightOpen } from "lucide-react";
+import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed, capped, never written while streaming
@@ -22,7 +23,21 @@ const hash = (s: string) => {
   return (h >>> 0).toString(36);
 };
 
-function CodeBlock({ code, lang, streaming }: { code: string; lang: string; streaming: boolean }) {
+function CodeBlock({
+  code,
+  lang,
+  streaming,
+  artifact,
+  selected,
+  onPreview,
+}: {
+  code: string;
+  lang: string;
+  streaming: boolean;
+  artifact?: HtmlArtifact;
+  selected?: boolean;
+  onPreview?: (artifact: HtmlArtifact) => void;
+}) {
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -66,13 +81,24 @@ function CodeBlock({ code, lang, streaming }: { code: string; lang: string; stre
     <div className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
       <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1">
         <span className="text-[11px] uppercase tracking-wide text-ink-secondary">{lang || "code"}</span>
-        <button
-          onClick={copy}
-          className="rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink"
-          title="Copy code"
-        >
-          {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-        </button>
+        <div className="flex items-center gap-1">
+          {artifact && onPreview && (
+            <button
+              onClick={() => onPreview(artifact)}
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-accent hover:bg-raised"
+              title={selected ? "Reopen HTML preview" : "Preview HTML"}
+            >
+              <PanelRightOpen size={13} /> {selected ? "Reopen" : "Preview"}
+            </button>
+          )}
+          <button
+            onClick={copy}
+            className="rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+            title="Copy code"
+          >
+            {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+          </button>
+        </div>
       </div>
       {html ? (
         <div
@@ -86,7 +112,26 @@ function CodeBlock({ code, lang, streaming }: { code: string; lang: string; stre
   );
 }
 
-function ChatMarkdownComponent({ text, streaming = false }: { text: string; streaming?: boolean }) {
+interface ChatMarkdownProps {
+  text: string;
+  streaming?: boolean;
+  messageId?: string;
+  selectedArtifactId?: string | null;
+  onPreviewArtifact?: (artifact: HtmlArtifact) => void;
+}
+
+function ChatMarkdownComponent({
+  text,
+  streaming = false,
+  messageId,
+  selectedArtifactId,
+  onPreviewArtifact,
+}: ChatMarkdownProps) {
+  const artifacts = useMemo(
+    () => (!streaming && messageId ? extractHtmlArtifacts(text, messageId) : []),
+    [messageId, streaming, text],
+  );
+  let artifactIndex = 0;
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
@@ -102,7 +147,17 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
             const flat = (n: any): string =>
               typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
             const code = flat(child?.props?.children).replace(/\n$/, "");
-            return <CodeBlock code={code} lang={lang} streaming={streaming} />;
+            const artifact = /^(?:html|htm|html_preview)$/i.test(lang) ? artifacts[artifactIndex++] : undefined;
+            return (
+              <CodeBlock
+                code={code}
+                lang={lang}
+                streaming={streaming}
+                artifact={artifact}
+                selected={artifact?.id === selectedArtifactId}
+                onPreview={onPreviewArtifact}
+              />
+            );
           },
           img({ src, alt }: { src?: string; alt?: string }) {
             return (

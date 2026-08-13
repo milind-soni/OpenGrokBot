@@ -5,6 +5,9 @@ import { BoxAgentDriver } from "./boxagent.ts";
 import { ClaudeDriver } from "./claude.ts";
 import { CodexDriver } from "./codex.ts";
 import { GrokDriver } from "./grok.ts";
+import { OllamaCloudDriver } from "./ollama-cloud.ts";
+import { OpenAIEndpointDriver } from "./openai-endpoint.ts";
+import { OpenRouterDriver } from "./openrouter.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { GeminiAgentDriver } from "./acp/gemini.ts";
 
@@ -14,5 +17,8 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   GeminiAgentDriver,
   ClaudeDriver,
   CodexDriver,
+  OpenRouterDriver,
+  OllamaCloudDriver,
+  OpenAIEndpointDriver,
   BoxAgentDriver,
 ];

@@ -13,6 +13,7 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { EventBus } from "./harness/bus.js";
 import { ProviderRegistry } from "./harness/registry.js";
+import { decodePrompt, decodeSchedule, describeSchedule, RoutineStore } from "./routines.js";
 import { mentionedBots, Store } from "./store.js";
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -104,6 +105,7 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+const routines = new RoutineStore();
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 const sseClients = new Set();
 function broadcast(payload) {
@@ -384,6 +386,58 @@ async function startTurn(botId, text, opts) {
         }
     })();
 }
+// ── routines (scheduled turns) ────────────────────────────────────────
+// A routine firing is just a user-less startTurn, so it flows through the
+// same permission broker, event bus, and transcript as anything typed.
+const ROUTINE_TICK_MS = 30_000;
+function broadcastRoutines(botId) {
+    broadcast({ kind: "routines", botId, routines: routines.forBot(botId) });
+}
+async function runRoutine(routineId) {
+    const routine = routines.get(routineId);
+    if (!routine)
+        return;
+    const bot = store.bot(routine.botId);
+    if (!bot) {
+        routines.deleteForBot(routine.botId);
+        return;
+    }
+    // advance the clock BEFORE the turn: a failing or slow routine must not
+    // hot-loop on the next tick
+    routines.markRan(routine.id);
+    broadcastRoutines(bot.id);
+    const marker = store.appendMessage(bot.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `routine: ${routine.title} (${describeSchedule(routine.schedule)})`, ok: true },
+    });
+    broadcast({ kind: "message", threadId: bot.threadId, message: marker });
+    try {
+        await startTurn(bot.id, routine.prompt);
+    }
+    catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        const failure = store.appendMessage(bot.threadId, {
+            role: "bot",
+            kind: "activity",
+            tool: { name: `routine skipped: ${message.slice(0, 160)}`, ok: false },
+        });
+        broadcast({ kind: "message", threadId: bot.threadId, message: failure });
+    }
+}
+async function routineTick() {
+    for (const routine of routines.due()) {
+        const bot = store.bot(routine.botId);
+        // a bot mid-turn keeps its slot: the routine simply waits for the next
+        // tick rather than stacking a second turn on top of a live one
+        if (bot?.busy)
+            continue;
+        await runRoutine(routine.id);
+    }
+}
+const routineTimer = setInterval(() => void routineTick(), ROUTINE_TICK_MS);
+routineTimer.unref?.();
+void routineTick();
 // ── config hot-reload ─────────────────────────────────────────────────
 function configStatus() {
     return {
@@ -536,6 +590,7 @@ const server = createServer(async (req, res) => {
             await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => { });
             stopScreenPoller(bot.id);
             store.deleteBot(bot.id);
+            routines.deleteForBot(bot.id);
             for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
                 try {
                     unlinkSync(join(dir, `${bot.threadId}.ndjson`));
@@ -597,6 +652,70 @@ const server = createServer(async (req, res) => {
             const instance = registry.get(bot.modelSelection.instanceId);
             await instance?.adapter.interruptTurn(bot.threadId);
             return json(res, 200, { ok: true });
+        }
+        // ── routines (scheduled turns) ──
+        m = path.match(/^\/api\/bots\/([\w-]+)\/routines$/);
+        if (m && method === "GET") {
+            if (!store.bot(m[1]))
+                return json(res, 404, { error: "no such bot" });
+            return json(res, 200, { routines: routines.forBot(m[1]) });
+        }
+        if (m && method === "POST") {
+            const botId = m[1];
+            if (!store.bot(botId))
+                return json(res, 404, { error: "no such bot" });
+            const body = await readBody(req);
+            let routine;
+            try {
+                routine = routines.create({
+                    botId,
+                    prompt: decodePrompt(body.prompt),
+                    schedule: decodeSchedule(body.schedule),
+                    title: body.title === undefined ? undefined : String(body.title),
+                });
+            }
+            catch (e) {
+                return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+            }
+            broadcastRoutines(botId);
+            return json(res, 201, { routine });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)$/);
+        if (m && (method === "PATCH" || method === "DELETE")) {
+            const existing = routines.get(m[1]);
+            if (!existing)
+                return json(res, 404, { error: "no such routine" });
+            if (method === "DELETE") {
+                routines.delete(existing.id);
+                broadcastRoutines(existing.botId);
+                return json(res, 200, { ok: true });
+            }
+            const body = await readBody(req);
+            let routine;
+            try {
+                routine = routines.patch(existing.id, {
+                    ...(body.prompt !== undefined ? { prompt: decodePrompt(body.prompt) } : {}),
+                    ...(body.schedule !== undefined ? { schedule: decodeSchedule(body.schedule) } : {}),
+                    ...(body.title !== undefined ? { title: String(body.title) } : {}),
+                    ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+                });
+            }
+            catch (e) {
+                return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+            }
+            broadcastRoutines(existing.botId);
+            return json(res, 200, { routine });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
+        if (m && method === "POST") {
+            const routine = routines.get(m[1]);
+            if (!routine)
+                return json(res, 404, { error: "no such routine" });
+            if (store.bot(routine.botId)?.busy) {
+                return json(res, 409, { error: "the bot is already working — interrupt it first" });
+            }
+            void runRoutine(routine.id);
+            return json(res, 202, { ok: true });
         }
         // identity handshake for the packaged app's port fallback: the forked
         // child proves it is OURS by echoing its pid (a stray dev server has

@@ -278,6 +278,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.agents = { ...turn.integrations.agents };
         allowed.push("mcp__agents");
       }
+      if (turn.integrations?.watchSkill) { mcpServers.watch_skill = { ...turn.integrations.watchSkill }; allowed.push("mcp__watch_skill"); }
       // permission broker: anything acceptEdits would silently deny becomes
       // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
       // bypassPermissions (fullAuto) — nothing would ever ask.

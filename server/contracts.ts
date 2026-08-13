@@ -109,6 +109,8 @@ export interface SendTurnInput {
      * through the harness so this bot can message other bots. The harness
      * owns turns, permissions, and recursion limits; the proxy only forwards. */
     agents?: { command: string; args: string[]; env: Record<string, string> };
+    /** Local watch-skill MCP server, added automatically for a video turn. */
+    watchSkill?: { command: string; args: string[]; env: Record<string, string> };
   };
   cwd?: string;
 }

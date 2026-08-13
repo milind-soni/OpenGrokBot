@@ -2,11 +2,11 @@
 // over stdio). Rides the generic ACP runtime in acp/core.ts; this file is only
 // the per-harness quirks.
 //
-// Auth is lenient (authFailure "continue"): the advertised method is the
-// terminal `reasonix-setup` flow, which OpenMausBot cannot drive, so the turn
-// proceeds on Reasonix's ambient login — the AI_GATEWAY_API_KEY seeded into
-// ~/.reasonix/.env by the finix `reasonix` wrapper.
-import { existsSync } from "node:fs";
+// Auth is lenient (authFailure "continue"): the only advertised method is the
+// terminal `reasonix-setup` flow, which a GUI host cannot drive, so it is
+// skipped entirely and the turn proceeds on Reasonix's ambient login —
+// <Reasonix home>/.env (see CONFIG_PATHS.md upstream).
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -30,14 +30,28 @@ const support: AcpSupport = {
   // OpenMausBot passes the picker model verbatim (provider name or provider/model).
   spawnArgs: (_config, turn) => ["acp", ...(turn.model ? ["--model", turn.model] : [])],
 
-  // The one advertised auth method is terminal (launches `reasonix setup`); skip
-  // authenticate and rely on the ambient ~/.reasonix/.env login.
-  pickAuthMethod: (methods) =>
-    methods.some((m) => m.id === "reasonix-setup") ? "reasonix-setup" : null,
+  // The one advertised auth method is terminal (launches `reasonix setup` in a
+  // real terminal); OpenMausBot cannot drive it, so skip authenticate and rely
+  // on the ambient <Reasonix home>/.env login. Returning the id would make
+  // core.ts issue a useless terminal authenticate RPC.
+  pickAuthMethod: () => null,
   authFailure: "continue",
   isAuthenticated: (env) => {
-    const stateHome = env.REASONIX_STATE_HOME || join(homedir(), ".reasonix");
-    return existsSync(join(stateHome, ".env"));
+    // Credentials live in <Reasonix home>/.env. REASONIX_HOME overrides;
+    // REASONIX_STATE_HOME only relocates runtime state (sessions/archives/
+    // memory), never provider credentials. Windows: %APPDATA%\reasonix.
+    const home =
+      env.REASONIX_HOME ||
+      (process.platform === "win32"
+        ? join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "reasonix")
+        : join(homedir(), ".reasonix"));
+    try {
+      const content = readFileSync(join(home, ".env"), "utf8");
+      // at least one non-comment KEY=value line with a non-empty value
+      return /^\s*[A-Za-z_][A-Za-z0-9_]*=.+\S/m.test(content);
+    } catch {
+      return false;
+    }
   },
 };
 

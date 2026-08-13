@@ -492,7 +492,10 @@ export function Sidebar() {
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
         {isElectron ? (
-          <div className="w-14" />
+          // Reserves room for the macOS traffic lights. Windows has nothing on
+          // the left — its caption buttons overlay the chat header top-right —
+          // so reserving 56px there is just a blank gap.
+          <div className={window.ogb?.platform === "win32" ? "" : "w-14"} />
         ) : (
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full bg-[#ff5f57]" />

@@ -125,6 +125,11 @@ export interface ProviderAdapter {
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
     agentsMcp?: boolean;
+    /** True when the driver mounts turn.integrations.computer (the box's
+     * screenshot/click tools). Same rule as agentsMcp: a bot must never be
+     * told it has a computer whose tools its driver cannot mount — it
+     * burns turns hunting for tools that aren't there. */
+    computerMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

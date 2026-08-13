@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
@@ -10,10 +10,14 @@ import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { CreationsPanel } from "@/components/CreationsPanel";
+import { deriveCreations } from "@/lib/creations";
+import { creationOpenRequest } from "@/lib/creation-navigation";
 
 function Shell() {
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+  const creations = useMemo(() => deriveCreations(state.bots), [state.bots]);
 
   // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next.
   // Kept deliberately small; every panel already closes on Esc.
@@ -69,6 +73,13 @@ function Shell() {
       {state.computerOpen && bot && <ComputerPanel bot={bot} />}
       {state.appSettingsOpen && <AppSettingsPanel />}
       {state.pluginsOpen && <PluginsPanel />}
+      {state.creationsOpen && (
+        <CreationsPanel
+          creations={creations}
+          onClose={() => dispatch({ type: "toggleCreations", open: false })}
+          onOpen={(creation) => dispatch({ type: "openCreation", request: creationOpenRequest(creation) })}
+        />
+      )}
       </div>
     </div>
   );

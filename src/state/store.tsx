@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import type { MausColor, MausMotion } from "@/lib/mascot";
+import type { OpenCreationRequest } from "@/lib/creation-navigation";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -164,6 +165,8 @@ interface AppState {
   selectedId: string;
   settingsOpen: boolean;
   pluginsOpen: boolean;
+  creationsOpen: boolean;
+  openCreationRequest: OpenCreationRequest | null;
   computerOpen: boolean;
   appSettingsOpen: boolean;
   /** in-flight assistant text per threadId (content.delta fold) */
@@ -213,6 +216,8 @@ type Action =
   | { type: "error"; message: string | null }
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
+  | { type: "toggleCreations"; open?: boolean }
+  | { type: "openCreation"; request: OpenCreationRequest }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
   | {
@@ -420,10 +425,36 @@ function reducer(state: AppState, action: Action): AppState {
         settingsOpen: open,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
+        pluginsOpen: open ? false : state.pluginsOpen,
+        creationsOpen: open ? false : state.creationsOpen,
       };
     }
-    case "togglePlugins":
-      return { ...state, pluginsOpen: action.open ?? !state.pluginsOpen };
+    case "togglePlugins": {
+      const open = action.open ?? !state.pluginsOpen;
+      return { ...state, pluginsOpen: open, creationsOpen: open ? false : state.creationsOpen };
+    }
+    case "toggleCreations": {
+      const open = action.open ?? !state.creationsOpen;
+      return {
+        ...state,
+        creationsOpen: open,
+        pluginsOpen: open ? false : state.pluginsOpen,
+        settingsOpen: open ? false : state.settingsOpen,
+        computerOpen: open ? false : state.computerOpen,
+        appSettingsOpen: open ? false : state.appSettingsOpen,
+      };
+    }
+    case "openCreation":
+      return updateBot(
+        {
+          ...state,
+          selectedId: action.request.botId,
+          creationsOpen: false,
+          openCreationRequest: action.request,
+        },
+        action.request.botId,
+        (bot) => ({ ...bot, unread: false }),
+      );
     case "toggleComputer": {
       const open = action.open ?? !state.computerOpen;
       return {
@@ -431,6 +462,7 @@ function reducer(state: AppState, action: Action): AppState {
         computerOpen: open,
         settingsOpen: open ? false : state.settingsOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
+        creationsOpen: open ? false : state.creationsOpen,
       };
     }
     case "toggleAppSettings": {
@@ -441,6 +473,7 @@ function reducer(state: AppState, action: Action): AppState {
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
+        creationsOpen: open ? false : state.creationsOpen,
       };
     }
     case "updateBot": {
@@ -496,6 +529,8 @@ const initialState: AppState = {
   selectedId: "",
   settingsOpen: false,
   pluginsOpen: false,
+  creationsOpen: false,
+  openCreationRequest: null,
   computerOpen: false,
   appSettingsOpen: false,
   streaming: {},

@@ -12,6 +12,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Puzzle,
   Trash2,
 } from "lucide-react";
@@ -270,6 +271,13 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="px-3 pb-3 pt-2">
+        <button
+          onClick={() => dispatch({ type: "toggleCreations", open: true })}
+          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+        >
+          <Sparkles size={20} className="text-ink-secondary" />
+          <span className="text-[14px] text-ink">Creations</span>
+        </button>
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"

@@ -5,7 +5,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {

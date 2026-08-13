@@ -91,6 +91,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
           computer: { driver: "boxAgent" },
+          hermes: { driver: "hermes" },
         };
   for (const entry of Object.values(map)) {
     entry.environment = {

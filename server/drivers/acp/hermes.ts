@@ -1,0 +1,3 @@
+import { createAcpDriver, type AcpSupport } from "./core.ts";
+const support: AcpSupport = { driverKind: "hermes", displayName: "Hermes", models: { default: "default", options: [{ id: "default", label: "Hermes default" }] }, defaultCli: "hermes-acp", nativeSource: "hermes.acp", loginNote: "Hermes ACP is not installed or authenticated — install it and complete its provider setup first", spawnArgs: () => [], pickAuthMethod: methods => methods[0]?.id ?? null, authFailure: "continue", isAuthenticated: () => true, buildPromptText: t => t.system ? `${t.system}\n\n${t.text}` : t.text };
+export const HermesDriver = createAcpDriver(support);

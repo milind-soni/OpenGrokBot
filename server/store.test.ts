@@ -83,6 +83,26 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.resumeCursors).toEqual({ claude: "sess-abc", codex: "thread-xyz" });
   });
 
+  it("persists a checkpoint pointer and marks an in-flight task interrupted after restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const message = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "do the task" });
+    const checkpoint = store.createCheckpoint(bot.id)!;
+    expect(checkpoint).toMatchObject({ status: "running", activeLeafId: message.id, modelSelection: selection() });
+
+    const reloaded = new Store(selection);
+    const recovered = reloaded.checkpoint(bot.id, checkpoint.id)!;
+    expect(recovered).toMatchObject({ status: "interrupted", reason: "harness restarted", activeLeafId: message.id });
+  });
+
+  it("updates a checkpoint without mutating its original model snapshot", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const checkpoint = store.createCheckpoint(bot.id)!;
+    store.updateCheckpoint(bot.id, checkpoint.id, { status: "failed", reason: "provider failed" });
+    expect(store.checkpoint(bot.id, checkpoint.id)).toMatchObject({ status: "failed", reason: "provider failed", modelSelection: selection() });
+  });
+
   it("seedIfEmpty creates exactly one starter bot, once", () => {
     const store = new Store(selection);
     store.seedIfEmpty();

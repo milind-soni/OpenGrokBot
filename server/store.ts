@@ -93,6 +93,10 @@ export interface BotRecord {
   modelSelection: ModelSelection;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
+  /** Durable task snapshots. Transcript branches and provider cursors remain
+   * the source of truth; a checkpoint is a safe, user-addressable pointer to
+   * that state plus its lifecycle. */
+  checkpoints?: TaskCheckpoint[];
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
    * or none. Unset = auto (box when it exists, else local when available). */
   computer?: "cloud" | "local" | "off";
@@ -104,6 +108,17 @@ export interface BotRecord {
   hidden?: boolean;
   busy?: boolean;
   createdAt: number;
+}
+
+export interface TaskCheckpoint {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  status: "running" | "interrupted" | "completed" | "failed";
+  activeLeafId: string | null;
+  modelSelection: ModelSelection;
+  lastMessageId?: string;
+  reason?: string;
 }
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
@@ -176,8 +191,20 @@ export class Store {
       this.groups = [];
     }
     // busy never survives a restart — no turn does either
-    for (const b of this.bots) b.busy = false;
+    let changed = false;
+    for (const b of this.bots) {
+      b.busy = false;
+      for (const checkpoint of b.checkpoints ?? []) {
+        if (checkpoint.status === "running") {
+          checkpoint.status = "interrupted";
+          checkpoint.reason = "harness restarted";
+          checkpoint.updatedAt = Date.now();
+          changed = true;
+        }
+      }
+    }
     for (const g of this.groups) g.busyBotId = null;
+    if (changed) this.saveBots();
   }
 
   private saveBots() {
@@ -382,6 +409,7 @@ export class Store {
       unread: false,
       modelSelection: this.defaultSelection(),
       resumeCursors: {},
+      checkpoints: [],
       createdAt: Date.now(),
     };
     this.bots.unshift(bot);
@@ -420,6 +448,40 @@ export class Store {
     if (!bot) return;
     bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
+  }
+
+  checkpoints(botId: string) {
+    return [...(this.bot(botId)?.checkpoints ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  checkpoint(botId: string, checkpointId: string) {
+    return this.bot(botId)?.checkpoints?.find((checkpoint) => checkpoint.id === checkpointId) ?? null;
+  }
+
+  runningCheckpoint(botId: string) {
+    return this.bot(botId)?.checkpoints?.find((checkpoint) => checkpoint.status === "running") ?? null;
+  }
+
+  createCheckpoint(botId: string): TaskCheckpoint | null {
+    const bot = this.bot(botId);
+    if (!bot) return null;
+    const now = Date.now();
+    const checkpoint: TaskCheckpoint = {
+      id: newId(), createdAt: now, updatedAt: now, status: "running",
+      activeLeafId: this.activeLeaf(bot.threadId), modelSelection: { ...bot.modelSelection },
+      lastMessageId: this.messagesFor(bot.threadId).at(-1)?.id,
+    };
+    bot.checkpoints = [checkpoint, ...(bot.checkpoints ?? [])].slice(0, 20);
+    this.saveBots();
+    return checkpoint;
+  }
+
+  updateCheckpoint(botId: string, checkpointId: string, patch: Partial<Pick<TaskCheckpoint, "status" | "reason" | "activeLeafId" | "lastMessageId">>) {
+    const checkpoint = this.checkpoint(botId, checkpointId);
+    if (!checkpoint) return null;
+    Object.assign(checkpoint, patch, { updatedAt: Date.now() });
+    this.saveBots();
+    return checkpoint;
   }
 
   /** First-run seed: one bot so the app never opens empty — it gets a

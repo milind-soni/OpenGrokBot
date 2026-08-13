@@ -180,6 +180,16 @@ describe("harness HTTP API", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("lists checkpoints and rejects invalid resume requests safely", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+    const list = await api("GET", `/api/bots/${bot.id}/checkpoints`);
+    expect(list.status).toBe(200);
+    expect(list.body.checkpoints).toEqual([]);
+    const missing = await api("POST", `/api/bots/${bot.id}/checkpoints/no-such-checkpoint/resume`);
+    expect(missing.status).toBe(404);
+  });
+
   it("saves config keys write-only and reports booleans", async () => {
     const before = await api("GET", "/api/config");
     expect(before.body.box).toEqual({ configured: false });

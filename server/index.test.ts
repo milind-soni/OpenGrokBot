@@ -102,6 +102,14 @@ describe("harness HTTP API", () => {
     expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
   });
 
+  it("creates and removes local skill metadata without exposing instructions", async () => {
+    const created = await api("POST", "/api/skills", { id: "writing", name: "Writing", description: "Clear prose", instructions: "Keep answers concise." });
+    expect(created.status).toBe(201); expect(JSON.stringify(created.body)).not.toContain("Keep answers concise");
+    const listed = await api("GET", "/api/skills"); expect(listed.body.items).toMatchObject([{ id: "writing", enabled: true }]);
+    expect((await api("PATCH", "/api/skills/writing", { enabled: false })).body.item.enabled).toBe(false);
+    expect((await api("DELETE", "/api/skills/writing")).status).toBe(200);
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);

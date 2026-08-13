@@ -85,6 +85,7 @@ export interface Bot {
   computer?: "cloud" | "local" | "off";
   pinned?: boolean;
   hidden?: boolean;
+  skillIds?: string[];
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
@@ -124,6 +125,7 @@ export interface ConfigStatus {
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
+  skills?: { items: Array<{ id: string; name: string; description: string; version: string; source: string; enabled: boolean }> };
 }
 
 /** One row of GET /api/instances — the model picker's data. */

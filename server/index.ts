@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import { normalizeSkill, skillPrompt, skillSnapshot } from "./skills.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -368,7 +369,7 @@ async function startTurn(
     bot.description && `About: ${bot.description}`,
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ") + skillPrompt(cfg.skills?.items, bot.skillIds);
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -623,6 +624,7 @@ function configStatus() {
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    skills: { items: (cfg.skills?.items ?? []).map(skillSnapshot) },
   };
 }
 
@@ -885,6 +887,7 @@ const server = createServer(async (req, res) => {
       for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
+      if (Array.isArray(body.skillIds)) patch.skillIds = body.skillIds.filter((id: unknown): id is string => typeof id === "string").slice(0, 50);
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       broadcast({ kind: "bot", bot });
@@ -1038,6 +1041,37 @@ const server = createServer(async (req, res) => {
     }
 
     // ── connectors (Composio) ──
+    if (method === "GET" && path === "/api/skills") return json(res, 200, { items: (cfg.skills?.items ?? []).map(skillSnapshot) });
+    if (method === "POST" && path === "/api/skills") {
+      try {
+        const item = normalizeSkill(await readBody(req));
+        const items = cfg.skills?.items ?? [];
+        if (items.some((skill) => skill.id === item.id)) return json(res, 409, { error: "skill id already exists" });
+        saveConfig({ skills: { items: [...items, item] } }); Object.assign(cfg, loadConfig());
+        const status = configStatus(); broadcast({ kind: "config", ...status });
+        return json(res, 201, { item: skillSnapshot(item) });
+      } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "Invalid skill" }); }
+    }
+    m = path.match(/^\/api\/skills\/([\w-]+)$/);
+    if (m && (method === "PATCH" || method === "PUT")) {
+      const items = cfg.skills?.items ?? []; const current = items.find((skill) => skill.id === m![1]);
+      if (!current) return json(res, 404, { error: "no such skill" });
+      try {
+        const item = normalizeSkill({ ...current, ...(await readBody(req)) }, current.id);
+        saveConfig({ skills: { items: items.map((skill) => skill.id === item.id ? item : skill) } }); Object.assign(cfg, loadConfig());
+        const status = configStatus(); broadcast({ kind: "config", ...status });
+        return json(res, 200, { item: skillSnapshot(item) });
+      } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "Invalid skill" }); }
+    }
+    if (m && method === "DELETE") {
+      const items = cfg.skills?.items ?? [];
+      if (!items.some((skill) => skill.id === m![1])) return json(res, 404, { error: "no such skill" });
+      saveConfig({ skills: { items: items.filter((skill) => skill.id !== m![1]) } }); Object.assign(cfg, loadConfig());
+      for (const bot of store.bots.filter((bot) => bot.skillIds?.includes(m![1]))) store.patchBot(bot.id, { skillIds: bot.skillIds!.filter((id) => id !== m![1]) });
+      const status = configStatus(); broadcast({ kind: "config", ...status });
+      return json(res, 200, { ok: true });
+    }
+
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
       return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards });

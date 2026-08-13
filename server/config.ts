@@ -7,6 +7,16 @@ import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
 
+export interface SkillConfig {
+  id: string;
+  name: string;
+  description?: string;
+  instructions: string;
+  version?: string;
+  source?: "built-in" | "imported" | "custom" | "taught";
+  enabled?: boolean;
+}
+
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   /** key = ck_… Connect consumer key (connections + agent tools);
@@ -17,6 +27,8 @@ export interface AppConfig {
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
+  /** Local reusable instructions; selected by id per bot at turn time. */
+  skills?: { items?: SkillConfig[] };
   instances?: InstanceConfigMap;
 }
 
@@ -62,7 +74,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "profile", "skills"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }

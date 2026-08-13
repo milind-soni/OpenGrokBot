@@ -263,14 +263,23 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
+// Where Electron's app.getPath("userData") lands, per platform — the
+// hardcoded macOS path found nothing anywhere else, and threw the
+// non-ENOENT errors into the same silent catch.
+function userDataRoot(): string {
+  if (process.platform === "win32") return process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
+  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support");
+  return process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+}
+
 // Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/OpenMausBot/cua-connection.json). Read
-// fresh each turn — Electron may restart or permissions may change.
+// (<userData>/cua-connection.json). Read fresh each turn — Electron may
+// restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
   // new name first; pre-rename desktop builds used the old directory
   for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
     try {
-      const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
+      const p = join(userDataRoot(), dir, "cua-connection.json");
       const conn = JSON.parse(readFileSync(p, "utf8"));
       if (!conn || conn.mode === "unavailable" || !conn.mcpCommand) continue;
       return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };

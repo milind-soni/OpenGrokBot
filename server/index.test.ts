@@ -276,7 +276,7 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", `/api/routines/${routine.id}`, { enabled: false })).status).toBe(404);
   });
 
-  it("fires a routine on demand: marks the transcript, advances the clock, reports the failure", async () => {
+  it("fires a routine on demand without consuming the scheduled occurrence", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
     const created = await api("POST", `/api/bots/${bot.id}/routines`, {
@@ -306,10 +306,10 @@ describe("harness HTTP API", () => {
     expect(activity[1].tool!.name).toContain("routine skipped");
     expect(activity[1].tool!.ok).toBe(false);
 
-    // the clock advanced from the firing, so it cannot hot-loop
+    // a manual preview records the attempt without moving the automatic slot
     const after = (await api("GET", `/api/bots/${bot.id}/routines`)).body.routines[0];
     expect(after.lastRunAt).toBeGreaterThan(0);
-    expect(after.nextRunAt).toBeGreaterThan(routine.nextRunAt - 1);
+    expect(after.nextRunAt).toBe(routine.nextRunAt);
 
     await api("DELETE", `/api/routines/${routine.id}`);
   });
@@ -349,6 +349,20 @@ describe("harness HTTP API", () => {
     const bad = await api("PATCH", `/api/bots/${body.bots[0].id}`, { sectionId: "not-a-section" });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toContain("section");
+  });
+
+  it("rejects malformed section patch fields instead of coercing them", async () => {
+    const created = await api("POST", "/api/sections", { name: "Work" });
+    const sectionId = created.body.section.id;
+
+    for (const patch of [
+      { name: null },
+      { order: "2" },
+      { order: null },
+      { collapsed: 1 },
+    ]) {
+      expect((await api("PATCH", `/api/sections/${sectionId}`, patch)).status).toBe(400);
+    }
   });
 
   it("404s unknown routes with the route in the error", async () => {

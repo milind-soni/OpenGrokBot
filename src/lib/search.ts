@@ -20,11 +20,13 @@ export function score(text: string, query: string): number {
   if (!t) return 0;
 
   if (t === q) return 1000;
-  if (t.startsWith(q)) return 900 - t.length;
+  if (t.startsWith(q)) return Math.max(801, 900 - t.length);
   // word-start: "computer panel" matches "pan"
-  if (t.split(/[\s\-_/]+/).some((word) => word.startsWith(q))) return 800 - t.length;
+  if (t.split(/[\s\-_/]+/).some((word) => word.startsWith(q))) {
+    return Math.max(701, 800 - t.length);
+  }
   const at = t.indexOf(q);
-  if (at !== -1) return 700 - at - t.length / 100;
+  if (at !== -1) return Math.max(501, 700 - at - t.length / 100);
 
   // subsequence: every query character appears in order
   let cursor = 0;

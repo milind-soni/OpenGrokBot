@@ -2,7 +2,7 @@
 // the clock (server/routines.ts fires them as user-less turns), so this is a
 // thin CRUD view over /api/bots/:id/routines that re-reads while it's open,
 // letting a firing move the countdown without a manual refresh.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarClock, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { api } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -56,11 +56,15 @@ function countdown(nextRunAt: number): string {
 }
 
 export function Routines({ botId }: { botId: string }) {
-  const [routines, setRoutines] = useState<Routine[] | null>(null);
+  const [loaded, setLoaded] = useState<{ botId: string; routines: Routine[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const loadRequest = useRef(0);
+  const activeBotId = useRef(botId);
+  activeBotId.current = botId;
+  const routines = loaded?.botId === botId ? loaded.routines : null;
 
   const [prompt, setPrompt] = useState("");
   const [kind, setKind] = useState<Schedule["kind"]>("daily");
@@ -69,19 +73,33 @@ export function Routines({ botId }: { botId: string }) {
   const [day, setDay] = useState(1);
 
   const load = useCallback(() => {
+    if (activeBotId.current !== botId) return;
+    const request = ++loadRequest.current;
     api(`/api/bots/${botId}/routines`)
-      .then((body) => setRoutines(body.routines))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .then((body) => {
+        if (request !== loadRequest.current || activeBotId.current !== botId) return;
+        if (!Array.isArray(body.routines)) throw new Error("Invalid routines response");
+        setLoaded({ botId, routines: body.routines });
+        setError(null);
+      })
+      .catch((e) => {
+        if (request !== loadRequest.current || activeBotId.current !== botId) return;
+        setError(e instanceof Error ? e.message : String(e));
+      });
   }, [botId]);
 
   // re-read while the panel is open: the countdown ticks and a routine that
   // fires server-side should move on its own
   useEffect(() => {
-    setRoutines(null);
+    setLoaded(null);
+    setError(null);
     setComposing(false);
     load();
     const timer = setInterval(load, 20_000);
-    return () => clearInterval(timer);
+    return () => {
+      loadRequest.current += 1;
+      clearInterval(timer);
+    };
   }, [load]);
 
   const act = async (id: string, run: () => Promise<unknown>) => {
@@ -99,6 +117,18 @@ export function Routines({ botId }: { botId: string }) {
 
   const create = async () => {
     const [hour, minute] = time.split(":").map(Number);
+    if (
+      kind !== "interval" &&
+      (!Number.isInteger(hour) ||
+        !Number.isInteger(minute) ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59)
+    ) {
+      setError("Enter a valid time between 00:00 and 23:59.");
+      return;
+    }
     const schedule: Schedule =
       kind === "interval"
         ? { kind: "interval", minutes }

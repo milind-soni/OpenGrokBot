@@ -31,6 +31,7 @@ export interface Routine {
 }
 
 const ROUTINES_FILE = join(DATA_DIR, "routines.json");
+export const MAX_ROUTINE_TITLE_LENGTH = 48;
 
 /** A routine that came due while the app was closed fires once if it was
  * missed within this window; anything staler rolls forward silently, so a
@@ -80,6 +81,14 @@ export function decodePrompt(raw: unknown): string {
   return text;
 }
 
+export function decodeTitle(raw: unknown, fallback: string): string {
+  const text = String(raw ?? "").trim();
+  if (text.length > MAX_ROUTINE_TITLE_LENGTH) {
+    throw new Error(`routine: title must be ${MAX_ROUTINE_TITLE_LENGTH} characters or fewer`);
+  }
+  return text || fallback.trim().slice(0, MAX_ROUTINE_TITLE_LENGTH);
+}
+
 /** The next firing strictly after `from`. Pure — no Date.now() inside. */
 export function nextRunAfter(schedule: Schedule, from: number): number {
   if (schedule.kind === "interval") return from + schedule.minutes * 60_000;
@@ -124,6 +133,7 @@ export class RoutineStore {
   private routines: Routine[] = [];
 
   constructor(now = Date.now()) {
+    let repaired = false;
     mkdirSync(DATA_DIR, { recursive: true });
     try {
       const raw = JSON.parse(readFileSync(ROUTINES_FILE, "utf8"));
@@ -136,12 +146,17 @@ export class RoutineStore {
     this.routines = this.routines.filter((r) => {
       try {
         r.schedule = decodeSchedule(r.schedule);
+        if (!Number.isFinite(r.nextRunAt)) {
+          r.nextRunAt = nextRunAfter(r.schedule, now);
+          repaired = true;
+        }
         return true;
       } catch {
+        repaired = true;
         return false;
       }
     });
-    if (this.rollForwardStale(now)) this.save();
+    if (this.rollForwardStale(now) || repaired) this.save();
   }
 
   /** Missed-run policy on boot: anything staler than the catch-up window
@@ -173,11 +188,11 @@ export class RoutineStore {
     return this.routines.find((r) => r.id === id) ?? null;
   }
 
-  create(input: { botId: string; prompt: string; schedule: Schedule; title?: string }, now = Date.now()): Routine {
+  create(input: { botId: string; prompt: string; schedule: Schedule; title?: unknown }, now = Date.now()): Routine {
     const routine: Routine = {
       id: newId(),
       botId: input.botId,
-      title: (input.title ?? "").trim() || input.prompt.slice(0, 48),
+      title: decodeTitle(input.title, input.prompt),
       prompt: input.prompt,
       schedule: input.schedule,
       enabled: true,
@@ -189,10 +204,17 @@ export class RoutineStore {
     return routine;
   }
 
-  patch(id: string, patch: Partial<Pick<Routine, "title" | "prompt" | "schedule" | "enabled">>, now = Date.now()) {
+  patch(
+    id: string,
+    patch: { title?: unknown; prompt?: string; schedule?: Schedule; enabled?: boolean },
+    now = Date.now(),
+  ) {
     const routine = this.get(id);
     if (!routine) return null;
-    Object.assign(routine, patch);
+    if (patch.title !== undefined) routine.title = decodeTitle(patch.title, routine.title);
+    if (patch.prompt !== undefined) routine.prompt = patch.prompt;
+    if (patch.schedule !== undefined) routine.schedule = patch.schedule;
+    if (patch.enabled !== undefined) routine.enabled = patch.enabled;
     // a re-scheduled or re-enabled routine restarts its countdown from now
     if (patch.schedule || patch.enabled === true) routine.nextRunAt = nextRunAfter(routine.schedule, now);
     this.save();
@@ -206,11 +228,14 @@ export class RoutineStore {
 
   /** Stamp a firing and schedule the next one from `now` — never from the
    * missed slot, so a slow turn can't build a backlog. */
-  markRan(id: string, now = Date.now()): Routine | null {
+  markRan(
+    id: string,
+    { now = Date.now(), advanceSchedule = true }: { now?: number; advanceSchedule?: boolean } = {},
+  ): Routine | null {
     const routine = this.get(id);
     if (!routine) return null;
     routine.lastRunAt = now;
-    routine.nextRunAt = nextRunAfter(routine.schedule, now);
+    if (advanceSchedule) routine.nextRunAt = nextRunAfter(routine.schedule, now);
     this.save();
     return routine;
   }

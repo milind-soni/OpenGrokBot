@@ -747,7 +747,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "screenFrame", botId: frame.botId, png: frame.png, mime: frame.mime ?? "image/png" });
           break;
         case "sections":
-          rawDispatch({ type: "sections", sections: frame.sections });
+          rawDispatch({
+            type: "sections",
+            sections: Array.isArray(frame.sections) ? frame.sections : [],
+          });
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });

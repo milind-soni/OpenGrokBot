@@ -2,13 +2,14 @@
 // without a clock or a server: every case pins a fixed `now` and asserts
 // the next firing. Local-time cases build their expectations with local
 // Date math so the suite passes in any timezone.
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR, ensureDirs } from "./config.ts";
 import {
   CATCHUP_WINDOW_MS,
+  MAX_ROUTINE_TITLE_LENGTH,
   RoutineStore,
   decodePrompt,
   decodeSchedule,
@@ -16,6 +17,8 @@ import {
   nextRunAfter,
   type Schedule,
 } from "./routines.ts";
+
+const ROUTINES_FILE = join(DATA_DIR, "routines.json");
 
 /** Local wall-clock helper: today at hh:mm, offset by `days`. */
 const localAt = (base: number, hour: number, minute: number, days = 0) => {
@@ -136,6 +139,43 @@ describe("RoutineStore", () => {
     expect(new RoutineStore(now).forBot("bot-1").map((r) => r.title)).toEqual(["Standup"]);
   });
 
+  it("repairs and saves an invalid persisted next-run timestamp", () => {
+    freshStore(now);
+    writeFileSync(
+      ROUTINES_FILE,
+      JSON.stringify([
+        {
+          id: "broken-time",
+          botId: "bot-1",
+          title: "Repair me",
+          prompt: "Run this",
+          schedule: every15,
+          enabled: true,
+          createdAt: now,
+          nextRunAt: null,
+        },
+      ]),
+    );
+
+    const repaired = new RoutineStore(now).get("broken-time");
+    expect(repaired?.nextRunAt).toBe(now + 15 * 60_000);
+    const saved = JSON.parse(readFileSync(ROUTINES_FILE, "utf8")) as Array<{ nextRunAt: number }>;
+    expect(saved[0].nextRunAt).toBe(now + 15 * 60_000);
+  });
+
+  it("normalizes and limits titles consistently on create and patch", () => {
+    const store = freshStore();
+    const routine = store.create(
+      { botId: "bot-1", prompt: "check the build", schedule: every15, title: "  Build check  " },
+      now,
+    );
+    expect(routine.title).toBe("Build check");
+    expect(store.patch(routine.id, { title: "   " }, now)?.title).toBe("Build check");
+    expect(() =>
+      store.patch(routine.id, { title: "x".repeat(MAX_ROUTINE_TITLE_LENGTH + 1) }, now),
+    ).toThrow(/48 characters or fewer/);
+  });
+
   it("lists a bot's routines soonest-first and ignores other bots", () => {
     const store = freshStore();
     store.create({ botId: "bot-1", prompt: "later", schedule: { kind: "interval", minutes: 60 } }, now);
@@ -157,10 +197,19 @@ describe("RoutineStore", () => {
   it("schedules the next run from now, so a late turn cannot build a backlog", () => {
     const store = freshStore();
     const routine = store.create({ botId: "bot-1", prompt: "poll", schedule: every15 }, now - 60 * 60_000);
-    const ran = store.markRan(routine.id, now)!;
+    const ran = store.markRan(routine.id, { now })!;
     expect(ran.lastRunAt).toBe(now);
     expect(ran.nextRunAt).toBe(now + 15 * 60_000);
     expect(store.due(now)).toEqual([]);
+  });
+
+  it("records a manual run without consuming its scheduled occurrence", () => {
+    const store = freshStore();
+    const routine = store.create({ botId: "bot-1", prompt: "poll", schedule: every15 }, now);
+    const nextRunAt = routine.nextRunAt;
+    const ran = store.markRan(routine.id, { now: now + 60_000, advanceSchedule: false })!;
+    expect(ran.lastRunAt).toBe(now + 60_000);
+    expect(ran.nextRunAt).toBe(nextRunAt);
   });
 
   it("disabling holds the slot; re-enabling restarts the countdown", () => {

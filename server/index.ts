@@ -461,7 +461,10 @@ function broadcastRoutines(botId: string) {
   broadcast({ kind: "routines", botId, routines: routines.forBot(botId) });
 }
 
-async function runRoutine(routineId: string) {
+async function runRoutine(
+  routineId: string,
+  { advanceSchedule = true }: { advanceSchedule?: boolean } = {},
+) {
   const routine = routines.get(routineId);
   if (!routine) return;
   const bot = store.bot(routine.botId);
@@ -469,9 +472,9 @@ async function runRoutine(routineId: string) {
     routines.deleteForBot(routine.botId);
     return;
   }
-  // advance the clock BEFORE the turn: a failing or slow routine must not
-  // hot-loop on the next tick
-  routines.markRan(routine.id);
+  // Automatic runs advance BEFORE the turn so failures cannot hot-loop.
+  // Manual previews record the run but preserve the scheduled occurrence.
+  routines.markRan(routine.id, { advanceSchedule });
   broadcastRoutines(bot.id);
 
   const marker = store.appendMessage(bot.threadId, {
@@ -805,17 +808,24 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const patch: { name?: string; order?: number; collapsed?: boolean } = {};
       if (body.name !== undefined) {
-        const name = String(body.name).trim();
+        if (typeof body.name !== "string") return json(res, 400, { error: "name must be a string" });
+        const name = body.name.trim();
         if (!name) return json(res, 400, { error: "name required" });
         if (name.length > 60) return json(res, 400, { error: "name must be under 60 characters" });
         patch.name = name;
       }
       if (body.order !== undefined) {
-        const order = Number(body.order);
-        if (!Number.isFinite(order)) return json(res, 400, { error: "order must be a number" });
-        patch.order = order;
+        if (typeof body.order !== "number" || !Number.isFinite(body.order)) {
+          return json(res, 400, { error: "order must be a number" });
+        }
+        patch.order = body.order;
       }
-      if (body.collapsed !== undefined) patch.collapsed = Boolean(body.collapsed);
+      if (body.collapsed !== undefined) {
+        if (typeof body.collapsed !== "boolean") {
+          return json(res, 400, { error: "collapsed must be a boolean" });
+        }
+        patch.collapsed = body.collapsed;
+      }
       const section = store.patchSection(m[1], patch);
       broadcast({ kind: "sections", sections: store.sectionList() });
       return json(res, 200, { section });
@@ -837,7 +847,7 @@ const server = createServer(async (req, res) => {
           botId,
           prompt: decodePrompt(body.prompt),
           schedule: decodeSchedule(body.schedule),
-          title: body.title === undefined ? undefined : String(body.title),
+          title: body.title,
         });
       } catch (e) {
         return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
@@ -860,7 +870,7 @@ const server = createServer(async (req, res) => {
         routine = routines.patch(existing.id, {
           ...(body.prompt !== undefined ? { prompt: decodePrompt(body.prompt) } : {}),
           ...(body.schedule !== undefined ? { schedule: decodeSchedule(body.schedule) } : {}),
-          ...(body.title !== undefined ? { title: String(body.title) } : {}),
+          ...(body.title !== undefined ? { title: body.title } : {}),
           ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
         });
       } catch (e) {
@@ -876,7 +886,7 @@ const server = createServer(async (req, res) => {
       if (store.bot(routine.botId)?.busy) {
         return json(res, 409, { error: "the bot is already working — interrupt it first" });
       }
-      void runRoutine(routine.id);
+      void runRoutine(routine.id, { advanceSchedule: false });
       return json(res, 202, { ok: true });
     }
 

@@ -45,7 +45,7 @@ describe("ChatMarkdown HTML creations", () => {
     expect(html).not.toContain("&lt;main&gt;Hidden source&lt;/main&gt;");
   });
 
-  it("labels the selected creation as reopenable without hiding its action", () => {
+  it("labels the selected creation as closable", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         text={"```html\n<p>Ready</p>\n```"}
@@ -54,6 +54,7 @@ describe("ChatMarkdown HTML creations", () => {
         onPreviewArtifact={() => {}}
       />,
     );
-    expect(html).toContain(">Reopen<");
+    expect(html).toContain(">Close<");
+    expect(html).not.toContain("Reopen");
   });
 });

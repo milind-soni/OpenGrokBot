@@ -7,7 +7,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, ChevronDown, ChevronUp, Code2, Copy, PanelRightOpen } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Code2, Copy, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { extractHtmlArtifacts, findStreamingHtmlFence, type HtmlArtifact } from "@/lib/html-artifacts";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
@@ -142,9 +142,10 @@ function CodeBlock({
               <button
                 onClick={() => onPreview(artifact)}
                 className="flex items-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[11px] font-medium text-white hover:opacity-90"
-                title={selected ? "Reopen HTML preview" : "Open HTML preview"}
+                title={selected ? "Close HTML preview" : "Open HTML preview"}
               >
-                <PanelRightOpen size={13} /> <span>{selected ? "Reopen" : "Open"}</span>
+                {selected ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
+                <span>{selected ? "Close" : "Open"}</span>
               </button>
             )}
             <button

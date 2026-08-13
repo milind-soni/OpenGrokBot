@@ -1,4 +1,11 @@
 export type SpecialistTask = "image" | "video";
+export type SpecialistTerminalStatus = "failed" | "cancelled";
+
+export interface SpecialistTerminalOutcome {
+  status: SpecialistTerminalStatus;
+  error: string;
+  messageId?: string;
+}
 
 export interface SpecialistRunInput {
   runtimeThreadId: string;
@@ -7,6 +14,7 @@ export interface SpecialistRunInput {
   primaryTurnId: string;
   task: SpecialistTask;
   interrupt: () => Promise<void>;
+  onTerminal?: (outcome: SpecialistTerminalOutcome) => void;
 }
 
 export interface SpecialistRun extends SpecialistRunInput {
@@ -80,9 +88,14 @@ export class SpecialistRunManager {
       .catch(() => {});
   }
 
-  fail(runtimeThreadId: string, error: Error) {
+  fail(runtimeThreadId: string, error: Error, status: SpecialistTerminalStatus = "failed") {
     const run = this.byThread.get(runtimeThreadId);
     if (!run) return;
+    try {
+      run.onTerminal?.({ status, error: error.message, messageId: run.mediaMessageId });
+    } catch {
+      // Lifecycle cleanup must still complete if transcript persistence fails.
+    }
     this.remove(run);
     run.reject(error);
   }
@@ -91,13 +104,25 @@ export class SpecialistRunManager {
     const matches = [...this.byThread.values()].filter(
       (run) => run.botId === botId && run.primaryTurnId === primaryTurnId,
     );
-    for (const run of matches) this.fail(run.runtimeThreadId, new Error(`${run.task} generation cancelled`));
+    for (const run of matches) {
+      this.fail(run.runtimeThreadId, new Error(`${run.task} generation cancelled`), "cancelled");
+    }
     await Promise.all(matches.map((run) => run.interrupt().catch(() => {})));
+  }
+
+  async cancelMessage(botId: string, messageId: string): Promise<boolean> {
+    const run = [...this.byThread.values()].find(
+      (candidate) => candidate.botId === botId && candidate.mediaMessageId === messageId,
+    );
+    if (!run) return false;
+    this.fail(run.runtimeThreadId, new Error(`${run.task} generation cancelled`), "cancelled");
+    await run.interrupt().catch(() => {});
+    return true;
   }
 
   async cancelAll(reason = "specialist generation cancelled"): Promise<void> {
     const runs = [...this.byThread.values()];
-    for (const run of runs) this.fail(run.runtimeThreadId, new Error(reason));
+    for (const run of runs) this.fail(run.runtimeThreadId, new Error(reason), "cancelled");
     await Promise.all(runs.map((run) => run.interrupt().catch(() => {})));
   }
 

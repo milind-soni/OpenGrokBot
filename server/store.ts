@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
-import { newId, type MediaOutput, type ModelSelection, type ThreadId } from "./contracts.ts";
+import { newId, type MediaOutput, type MediaStatus, type ModelSelection, type ThreadId } from "./contracts.ts";
 
 export type MausColor =
   | "green"
@@ -100,6 +100,7 @@ export interface BotRecord {
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
+const ACTIVE_MEDIA_STATUSES = new Set<MediaStatus>(["queued", "generating", "downloading"]);
 
 const COLORS: MausColor[] = [
   "green",
@@ -280,6 +281,38 @@ export class Store {
     });
     this.saveThread(threadId);
     return t.messages[idx];
+  }
+
+  settleMediaMessage(
+    threadId: string,
+    messageId: string,
+    status: Extract<MediaStatus, "failed" | "cancelled">,
+    error: string,
+  ): Message | null {
+    const message = this.thread(threadId).messages.find((candidate) => candidate.id === messageId);
+    if (!message?.media) return null;
+    return this.patchMessage(threadId, messageId, {
+      media: message.media.map((output) =>
+        ACTIVE_MEDIA_STATUSES.has(output.status) ? { ...output, status, error } : output,
+      ),
+    });
+  }
+
+  recoverInterruptedMedia(): Array<{ threadId: string; message: Message }> {
+    const recovered: Array<{ threadId: string; message: Message }> = [];
+    for (const bot of this.bots) {
+      for (const candidate of [...this.messagesFor(bot.threadId)]) {
+        if (!candidate.media?.some((output) => ACTIVE_MEDIA_STATUSES.has(output.status))) continue;
+        const message = this.settleMediaMessage(
+          bot.threadId,
+          candidate.id,
+          "failed",
+          "Generation was interrupted before completion. Retry to generate it again.",
+        );
+        if (message) recovered.push({ threadId: bot.threadId, message });
+      }
+    }
+    return recovered;
   }
 
   bot(id: string) {

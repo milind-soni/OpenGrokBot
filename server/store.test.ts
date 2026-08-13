@@ -122,6 +122,53 @@ describe("Store", () => {
     expect(store.patchMessage(bot.threadId, "nope", {})).toBeNull();
   });
 
+  it("settles active media without overwriting completed outputs", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const media = store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "media",
+      media: [
+        { id: "video-1", kind: "video", status: "generating", providerJobId: "job-1" },
+        { id: "image-1", kind: "image", status: "ready", cacheKey: "cached.png" },
+      ],
+    });
+
+    const settled = store.settleMediaMessage(
+      bot.threadId,
+      media.id,
+      "failed",
+      "video generation timed out",
+    );
+
+    expect(settled).toMatchObject({
+      id: media.id,
+      media: [
+        { id: "video-1", status: "failed", error: "video generation timed out" },
+        { id: "image-1", status: "ready", cacheKey: "cached.png" },
+      ],
+    });
+  });
+
+  it("recovers persisted media jobs that cannot survive a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const media = store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "media",
+      media: [{ id: "video-1", kind: "video", status: "generating", providerJobId: "job-1" }],
+    });
+    const reloaded = new Store(selection);
+
+    const recovered = reloaded.recoverInterruptedMedia();
+
+    expect(recovered).toMatchObject([{ threadId: bot.threadId, message: { id: media.id } }]);
+    expect(reloaded.messagesFor(bot.threadId).at(-1)?.media?.[0]).toMatchObject({
+      status: "failed",
+      error: "Generation was interrupted before completion. Retry to generate it again.",
+    });
+  });
+
   it("deleteBot removes the bot and its transcript file", () => {
     const store = new Store(selection);
     const bot = store.createBot();

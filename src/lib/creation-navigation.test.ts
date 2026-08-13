@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CreationEntry } from "./creations";
-import { artifactHeaderMode, creationOpenRequest } from "./creation-navigation";
+import { artifactHeaderMode, creationOpenRequest, toggleArtifactSelection } from "./creation-navigation";
 
 const entry: CreationEntry = {
   id: "m-1:0",
@@ -16,11 +16,16 @@ const entry: CreationEntry = {
 };
 
 describe("creation navigation", () => {
-  it("shows Open latest unless the newest artifact is already open", () => {
+  it("shows Close whenever an artifact workspace is open", () => {
     expect(artifactHeaderMode(undefined, null)).toBe("hidden");
     expect(artifactHeaderMode("latest", null)).toBe("open");
-    expect(artifactHeaderMode("latest", "older")).toBe("open");
+    expect(artifactHeaderMode("latest", "older")).toBe("close");
     expect(artifactHeaderMode("latest", "latest")).toBe("close");
+  });
+  it("closes the selected artifact or switches to the clicked artifact", () => {
+    expect(toggleArtifactSelection("artifact-a", "artifact-a")).toBeNull();
+    expect(toggleArtifactSelection("artifact-a", "artifact-b")).toBe("artifact-b");
+    expect(toggleArtifactSelection(null, "artifact-a")).toBe("artifact-a");
   });
   it("builds a repeatable open request without copying creation payloads", () => {
     const first = creationOpenRequest(entry, "request-1");

@@ -164,7 +164,7 @@ export interface InstanceInfo {
   };
 }
 
-interface AppState {
+export interface AppState {
   bots: Bot[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
@@ -193,7 +193,7 @@ interface AppState {
   } | null;
 }
 
-type Action =
+export type Action =
   | { type: "hydrate"; bots: Bot[] }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -218,6 +218,7 @@ type Action =
   | { type: "provisioning"; botId: string; on: boolean }
   | { type: "setModel"; botId: string; selection: ModelSelection }
   | { type: "interrupt"; botId: string }
+  | { type: "cancelMedia"; botId: string; messageId: string }
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
   | { type: "toggleSettings"; open?: boolean }
@@ -265,7 +266,29 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
-function reducer(state: AppState, action: Action): AppState {
+const ACTIVE_CLIENT_MEDIA_STATUSES = new Set<MediaStatus>(["queued", "generating"]);
+
+function settleClientMedia(
+  bot: Bot,
+  messageId: string | null,
+  status: Extract<MediaStatus, "failed" | "cancelled">,
+  errorFor: (kind: MediaKind) => string,
+): Bot {
+  return {
+    ...bot,
+    messages: bot.messages.map((message) => {
+      if ((messageId && message.id !== messageId) || !message.media) return message;
+      const media = message.media.map((output) =>
+        ACTIVE_CLIENT_MEDIA_STATUSES.has(output.status)
+          ? { ...output, status, error: errorFor(output.kind) }
+          : output,
+      );
+      return media.some((output, index) => output !== message.media![index]) ? { ...message, media } : message;
+    }),
+  };
+}
+
+export function appReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
       const selectedId =
@@ -318,7 +341,17 @@ function reducer(state: AppState, action: Action): AppState {
               ? "celebrate"
               : null;
       const next = kind ? withMascotMotion(state, action.bot.id, kind) : state;
-      return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+      return updateBot(next, action.bot.id, (b) => {
+        const patched = { ...b, ...action.bot, messages: b.messages };
+        return action.bot.busy === false
+          ? settleClientMedia(
+              patched,
+              null,
+              "failed",
+              (kind) => `${kind[0]!.toUpperCase() + kind.slice(1)} generation stopped before completion. Retry to generate it again.`,
+            )
+          : patched;
+      });
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
@@ -520,15 +553,32 @@ function reducer(state: AppState, action: Action): AppState {
       return withMascotMotion(state, action.botId, "working");
     case "newBot":
     case "duplicateBot":
-    case "interrupt":
       return state;
+    case "interrupt":
+      return updateBot(state, action.botId, (bot) =>
+        settleClientMedia(
+          bot,
+          null,
+          "cancelled",
+          (kind) => `${kind[0]!.toUpperCase() + kind.slice(1)} generation cancelled`,
+        ),
+      );
+    case "cancelMedia":
+      return updateBot(state, action.botId, (bot) =>
+        settleClientMedia(
+          bot,
+          action.messageId,
+          "cancelled",
+          (kind) => `${kind[0]!.toUpperCase() + kind.slice(1)} generation cancelled`,
+        ),
+      );
   }
 }
 
 /** Newest screen frames whose pixels stay in memory per thread. */
 const MAX_KEPT_SCREEN_FRAMES = 8;
 
-const initialState: AppState = {
+export const initialState: AppState = {
   bots: [],
   instances: [],
   config: null,
@@ -565,7 +615,7 @@ const StoreContext = createContext<{
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState);
+  const [state, rawDispatch] = useReducer(appReducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
   // per-frame stream-delta batching (see the "runtime" SSE case)
@@ -696,8 +746,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }).catch(showError);
           break;
         case "interrupt":
-          api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
+          api(`/api/bots/${action.botId}/interrupt`, { method: "POST" })
+            .then(() => api("/api/bots"))
+            .then(({ bots }) => rawDispatch({ type: "hydrate", bots }))
+            .catch(showError);
           break;
+        case "cancelMedia": {
+          const threadId = stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
+          api(`/api/bots/${action.botId}/messages/${action.messageId}/cancel-media`, { method: "POST" })
+            .then(({ message }) => {
+              if (threadId && message) rawDispatch({ type: "messagePatched", threadId, message });
+            })
+            .catch((error) => {
+              showError(error);
+              api("/api/bots")
+                .then(({ bots }) => rawDispatch({ type: "hydrate", bots }))
+                .catch(() => {});
+            });
+          break;
+        }
         case "updateBot": {
           const timers = patchTimers.current;
           const pending = timers.get(action.botId);

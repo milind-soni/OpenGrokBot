@@ -143,6 +143,7 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+store.recoverInterruptedMedia();
 
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 const sseClients = new Set<ServerResponse>();
@@ -163,6 +164,21 @@ function broadcast(payload: unknown) {
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const mediaMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+
+function settleVisibleMedia(
+  threadId: string,
+  messageId: string,
+  status: "failed" | "cancelled",
+  error: string,
+): Message | null {
+  const current = store.messagesFor(threadId).find((message) => message.id === messageId);
+  if (!current?.media?.some((output) => ["queued", "generating", "downloading"].includes(output.status))) {
+    return current ?? null;
+  }
+  const message = store.settleMediaMessage(threadId, messageId, status, error);
+  if (message) broadcast({ kind: "message.patch", threadId, message });
+  return message;
+}
 
 function providerOrigin(event: RuntimeEvent): URL {
   const fallback = "http://127.0.0.1";
@@ -512,6 +528,9 @@ async function generateSpecialistMedia(input: {
     primaryTurnId: input.primaryTurnId,
     task: input.task,
     interrupt: () => instance.adapter.interruptTurn(runtimeThreadId),
+    onTerminal: ({ status, error, messageId }) => {
+      if (messageId) settleVisibleMedia(bot.threadId, messageId, status, error);
+    },
   });
   try {
     await instance.adapter.sendTurn({
@@ -1015,6 +1034,36 @@ const server = createServer(async (req, res) => {
       if (primaryTurnId) await specialistRuns.cancelPrimary(bot.id, primaryTurnId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)\/cancel-media$/);
+    if (m && method === "POST") {
+      const [botId, messageId] = [m[1], m[2]];
+      const bot = store.bot(botId);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const message = store.messagesFor(bot.threadId).find((candidate) => candidate.id === messageId);
+      if (!message?.media?.length) return json(res, 404, { error: "no such media message" });
+
+      const specialist = await specialistRuns.cancelMessage(bot.id, message.id);
+      if (!specialist) {
+        const directItems = [...mediaMessageByItem.entries()]
+          .filter(([, messageId]) => messageId === message.id)
+          .map(([itemId]) => itemId);
+        if (directItems.length) {
+          await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
+          for (const itemId of directItems) mediaMessageByItem.delete(itemId);
+        }
+        const kind = message.media.find((output) =>
+          ["queued", "generating", "downloading"].includes(output.status),
+        )?.kind ?? message.media[0].kind;
+        settleVisibleMedia(
+          bot.threadId,
+          message.id,
+          "cancelled",
+          `${kind[0]!.toUpperCase() + kind.slice(1)} generation cancelled`,
+        );
+      }
+      const settled = store.messagesFor(bot.threadId).find((candidate) => candidate.id === message.id)!;
+      return json(res, 200, { ok: true, message: settled });
     }
 
     // identity handshake for the packaged app's port fallback: the forked

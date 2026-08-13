@@ -54,6 +54,18 @@ describe("MediaMessage", () => {
     expect(html).not.toContain("<video");
   });
 
+  it("renders a stop action while media is generating", () => {
+    const html = renderToStaticMarkup(
+      <MediaMessage
+        message={message([{ id: "video-1", kind: "video", status: "generating" }])}
+        onCancel={() => {}}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Stop video generation"');
+    expect(html).toContain("Stop");
+  });
+
   it("renders a retry action for failed generation", () => {
     const html = renderToStaticMarkup(
       <MediaMessage

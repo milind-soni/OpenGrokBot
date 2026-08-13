@@ -41,6 +41,16 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
   return { status: response.status, body: await response.json() };
 }
 
+async function waitFor<T>(read: () => Promise<T | null>, what: string, timeoutMs = 10_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (value) return value;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 async function observeEvents(
   run: () => Promise<void>,
   done: (frames: any[]) => boolean,
@@ -81,14 +91,27 @@ beforeAll(async () => {
       return json(res, 200, {
         data: [
           { id: "fixture-image", name: "Fixture image", output_modalities: ["image"] },
+          { id: "fixture-video", name: "Fixture video", output_modalities: ["video"] },
           { id: "fixture-chat", name: "Fixture chat" },
         ],
       });
     }
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
       const body = await requestBody(req);
+      const latestUser = [...body.messages]
+        .reverse()
+        .find((message: any) => message.role === "user")?.content;
+      const hasToolResult = body.messages.some((message: any) => message.role === "tool");
       res.writeHead(200, { "content-type": "text/event-stream" });
-      if (!body.messages.some((message: any) => message.role === "tool")) {
+      if (latestUser === "reply after cancellation") {
+        res.write('data: {"choices":[{"delta":{"content":"Still responsive after cancellation."}}]}\n\n');
+      } else if (latestUser === "please create a specialist video" && !hasToolResult) {
+        res.write(
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"generate-video-1","type":"function","function":{"name":"generate_video","arguments":"{\\"prompt\\":\\"make a cancellable specialist video\\"}"}}]}}]}\n\n',
+        );
+      } else if (latestUser === "please create a specialist video") {
+        res.write('data: {"choices":[{"delta":{"content":"Video specialist stopped cleanly."}}]}\n\n');
+      } else if (!hasToolResult) {
         res.write(
           'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"generate-1","type":"function","function":{"name":"generate_image","arguments":"{\\"prompt\\":\\"draw via specialist\\"}"}}]}}]}\n\n',
         );
@@ -108,6 +131,14 @@ beforeAll(async () => {
       }
       return json(res, 200, { data: [{ url: `${PROVIDER}/fixture.png`, media_type: "image/png" }] });
     }
+    if (req.method === "POST" && req.url === "/v1/videos") {
+      const body = await requestBody(req);
+      if (body.model !== "fixture-video") return json(res, 400, { error: { message: "wrong video model" } });
+      return json(res, 200, { id: "fixture-video-job" });
+    }
+    if (req.method === "GET" && req.url === "/v1/videos/fixture-video-job") {
+      return json(res, 200, { id: "fixture-video-job", status: "generating", progress: 12 });
+    }
     if (req.method === "GET" && req.url === "/v1/fixture.png") {
       res.writeHead(200, { "content-type": "image/png" });
       res.end(Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -126,7 +157,11 @@ beforeAll(async () => {
         media: {
           driver: "openaiCompatible",
           displayName: "Media fixture",
-          config: { url: PROVIDER, model: "fixture-image", modelTasks: { "fixture-image": "image" } },
+          config: {
+            url: PROVIDER,
+            model: "fixture-image",
+            modelTasks: { "fixture-image": "image", "fixture-video": "video" },
+          },
         },
       },
     }),
@@ -258,5 +293,87 @@ describe("generated media e2e", () => {
       media: [{ kind: "image", status: "ready", cacheKey: expect.stringMatching(/\.png$/) }],
     });
     expect(assistantText).toBe("Made it with the image specialist.");
+  });
+
+  it("stops an active video from its media message", async () => {
+    const before = await api("GET", "/api/bots");
+    const bot = before.body.bots[0];
+    expect(
+      (
+        await api("PATCH", `/api/bots/${bot.id}`, {
+          modelSelection: { instanceId: "media", model: "fixture-video" },
+        })
+      ).status,
+    ).toBe(200);
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "make a hanging video" })).status).toBe(202);
+
+    const mediaMessage = await waitFor(async () => {
+      const current = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
+      return current.messages.find(
+        (message: any) => message.kind === "media" && message.media?.[0]?.status === "generating",
+      ) ?? null;
+    }, "the active video message");
+    const stopped = await api("POST", `/api/bots/${bot.id}/messages/${mediaMessage.id}/cancel-media`);
+    if (stopped.status !== 200) await api("POST", `/api/bots/${bot.id}/interrupt`);
+
+    expect(stopped.status).toBe(200);
+    const cancelled = await waitFor(async () => {
+      const current = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
+      return current.messages.find((message: any) => message.id === mediaMessage.id)?.media?.[0]?.status === "cancelled"
+        ? current.messages.find((message: any) => message.id === mediaMessage.id)
+        : null;
+    }, "the cancelled video message");
+    expect(cancelled.media[0]).toMatchObject({
+      status: "cancelled",
+      error: expect.stringMatching(/cancelled/i),
+    });
+  });
+
+  it("stops a video specialist cleanly and leaves the agent responsive", async () => {
+    const before = await api("GET", "/api/bots");
+    const bot = before.body.bots[0];
+    expect(
+      (
+        await api("PATCH", `/api/bots/${bot.id}`, {
+          modelSelection: { instanceId: "media", model: "fixture-chat" },
+          specialists: { video: { instanceId: "media", model: "fixture-video" } },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await api("POST", `/api/bots/${bot.id}/messages`, { text: "please create a specialist video" })).status,
+    ).toBe(202);
+
+    const mediaMessage = await waitFor(async () => {
+      const current = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
+      return current.messages.find(
+        (message: any) => message.kind === "media" && message.media?.[0]?.status === "generating",
+      ) ?? null;
+    }, "the specialist video message", 3_000);
+
+    const stopped = await api("POST", `/api/bots/${bot.id}/messages/${mediaMessage.id}/cancel-media`);
+    expect(stopped.status).toBe(200);
+    expect(stopped.body.message.media[0]).toMatchObject({
+      status: "cancelled",
+      error: expect.stringMatching(/cancelled/i),
+    });
+
+    await waitFor(async () => {
+      const current = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
+      return current.busy === false &&
+        current.messages.some((message: any) => message.text === "Video specialist stopped cleanly.")
+        ? current
+        : null;
+    }, "the primary reply after specialist cancellation");
+
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "reply after cancellation" })).status).toBe(202);
+    const responsive = await waitFor(async () => {
+      const current = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
+      return current.busy === false &&
+        current.messages.some((message: any) => message.text === "Still responsive after cancellation.")
+        ? current
+        : null;
+    }, "the next agent reply");
+    expect(responsive.busy).toBe(false);
   });
 });

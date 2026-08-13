@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Copy, Download, Loader2, Maximize2, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Copy, Download, Loader2, Maximize2, RefreshCw, Square, X } from "lucide-react";
 
 import type { MediaOutput, Message } from "@/state/store";
 
@@ -32,7 +32,7 @@ function MediaFailure({ media, onRetry }: { media: MediaOutput[]; onRetry?: () =
   );
 }
 
-function MediaProgress({ media }: { media: MediaOutput[] }) {
+function MediaProgress({ media, onCancel }: { media: MediaOutput[]; onCancel?: () => void }) {
   const active = media.find((item) => item.status !== "ready") ?? media[0]!;
   const percent =
     active.progress === undefined
@@ -40,10 +40,22 @@ function MediaProgress({ media }: { media: MediaOutput[] }) {
       : Math.round(active.progress <= 1 ? active.progress * 100 : active.progress);
   return (
     <div className="max-w-[85%] rounded-2xl border border-hairline/40 bg-card px-4 py-3 text-ink">
-      <div className="flex items-center gap-2.5 text-[13.5px]">
-        <Loader2 size={15} className="animate-spin text-accent" />
-        <span>{statusLabel(active)}…</span>
-        {percent !== null && <span className="tabular-nums text-ink-secondary">{percent}%</span>}
+      <div className="flex items-center justify-between gap-3 text-[13.5px]">
+        <span className="flex min-w-0 items-center gap-2.5">
+          <Loader2 size={15} className="shrink-0 animate-spin text-accent" />
+          <span>{statusLabel(active)}…</span>
+          {percent !== null && <span className="tabular-nums text-ink-secondary">{percent}%</span>}
+        </span>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label={`Stop ${active.kind} generation`}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <Square size={10} fill="currentColor" /> Stop
+          </button>
+        )}
       </div>
       {percent !== null && (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-inset" aria-label={`${percent}% complete`}>
@@ -91,11 +103,13 @@ export function MediaViewer({ media, onClose }: { media: MediaOutput; onClose: (
 export function MediaMessage({
   message,
   onRetry,
+  onCancel,
   requestedMediaId,
   openRequestId,
 }: {
   message: Message;
   onRetry?: () => void;
+  onCancel?: () => void;
   requestedMediaId?: string;
   openRequestId?: string;
 }) {
@@ -112,7 +126,7 @@ export function MediaMessage({
     media.length > 0 && media.every((item) => item.status === "failed" || item.status === "cancelled");
   if (terminalFailure) return <MediaFailure media={media} onRetry={onRetry} />;
   if (media.some((item) => item.status !== "ready" && item.status !== "failed" && item.status !== "cancelled")) {
-    return <MediaProgress media={media} />;
+    return <MediaProgress media={media} onCancel={onCancel} />;
   }
 
   const ready = media.filter((item) => item.status === "ready" && item.cacheKey);

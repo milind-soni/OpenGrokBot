@@ -13,7 +13,14 @@ export function artifactHeaderMode(
   selectedArtifactId: string | null,
 ): "hidden" | "open" | "close" {
   if (!newestArtifactId) return "hidden";
-  return newestArtifactId === selectedArtifactId ? "close" : "open";
+  return selectedArtifactId ? "close" : "open";
+}
+
+export function toggleArtifactSelection(
+  selectedArtifactId: string | null,
+  clickedArtifactId: string,
+): string | null {
+  return selectedArtifactId === clickedArtifactId ? null : clickedArtifactId;
 }
 
 export function creationOpenRequest(

@@ -29,7 +29,7 @@ import { ArtifactPanel } from "./ArtifactPanel";
 import { extractHtmlArtifacts, type HtmlArtifact } from "@/lib/html-artifacts";
 import { deriveCreations } from "@/lib/creations";
 import { cn } from "@/lib/cn";
-import { artifactHeaderMode } from "@/lib/creation-navigation";
+import { artifactHeaderMode, toggleArtifactSelection } from "@/lib/creation-navigation";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -514,7 +514,10 @@ export function ChatView({ bot }: { bot: Bot }) {
     });
   }, [bot.id, state.openCreationRequest]);
   const openArtifact = (artifact: HtmlArtifact) => {
-    setArtifactSelections((current) => ({ ...current, [bot.threadId]: artifact.id }));
+    setArtifactSelections((current) => ({
+      ...current,
+      [bot.threadId]: toggleArtifactSelection(current[bot.threadId] ?? null, artifact.id),
+    }));
   };
   const resizeArtifact = (width: number) => {
     setArtifactWidth(width);
@@ -715,6 +718,7 @@ export function ChatView({ bot }: { bot: Bot }) {
                     <MediaMessage
                       message={m}
                       onRetry={m.id === messages.at(-1)?.id && !bot.busy && lastUserMessage ? regenerate : undefined}
+                      onCancel={() => dispatch({ type: "cancelMedia", botId: bot.id, messageId: m.id })}
                       requestedMediaId={requestedMediaCreation?.messageId === m.id ? requestedMediaCreation.media?.id : undefined}
                       openRequestId={requestedMediaCreation?.messageId === m.id ? state.openCreationRequest?.requestId : undefined}
                     />

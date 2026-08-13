@@ -7,3 +7,4 @@ dist-electron
 electron/resources/speech-helper
 release
 .omb-scratch
+.superpowers/

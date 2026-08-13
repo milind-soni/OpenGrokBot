@@ -1,6 +1,6 @@
-appId: com.openmausbot.app
-productName: OpenMausBot
-artifactName: OpenMausBot-${version}-${arch}.${ext}
+appId: com.mirxabot.app
+productName: Mirxa Bot
+artifactName: MirxaBot-${version}-${arch}.${ext}
 
 # In-app auto-update reads latest-mac.yml + the .zip from this PUBLIC releases
 # repo (separate from the source repo). Public → no token on users' machines.
@@ -54,12 +54,12 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
-    NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
+    NSMicrophoneUsageDescription: Mirxa Bot uses the microphone for voice dictation into the composer.
+    NSSpeechRecognitionUsageDescription: Mirxa Bot transcribes your voice on-device to type messages for you.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
 
 dmg:
   sign: true
-  artifactName: OpenMausBot-${version}.dmg
+  artifactName: MirxaBot-${version}.dmg

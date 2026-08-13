@@ -52,7 +52,7 @@ function decodeConfig(raw: unknown): CodexConfig {
 
 const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE =
-  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+  "Mirxa Bot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
@@ -130,7 +130,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const settle = (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
         state.settled = true;
-        for (const finish of [...asks.values()]) finish("deny", "OpenMausBot: the turn ended");
+        for (const finish of [...asks.values()]) finish("deny", "Mirxa Bot: the turn ended");
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         active.delete(threadId);
@@ -336,7 +336,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // handshake + kickoff; any refusal surfaces as failure, not a hang
       (async () => {
         try {
-          await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
+          await request("initialize", { clientInfo: { name: "mirxabot", version: "1" } });
           send({ jsonrpc: "2.0", method: "initialized", params: {} });
           const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
           let codexThreadId: string | null = null;

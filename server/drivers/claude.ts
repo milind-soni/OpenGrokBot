@@ -77,8 +77,8 @@ interface Ask {
 }
 
 const DENY_TIMEOUT_NOTE =
-  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+  "Mirxa Bot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "Mirxa Bot: nobody answered in time. Use your best judgment and continue.";
 
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask: Ask): string {
@@ -159,8 +159,8 @@ function createPermissionBroker(opts: {
     },
     close() {
       for (const p of [...pending.values()]) {
-        if (p.ask.kind === "question") p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "shutdown");
-        else p.finish("deny", "OpenMausBot: the turn ended", "shutdown");
+        if (p.ask.kind === "question") p.finish("answer", "Mirxa Bot: the turn is ending — wrap up.", "shutdown");
+        else p.finish("deny", "Mirxa Bot: the turn ended", "shutdown");
       }
       try {
         server.close();

@@ -36,6 +36,24 @@ export function ComputerMark({ size = 16, className }: IconProps) {
   return <Monitor size={size} className={cn("text-ink-secondary", className)} />;
 }
 
+export function GeminiMark({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className}>
+      <defs>
+        <linearGradient id="gemini-mark-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#4796E3" />
+          <stop offset="52%" stopColor="#9177C7" />
+          <stop offset="100%" stopColor="#D3608B" />
+        </linearGradient>
+      </defs>
+      <path
+        fill="url(#gemini-mark-grad)"
+        d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12"
+      />
+    </svg>
+  );
+}
+
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
     case "grok":
@@ -45,6 +63,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <ClaudeMark size={size} className={className} />;
     case "codex":
       return <CodexMark size={size} className={className} />;
+    case "geminiAgent":
+      return <GeminiMark size={size} className={className} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
     default:

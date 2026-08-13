@@ -1,5 +1,5 @@
 // Provider brand marks, keyed by driver kind. Dark-theme fills.
-import { Monitor } from "lucide-react";
+import { Bot, Boxes, Monitor, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export interface IconProps {
@@ -65,6 +65,12 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <CodexMark size={size} className={className} />;
     case "geminiAgent":
       return <GeminiMark size={size} className={className} />;
+    case "ollama":
+      return <Bot size={size} className={cn("text-[#f5f5f5]", className)} />;
+    case "lmstudio":
+      return <Boxes size={size} className={cn("text-[#8b9cff]", className)} />;
+    case "openaiCompat":
+      return <Server size={size} className={cn("text-[#39d9a2]", className)} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
     default:

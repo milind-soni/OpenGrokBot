@@ -3,7 +3,7 @@
 // live in SettingsPanel; contextual Box-token entry stays in ComputerPanel.
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useStore } from "@/state/store";
+import { api, useStore, type ConfigStatus } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 
@@ -98,6 +98,64 @@ function UpdatesRow() {
   );
 }
 
+function OpenAICompatibleFields() {
+  const { state, dispatch } = useStore();
+  const [baseUrl, setBaseUrl] = useState(state.config?.openaiCompat.baseUrl ?? "");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setBaseUrl(state.config?.openaiCompat.baseUrl ?? "");
+  }, [state.config?.openaiCompat.baseUrl]);
+
+  const save = () => {
+    setSaving(true);
+    setMessage("");
+    api("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({ openaiCompat: { baseUrl: baseUrl.trim() } }),
+    })
+      .then((config: ConfigStatus) => {
+        dispatch({ type: "configStatus", config });
+        setMessage("Saved - models appear in the picker when the endpoint is reachable.");
+      })
+      .catch((error: Error) => setMessage(error.message))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <div className="mt-4 rounded-xl bg-card p-4">
+      <div className="text-[15px] font-medium text-ink">Local & custom models</div>
+      <div className="mt-0.5 text-[13px] text-ink-secondary">
+        Ollama and LM Studio are discovered automatically. Connect any other OpenAI-compatible /v1 endpoint here.
+      </div>
+      <div className="mt-4 flex flex-col gap-4">
+        <div>
+          <div className="mb-1.5 text-[13px] text-ink-secondary">OpenAI-compatible base URL</div>
+          <div className="flex gap-2">
+            <input
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && save()}
+              placeholder="https://api.example.com/v1"
+              className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+            />
+            <button
+              onClick={save}
+              disabled={saving}
+              className="w-[72px] shrink-0 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+            >
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </div>
+        <ApiKeyRow section="openaiCompat" label="API key (optional for local servers)" placeholder="sk-..." />
+        {message && <div className="text-[12px] text-ink-secondary">{message}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function AppSettingsPanel() {
   const { dispatch } = useStore();
 
@@ -139,6 +197,8 @@ export function AppSettingsPanel() {
             <ApiKeyRow section="box" label="Box token" placeholder="Token from box.ascii.dev" />
           </div>
         </div>
+
+        <OpenAICompatibleFields />
 
         <UpdatesRow />
       </div>

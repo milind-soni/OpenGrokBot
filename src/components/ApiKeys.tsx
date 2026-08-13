@@ -6,7 +6,7 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "composio" | "composioApi" | "box" | "openaiCompat";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -18,6 +18,10 @@ const SECTIONS: Record<
     flag: (c) => c.composio.apiKeyConfigured ?? false,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
+  openaiCompat: {
+    body: (v) => ({ openaiCompat: { key: v } }),
+    flag: (c) => c.openaiCompat.keyConfigured,
+  },
 };
 
 export function ApiKeyRow({

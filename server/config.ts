@@ -14,6 +14,10 @@ export interface AppConfig {
    * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
+  /** Custom OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, vLLM, …):
+   * baseUrl up to /v1; key is optional for keyless local servers; models
+   * optionally pins the list when the endpoint has no /models route. */
+  openaiCompat?: { baseUrl?: string; key?: string; models?: string[] };
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
@@ -48,6 +52,7 @@ export function loadConfig(): AppConfig {
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+  cfg.openaiCompat = { key: process.env.OPENAI_COMPAT_API_KEY, ...cfg.openaiCompat };
   return cfg;
 }
 
@@ -61,7 +66,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "openaiCompat", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -81,20 +86,31 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // `grok` driver stays registered but out of the default fleet — that key is
   // a credential Milind doesn't want to manage; an `instances` entry brings
   // it back anytime.
-  const map: InstanceConfigMap =
-    cfg.instances && Object.keys(cfg.instances).length
-      ? cfg.instances
-      : {
-          grok: { driver: "grokAgent" },
-          gemini: { driver: "geminiAgent" },
-          claude: { driver: "claudeAgent" },
-          codex: { driver: "codex" },
-          computer: { driver: "boxAgent" },
-        };
+  const defaults: InstanceConfigMap = {
+    grok: { driver: "grokAgent" },
+    gemini: { driver: "geminiAgent" },
+    claude: { driver: "claudeAgent" },
+    codex: { driver: "codex" },
+    // Local runtimes light up automatically when their servers are running.
+    ollama: { driver: "ollama" },
+    lmstudio: { driver: "lmstudio" },
+    custom: {
+      driver: "openaiCompat",
+      config: {
+        baseUrl: cfg.openaiCompat?.baseUrl ?? "",
+        models: cfg.openaiCompat?.models ?? [],
+      },
+    },
+    computer: { driver: "boxAgent" },
+  };
+  // Saved fleets predate newly shipped drivers. Merge defaults so upgrades
+  // gain new providers without discarding any customized instance entries.
+  const map: InstanceConfigMap = { ...defaults, ...cfg.instances };
   for (const entry of Object.values(map)) {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
+      ...(cfg.openaiCompat?.key ? { OPENAI_COMPAT_API_KEY: cfg.openaiCompat.key } : {}),
       ...entry.environment,
     };
   }

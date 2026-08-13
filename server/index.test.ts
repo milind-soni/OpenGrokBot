@@ -92,14 +92,21 @@ describe("harness HTTP API", () => {
   it("describes the configured fleet, shadows included", async () => {
     const { status, body } = await api("GET", "/api/instances");
     expect(status).toBe(200);
-    expect(body.instances).toHaveLength(1);
-    expect(body.instances[0]).toMatchObject({
+    const instances = new Map(
+      body.instances.map((instance: { instanceId: string }) => [instance.instanceId, instance]),
+    );
+    expect(instances.has("ollama")).toBe(true);
+    expect(instances.has("lmstudio")).toBe(true);
+    expect(instances.has("custom")).toBe(true);
+    expect(instances.get("ghost")).toMatchObject({
       instanceId: "ghost",
       driverKind: "not-a-real-driver",
       displayName: "Ghost",
-      snapshot: { state: "unavailable" },
+      snapshot: {
+        state: "unavailable",
+        reason: expect.stringContaining("not-a-real-driver"),
+      },
     });
-    expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
   });
 
   it("creates, patches, and deletes a bot", async () => {
@@ -136,8 +143,12 @@ describe("harness HTTP API", () => {
     const empty = await api("POST", `/api/bots/${bot.id}/messages`, { text: "   " });
     expect(empty.status).toBe(400);
 
-    // the seeded bot's selection points at the ghost instance — sending a
-    // real message must fail loudly, not 202-and-hang
+    await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-model" },
+    });
+
+    // A bot explicitly assigned to an unavailable provider must fail loudly,
+    // not 202-and-hang.
     const send = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello?" });
     expect(send.status).toBe(409);
     expect(send.body.error).toContain("unavailable");

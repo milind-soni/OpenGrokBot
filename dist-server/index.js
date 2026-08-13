@@ -14,6 +14,7 @@ import { createMediaCache, parseRange } from "./media-cache.js";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { EventBus } from "./harness/bus.js";
 import { ProviderRegistry } from "./harness/registry.js";
+import { SpecialistRunManager } from "./specialist-runs.js";
 import { mentionedBots, Store } from "./store.js";
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -48,6 +49,10 @@ const agentsProxyPath = (() => {
     const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "agents-proxy.ts");
     return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
 })();
+const mediaProxyPath = (() => {
+    const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "media-proxy.ts");
+    return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
 function agentsIntegration(botId, depth) {
@@ -63,6 +68,27 @@ function agentsIntegration(botId, depth) {
         },
     };
 }
+function mediaIntegration(botId, primaryTurnId, tasks) {
+    return {
+        command: process.execPath,
+        args: [mediaProxyPath],
+        env: {
+            ...AGENTS_NODE_FLAG,
+            OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+            OMB_BOT_ID: botId,
+            OMB_COMMS_TOKEN: COMMS_TOKEN,
+            OMB_PRIMARY_TURN_ID: primaryTurnId,
+            OMB_MEDIA_TASKS: tasks.join(","),
+        },
+        tasks,
+        endpoint: `http://127.0.0.1:${PORT}/api/internal/generate-media`,
+        token: COMMS_TOKEN,
+        botId,
+        primaryTurnId,
+    };
+}
+const specialistRuns = new SpecialistRunManager();
+const primaryTurns = new Map();
 /** Run a turn on `targetBotId` and resolve with its assistant text — the
  * synchronous half of ask_bot. Subscribes to the bus, folds assistant_text
  * for that thread, resolves on turn.completed (or a 4-min ceiling). */
@@ -128,13 +154,21 @@ const mediaMessageByItem = new Map(); // itemId -> messageId
 const askMessageByRequest = new Map(); // requestId -> messageId
 function providerOrigin(event) {
     const fallback = "http://127.0.0.1";
-    const raw = event.provider === "openrouter"
-        ? (cfg.openrouter?.url ?? "https://openrouter.ai/api/v1")
-        : event.provider === "ollamaCloud"
-            ? (cfg.ollamaCloud?.url ?? "https://ollama.com/v1")
-            : event.provider === "openaiCompatible"
-                ? (cfg.openaiCompatible?.url ?? "http://127.0.0.1:11434/v1")
-                : fallback;
+    const customConfig = event.providerInstanceId
+        ? cfg.instances?.[event.providerInstanceId]?.config
+        : undefined;
+    const customUrl = customConfig && typeof customConfig === "object" && !Array.isArray(customConfig)
+        ? customConfig.url
+        : undefined;
+    const raw = typeof customUrl === "string" && customUrl
+        ? customUrl
+        : event.provider === "openrouter"
+            ? (cfg.openrouter?.url ?? "https://openrouter.ai/api/v1")
+            : event.provider === "ollamaCloud"
+                ? (cfg.ollamaCloud?.url ?? "https://ollama.com/v1")
+                : event.provider === "openaiCompatible"
+                    ? (cfg.openaiCompatible?.url ?? "http://127.0.0.1:11434/v1")
+                    : fallback;
     try {
         return new URL(raw);
     }
@@ -152,7 +186,80 @@ function publicRuntimeEvent(event) {
     }
     return event;
 }
+/** Fold a synthetic specialist thread into its bot's visible conversation.
+ * Text/session/permission events stay private; only media lifecycle events
+ * are rewritten into the real thread. Provider completion never clears the
+ * primary bot's busy state. */
+function foldSpecialistEvent(event) {
+    const run = specialistRuns.forThread(event.threadId);
+    if (!run)
+        return false;
+    const visibleThreadId = run.visibleThreadId;
+    if (event.type === "item.started" && event.itemType === "media") {
+        const message = store.appendMessage(visibleThreadId, { role: "bot", kind: "media", media: event.media });
+        run.mediaMessageId = message.id;
+        broadcast({ kind: "message", threadId: visibleThreadId, message });
+    }
+    else if (event.type === "item.updated" && event.itemType === "media" && run.mediaMessageId) {
+        const message = store.patchMessage(visibleThreadId, run.mediaMessageId, { media: event.media });
+        if (message)
+            broadcast({ kind: "message.patch", threadId: visibleThreadId, message });
+    }
+    else if (event.type === "item.completed" && event.itemType === "media") {
+        const messageId = run.mediaMessageId;
+        if (!messageId) {
+            specialistRuns.fail(event.threadId, new Error(`${run.task} specialist returned media without starting it`));
+            return true;
+        }
+        const downloading = event.media.map(({ source: _source, ...media }) => ({
+            ...media,
+            status: media.status === "ready" ? "downloading" : media.status,
+        }));
+        const pending = store.patchMessage(visibleThreadId, messageId, { media: downloading });
+        if (pending)
+            broadcast({ kind: "message.patch", threadId: visibleThreadId, message: pending });
+        const pipeline = Promise.all(event.media.map(async (media) => {
+            if (!media.source)
+                return { ...media, status: media.cacheKey ? "ready" : media.status };
+            try {
+                const stored = await mediaCache.store(media.source, {
+                    threadId: visibleThreadId,
+                    messageId,
+                    kind: media.kind,
+                    providerOrigin: providerOrigin(event),
+                });
+                const { source: _source, ...safe } = media;
+                return { ...safe, ...stored, status: "ready" };
+            }
+            catch (error) {
+                const { source: _source, ...safe } = media;
+                return {
+                    ...safe,
+                    status: "failed",
+                    error: `Could not store generated media safely: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
+                };
+            }
+        })).then((media) => {
+            const ready = store.patchMessage(visibleThreadId, messageId, { media });
+            if (ready)
+                broadcast({ kind: "message.patch", threadId: visibleThreadId, message: ready });
+            if (media.some((output) => output.status !== "ready")) {
+                throw new Error(`${run.task} generation could not be cached`);
+            }
+        });
+        specialistRuns.setMediaPipeline(event.threadId, messageId, pipeline);
+    }
+    else if (event.type === "runtime.error") {
+        specialistRuns.fail(event.threadId, new Error(event.message));
+    }
+    else if (event.type === "turn.completed") {
+        specialistRuns.turnCompleted(event.threadId, event.ok);
+    }
+    return true;
+}
 bus.subscribe((event) => {
+    if (foldSpecialistEvent(event))
+        return;
     broadcast({ kind: "runtime", event: publicRuntimeEvent(event) });
     const bot = store.botByThread(event.threadId);
     if (!bot)
@@ -288,6 +395,7 @@ bus.subscribe((event) => {
             if (frame)
                 pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
             store.patchBot(bot.id, { busy: false, unread: true });
+            primaryTurns.delete(bot.id);
             broadcast({ kind: "bot", bot: store.bot(bot.id) });
             break;
         }
@@ -369,6 +477,48 @@ function readCuaConnection() {
     }
     return null;
 }
+async function generateSpecialistMedia(input) {
+    const bot = store.bot(input.botId);
+    if (!bot)
+        throw Object.assign(new Error("no such bot"), { status: 404 });
+    if (!bot.busy || primaryTurns.get(bot.id) !== input.primaryTurnId) {
+        throw Object.assign(new Error("the primary turn is no longer active"), { status: 409 });
+    }
+    const selection = bot.specialists?.[input.task];
+    if (!selection) {
+        throw Object.assign(new Error(`this bot has no ${input.task} specialist configured`), { status: 409 });
+    }
+    const instance = registry.get(selection.instanceId);
+    if (!instance) {
+        throw Object.assign(new Error(`${input.task} specialist provider is unavailable`), { status: 409 });
+    }
+    const configuredModel = instance.models.options.find((option) => option.id === selection.model);
+    if (configuredModel?.task && configuredModel.task !== input.task) {
+        throw Object.assign(new Error(`${selection.model} is not a ${input.task} model`), { status: 409 });
+    }
+    const runtimeThreadId = `specialist:${bot.id}:${input.task}:${randomBytes(8).toString("hex")}`;
+    const run = specialistRuns.start({
+        runtimeThreadId,
+        visibleThreadId: bot.threadId,
+        botId: bot.id,
+        primaryTurnId: input.primaryTurnId,
+        task: input.task,
+        interrupt: () => instance.adapter.interruptTurn(runtimeThreadId),
+    });
+    try {
+        await instance.adapter.sendTurn({
+            threadId: runtimeThreadId,
+            text: input.prompt,
+            model: selection.model,
+            transcript: [],
+            system: `You are the ${input.task} generation specialist for ${bot.name}. Generate the requested ${input.task} now. Return generated media, not a prose-only response.`,
+        });
+    }
+    catch (error) {
+        specialistRuns.fail(runtimeThreadId, error instanceof Error ? error : new Error(String(error)));
+    }
+    return run.result;
+}
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
 async function startTurn(botId, text, opts) {
     const bot = store.bot(botId);
@@ -377,6 +527,7 @@ async function startTurn(botId, text, opts) {
     if (bot.busy)
         throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
     const commsDepth = opts?.commsDepth ?? 0;
+    const primaryTurnId = randomBytes(12).toString("hex");
     const instance = registry.get(bot.modelSelection.instanceId);
     if (!instance) {
         throw Object.assign(new Error(`provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`), { status: 409 });
@@ -423,6 +574,7 @@ async function startTurn(botId, text, opts) {
     // in the background — box provisioning can take ~90s and must never
     // hang the HTTP request
     store.patchBot(bot.id, { busy: true, unread: false });
+    primaryTurns.set(bot.id, primaryTurnId);
     broadcast({ kind: "bot", bot: store.bot(bot.id) });
     void (async () => {
         try {
@@ -461,6 +613,10 @@ async function startTurn(botId, text, opts) {
                 store.bots.filter((b) => b.id !== bot.id && !b.hidden).length > 0) {
                 integrations.agents = agentsIntegration(bot.id, commsDepth);
             }
+            const mediaTasks = ["image", "video"].filter((task) => Boolean(bot.specialists?.[task]));
+            if (mediaTasks.length && instance.adapter.capabilities.mediaTools) {
+                integrations.media = mediaIntegration(bot.id, primaryTurnId, mediaTasks);
+            }
             // @mentions in the user's message (the composer's tagging UI) become
             // an explicit delegation nudge — the agent still does the ask_bot call
             // itself, so the harness stays the single owner of turns/permissions
@@ -482,6 +638,9 @@ async function startTurn(botId, text, opts) {
                             : "") +
                     (integrations.agents
                         ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
+                        : "") +
+                    (integrations.media
+                        ? ` You have specialist media tools: ${integrations.media.tasks.map((task) => `generate_${task}`).join(", ")}. Decide when generated media best fulfills the user's request, call the appropriate tool with a complete prompt, then acknowledge the result already placed in chat.`
                         : "") +
                     (tagged.length
                         ? ` The user tagged ${tagged
@@ -505,6 +664,8 @@ async function startTurn(botId, text, opts) {
             });
             broadcast({ kind: "message", threadId: bot.threadId, message: failure });
             store.patchBot(bot.id, { busy: false });
+            if (primaryTurns.get(bot.id) === primaryTurnId)
+                primaryTurns.delete(bot.id);
             broadcast({ kind: "bot", bot: store.bot(bot.id) });
         }
     })();
@@ -532,6 +693,7 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+    await specialistRuns.cancelAll("provider configuration changed");
     bus.detachAll();
     await registry.disposeAll();
     await registry.load(instanceConfigs(cfg));
@@ -562,6 +724,37 @@ function readBody(req) {
         req.on("error", reject);
     });
 }
+function modelSelection(value) {
+    if (!value || typeof value !== "object")
+        return null;
+    const candidate = value;
+    if (typeof candidate.instanceId !== "string" || !candidate.instanceId.trim())
+        return null;
+    if (typeof candidate.model !== "string" || !candidate.model.trim())
+        return null;
+    return { instanceId: candidate.instanceId.trim(), model: candidate.model.trim() };
+}
+function botSpecialists(value, current) {
+    if (value === null)
+        return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const candidate = value;
+    const next = { ...current };
+    for (const task of ["image", "video"]) {
+        if (candidate[task] === undefined)
+            continue;
+        if (candidate[task] === null) {
+            delete next[task];
+            continue;
+        }
+        const selection = modelSelection(candidate[task]);
+        if (!selection)
+            return null;
+        next[task] = selection;
+    }
+    return next.image || next.video ? next : undefined;
+}
 const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
     const path = url.pathname;
@@ -580,6 +773,20 @@ const server = createServer(async (req, res) => {
                     .filter((b) => b.id !== self && !b.hidden)
                     .map((b) => ({ id: b.id, name: b.name, model: b.modelSelection.model, busy: !!b.busy }));
                 return json(res, 200, { bots });
+            }
+            if (method === "POST" && path === "/api/internal/generate-media") {
+                const body = await readBody(req);
+                const botId = String(body.botId ?? "").trim();
+                const primaryTurnId = String(body.primaryTurnId ?? "").trim();
+                const task = body.task === "image" || body.task === "video" ? body.task : null;
+                const prompt = String(body.prompt ?? "").trim();
+                if (!botId || !primaryTurnId || !task || !prompt) {
+                    return json(res, 400, { error: "botId, primaryTurnId, task, and prompt are required" });
+                }
+                if (prompt.length > 20_000)
+                    return json(res, 400, { error: "prompt is limited to 20,000 characters" });
+                const result = await generateSpecialistMedia({ botId, primaryTurnId, task, prompt });
+                return json(res, 200, { ok: true, ...result });
             }
             if (method === "POST" && path === "/api/internal/ask-bot") {
                 const body = await readBody(req);
@@ -666,6 +873,12 @@ const server = createServer(async (req, res) => {
                 if (body[key] !== undefined)
                     patch[key] = body[key];
             }
+            if (body.specialists !== undefined) {
+                const specialists = botSpecialists(body.specialists, store.bot(m[1])?.specialists);
+                if (specialists === null)
+                    return json(res, 400, { error: "invalid specialist model selection" });
+                patch.specialists = specialists;
+            }
             const bot = store.patchBot(m[1], patch);
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
@@ -678,6 +891,9 @@ const server = createServer(async (req, res) => {
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
             // a running turn dies with its bot
+            const primaryTurnId = primaryTurns.get(bot.id);
+            if (primaryTurnId)
+                await specialistRuns.cancelPrimary(bot.id, primaryTurnId);
             await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => { });
             stopScreenPoller(bot.id);
             store.deleteBot(bot.id);
@@ -794,6 +1010,9 @@ const server = createServer(async (req, res) => {
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
             const instance = registry.get(bot.modelSelection.instanceId);
+            const primaryTurnId = primaryTurns.get(bot.id);
+            if (primaryTurnId)
+                await specialistRuns.cancelPrimary(bot.id, primaryTurnId);
             await instance?.adapter.interruptTurn(bot.threadId);
             return json(res, 200, { ok: true });
         }
@@ -958,6 +1177,9 @@ server.listen(PORT, "127.0.0.1", () => {
 });
 for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
-        void registry.disposeAll().finally(() => process.exit(0));
+        void specialistRuns
+            .cancelAll("server is shutting down")
+            .then(() => registry.disposeAll())
+            .finally(() => process.exit(0));
     });
 }

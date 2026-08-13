@@ -120,9 +120,13 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 </tr>
 </table>
 
-**Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
+**Also in the box:** routines — recurring tasks each bot runs autonomously on a schedule (same
+approvals, no typing) · a ⌘K command palette that jumps to any bot, runs commands, and fires a typed
+message at any bot · Mission Control (⌘⇧M), a live fleet HUD with streaming previews and screen
+thumbnails · streaming replies with tool-run activity chips · native macOS dictation from the
 composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
-expressions · screenshots of the bot's work folded into the transcript.
+expressions · screenshots of the bot's work folded into the transcript, with a filmstrip to scrub
+recent frames and a quick-command box to drive the bot's computer by hand.
 
 ## How it works
 
@@ -195,8 +199,9 @@ pnpm build         # typecheck + production build
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use. Rough edges to expect: routines (scheduled tasks) are a placeholder, sidebar sections aren't
-built yet, and Windows/Linux shells haven't been attempted (the harness itself is portable Node).
+computer use, and routines run bots on a schedule without you in the loop. Rough edges to expect:
+sidebar sections aren't built yet, and Windows/Linux shells haven't been attempted (the harness
+itself is portable Node).
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

@@ -28,6 +28,11 @@ files:
 
 asar: true
 
+# Strip macOS provenance/FinderInfo xattrs before codesign — extraction under
+# an iCloud-synced or provenance-tracked path otherwise fails signing with
+# "resource fork, Finder information, or similar detritus not allowed".
+afterPack: scripts/after-pack.cjs
+
 extraResources:
   - from: dist
     to: ui

@@ -121,6 +121,9 @@ export interface ProviderAdapter {
   readonly provider: DriverKind;
   readonly capabilities: {
     sessionModelSwitch: "in-session" | "unsupported";
+    /** The adapter sends SendTurnInput.transcript to its provider on ordinary
+     * turns (as opposed to retaining native session history). */
+    transcriptReplay?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */

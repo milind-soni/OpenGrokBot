@@ -9,6 +9,7 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import * as box from "./box.ts";
+import { packTranscript } from "./context.ts";
 import * as composio from "./composio.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -16,7 +17,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { mentionedBots, Store, type Message } from "./store.ts";
+import { mentionedBots, Store, type Message, type TaskUsage } from "./store.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -143,6 +144,12 @@ bus.subscribe((event: RuntimeEvent) => {
   if (!bot && !group) return;
   const speaker = group ? groupSpeakers.get(event.threadId) : undefined;
 
+  const publishRun = (update: (run: TaskUsage) => TaskUsage) => {
+    if (!bot) return;
+    const patched = store.updateActiveRun(bot.id, update);
+    if (patched) broadcast({ kind: "bot", bot: patched });
+  };
+
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, group && m.role === "bot" ? { ...m, from: speaker } : m);
     broadcast({ kind: "message", threadId: event.threadId, message });
@@ -173,12 +180,27 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.started":
       if (event.itemType === "tool") {
+        const title = event.title ?? "tool";
+        publishRun((run) => ({
+          ...run,
+          toolCalls: run.toolCalls + 1,
+          computerActions: /computer|screenshot|screen|browser|click|keyboard|mouse/i.test(title)
+            ? run.computerActions + 1
+            : run.computerActions,
+        }));
         // ask_bot's raw tool chip is redundant — the internal endpoint
         // appends a richer "Messaged @X" chip linking to the channel
         if (event.title?.endsWith("__ask_bot")) break;
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
       }
+      break;
+    case "thread.token-usage.updated":
+      publishRun((run) => ({
+        ...run,
+        reportedInputTokens: run.reportedInputTokens + Math.max(0, event.input),
+        reportedOutputTokens: run.reportedOutputTokens + Math.max(0, event.output),
+      }));
       break;
     case "request.opened": {
       const permission = event.requestType === "permission";
@@ -219,7 +241,8 @@ bus.subscribe((event: RuntimeEvent) => {
         const frame = stopScreenPoller(bot.id);
         if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
         store.patchBot(bot.id, { busy: false, unread: true });
-        broadcast({ kind: "bot", bot: store.bot(bot.id) });
+        const settled = store.finishRun(bot.id, { ok: event.ok, stopReason: event.stopReason, providerCost: event.cost });
+        broadcast({ kind: "bot", bot: settled ?? store.bot(bot.id) });
       }
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
@@ -336,11 +359,12 @@ async function startTurn(
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
   // branch only — abandoned forks never reach the model
-  const transcript = store
+  const sourceTranscript = store
     .activePath(bot.threadId)
     .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
-    .slice(-40)
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+  const packedContext = packTranscript(sourceTranscript);
+  const transcript = packedContext.transcript;
 
   // After a rewind (edit / branch switch) the provider's native session
   // still contains the abandoned branch: start a fresh session instead of
@@ -374,6 +398,10 @@ async function startTurn(
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   store.patchBot(bot.id, { busy: true, unread: false });
+  // Native sessions retain their own history; showing transcript savings for
+  // them would be misleading. A rewound native session does get the packed
+  // history inline, as does any explicitly transcript-replay driver.
+  store.beginRun(bot.id, instance.adapter.capabilities.transcriptReplay === true || rewound ? packedContext.stats : undefined);
   broadcast({ kind: "bot", bot: store.bot(bot.id) });
 
   void (async () => {
@@ -458,7 +486,8 @@ async function startTurn(
       });
       broadcast({ kind: "message", threadId: bot.threadId, message: failure });
       store.patchBot(bot.id, { busy: false });
-      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      const settled = store.finishRun(bot.id, { ok: false, stopReason: "dispatch_error" });
+      broadcast({ kind: "bot", bot: settled ?? store.bot(bot.id) });
     }
   })();
 }

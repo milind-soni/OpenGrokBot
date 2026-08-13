@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import { inspectMcpServer, mcpServersForBot, mcpSnapshot, normalizeMcpServer } from "./mcp.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -412,6 +413,10 @@ async function startTurn(
       ) {
         integrations.agents = agentsIntegration(bot.id, commsDepth);
       }
+      if (instance.adapter.capabilities.configuredMcp) {
+        const selected = mcpServersForBot(cfg.mcp?.servers, bot.id);
+        if (selected.length) integrations.mcp = selected;
+      }
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
@@ -623,6 +628,7 @@ function configStatus() {
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    mcp: { servers: (cfg.mcp?.servers ?? []).map(mcpSnapshot) },
   };
 }
 
@@ -1038,6 +1044,56 @@ const server = createServer(async (req, res) => {
     }
 
     // ── connectors (Composio) ──
+    if (method === "GET" && path === "/api/mcp/servers") {
+      return json(res, 200, { servers: (cfg.mcp?.servers ?? []).map(mcpSnapshot) });
+    }
+    if (method === "POST" && path === "/api/mcp/servers") {
+      try {
+        const server = normalizeMcpServer(await readBody(req));
+        const servers = cfg.mcp?.servers ?? [];
+        if (servers.some((entry) => entry.id === server.id)) return json(res, 409, { error: "MCP server id already exists" });
+        saveConfig({ mcp: { servers: [...servers, server] } });
+        Object.assign(cfg, loadConfig());
+        const status = configStatus();
+        broadcast({ kind: "config", ...status });
+        return json(res, 201, { server: mcpSnapshot(server) });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : "Invalid MCP server" });
+      }
+    }
+    m = path.match(/^\/api\/mcp\/servers\/([\w-]+)$/);
+    if (m && (method === "PUT" || method === "PATCH")) {
+      const servers = cfg.mcp?.servers ?? [];
+      const current = servers.find((entry) => entry.id === m![1]);
+      if (!current) return json(res, 404, { error: "no such MCP server" });
+      try {
+        const body = await readBody(req);
+        const server = normalizeMcpServer({ ...current, ...body, env: "env" in body ? body.env : current.env }, current.id);
+        saveConfig({ mcp: { servers: servers.map((entry) => (entry.id === current.id ? server : entry)) } });
+        Object.assign(cfg, loadConfig());
+        const status = configStatus();
+        broadcast({ kind: "config", ...status });
+        return json(res, 200, { server: mcpSnapshot(server) });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : "Invalid MCP server" });
+      }
+    }
+    if (m && method === "DELETE") {
+      const servers = cfg.mcp?.servers ?? [];
+      if (!servers.some((entry) => entry.id === m![1])) return json(res, 404, { error: "no such MCP server" });
+      saveConfig({ mcp: { servers: servers.filter((entry) => entry.id !== m![1]) } });
+      Object.assign(cfg, loadConfig());
+      const status = configStatus();
+      broadcast({ kind: "config", ...status });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/mcp\/servers\/([\w-]+)\/inspect$/);
+    if (m && method === "POST") {
+      const server = (cfg.mcp?.servers ?? []).find((entry) => entry.id === m![1]);
+      if (!server) return json(res, 404, { error: "no such MCP server" });
+      return json(res, 200, await inspectMcpServer(server));
+    }
+
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
       return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards });

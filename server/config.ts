@@ -7,6 +7,20 @@ import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
 
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  /** Stored locally only. Never included in a renderer/API snapshot. */
+  env?: Record<string, string>;
+  url?: string;
+  /** Empty or omitted means global. Listed bot ids receive this server too. */
+  botIds?: string[];
+}
+
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   /** key = ck_… Connect consumer key (connections + agent tools);
@@ -17,6 +31,8 @@ export interface AppConfig {
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
+  /** Local-first MCP registry. Credentials belong only in each server's env. */
+  mcp?: { servers?: McpServerConfig[] };
   instances?: InstanceConfigMap;
 }
 
@@ -62,7 +78,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "profile", "mcp"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }

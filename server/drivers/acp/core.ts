@@ -140,6 +140,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
           });
         }
+        for (const server of turn.integrations?.mcp ?? []) {
+          if (server.transport !== "stdio" || !server.command) continue;
+          servers.push({
+            name: `user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+            command: server.command,
+            args: server.args ?? [],
+            env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
         return servers;
       };
 
@@ -478,7 +487,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, configuredMcp: true },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

@@ -83,6 +83,26 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.resumeCursors).toEqual({ claude: "sess-abc", codex: "thread-xyz" });
   });
 
+  it("persists a settled per-turn usage record but not a live run after restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.beginRun(bot.id, {
+      originalMessages: 42, submittedMessages: 8, omittedMessages: 34,
+      originalChars: 16_000, submittedChars: 3_200,
+      originalEstimatedTokens: 4_000, submittedEstimatedTokens: 800, compacted: true,
+    });
+    store.updateActiveRun(bot.id, (run) => ({ ...run, toolCalls: 3, reportedInputTokens: 700, reportedOutputTokens: 120 }));
+    store.finishRun(bot.id, { ok: true, providerCost: 0.0125 });
+    expect(store.bot(bot.id)?.activeRun).toBeNull();
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.activeRun).toBeUndefined();
+    expect(reloaded.bot(bot.id)?.lastRun).toMatchObject({
+      ok: true, toolCalls: 3, reportedInputTokens: 700, reportedOutputTokens: 120,
+      providerCost: 0.0125, context: { compacted: true, omittedMessages: 34 },
+    });
+  });
+
   it("seedIfEmpty creates exactly one starter bot, once", () => {
     const store = new Store(selection);
     store.seedIfEmpty();

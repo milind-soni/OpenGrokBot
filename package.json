@@ -15,6 +15,7 @@
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "vitest run",
+    "bench:context": "node --experimental-strip-types scripts/bench-context.ts",
     "test:watch": "vitest",
     "preview": "vite preview",
     "build:server": "tsc -p tsconfig.server.build.json",

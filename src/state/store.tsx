@@ -69,6 +69,24 @@ export interface ModelSelection {
   model: string;
 }
 
+export interface TaskUsage {
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  ok?: boolean;
+  stopReason?: string | null;
+  modelCalls: number;
+  toolCalls: number;
+  computerActions: number;
+  reportedInputTokens: number;
+  reportedOutputTokens: number;
+  providerCost?: number | null;
+  context?: {
+    originalMessages: number; submittedMessages: number; omittedMessages: number;
+    originalChars: number; submittedChars: number; originalEstimatedTokens: number; submittedEstimatedTokens: number; compacted: boolean;
+  };
+}
+
 export interface Bot {
   id: string;
   threadId: string;
@@ -85,6 +103,8 @@ export interface Bot {
   computer?: "cloud" | "local" | "off";
   pinned?: boolean;
   hidden?: boolean;
+  activeRun?: TaskUsage | null;
+  lastRun?: TaskUsage;
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;

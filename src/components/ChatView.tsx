@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Gauge,
   Loader2,
   Monitor,
   Pencil,
@@ -15,7 +16,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useStore, useStreaming, formatTime, messageVersions, visibleMessages, type Bot, type Message } from "@/state/store";
+import { useStore, useStreaming, formatTime, messageVersions, visibleMessages, type Bot, type Message, type TaskUsage } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -523,6 +524,34 @@ const MessagesList = memo(function MessagesList({
   );
 });
 
+function formatTokens(value: number) {
+  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value);
+}
+
+/** Compact, honest accounting: provider tokens stay distinct from our context estimate. */
+function UsageStrip({ run, active }: { run?: TaskUsage; active: boolean }) {
+  if (!run) return null;
+  const saved = run.context ? run.context.originalEstimatedTokens - run.context.submittedEstimatedTokens : 0;
+  const detail = [
+    `Model calls: ${run.modelCalls}`,
+    `Tool calls: ${run.toolCalls}`,
+    `Computer actions: ${run.computerActions}`,
+    `Provider-reported tokens: ${formatTokens(run.reportedInputTokens)} in / ${formatTokens(run.reportedOutputTokens)} out`,
+    run.context ? `Context estimate: ${formatTokens(run.context.originalEstimatedTokens)} → ${formatTokens(run.context.submittedEstimatedTokens)} tokens` : "",
+    run.durationMs !== undefined ? `Duration: ${(run.durationMs / 1000).toFixed(1)}s` : "",
+    run.providerCost !== null && run.providerCost !== undefined ? `Provider-reported cost: $${run.providerCost.toFixed(4)}` : "",
+  ].filter(Boolean).join("\n");
+  return (
+    <span title={detail} className="hidden max-w-[260px] items-center gap-1.5 truncate rounded-full border border-hairline/35 bg-panel px-2.5 py-1 text-[11px] text-ink-secondary sm:inline-flex">
+      <Gauge size={12} className={active ? "text-accent" : ""} />
+      {active ? "Working" : "Last"}
+      <span>· {formatTokens(run.reportedInputTokens + run.reportedOutputTokens)} tokens</span>
+      {run.toolCalls > 0 && <span>· {run.toolCalls} tools</span>}
+      {saved > 0 && <span className="text-success">· −{formatTokens(saved)} ctx</span>}
+    </span>
+  );
+}
+
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -637,6 +666,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               Stop
             </button>
           )}
+          <UsageStrip run={bot.activeRun ?? bot.lastRun} active={Boolean(bot.activeRun)} />
           <ModelPicker bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}

@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
+import type { ContextStats } from "./context.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 
@@ -103,7 +104,27 @@ export interface BotRecord {
   pinned?: boolean;
   hidden?: boolean;
   busy?: boolean;
+  /** Live + last-settled per-turn accounting. Provider-reported tokens are
+   * kept separate from the deterministic context estimate. */
+  activeRun?: TaskUsage | null;
+  lastRun?: TaskUsage;
   createdAt: number;
+}
+
+export interface TaskUsage {
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  ok?: boolean;
+  stopReason?: string | null;
+  modelCalls: number;
+  toolCalls: number;
+  computerActions: number;
+  reportedInputTokens: number;
+  reportedOutputTokens: number;
+  providerCost?: number | null;
+  /** Omitted for native provider sessions that did not receive transcript replay. */
+  context?: ContextStats;
 }
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
@@ -176,7 +197,12 @@ export class Store {
       this.groups = [];
     }
     // busy never survives a restart — no turn does either
-    for (const b of this.bots) b.busy = false;
+    for (const b of this.bots) {
+      b.busy = false;
+      // A process restart cannot resume an in-flight provider turn. Preserve
+      // the last settled accounting, but never present a stale live run.
+      delete b.activeRun;
+    }
     for (const g of this.groups) g.busyBotId = null;
   }
 
@@ -413,6 +439,43 @@ export class Store {
     Object.assign(bot, patch);
     this.saveBots();
     return bot;
+  }
+
+  beginRun(botId: string, context?: ContextStats): BotRecord | null {
+    return this.patchBot(botId, {
+      activeRun: {
+        startedAt: Date.now(),
+        modelCalls: 1,
+        toolCalls: 0,
+        computerActions: 0,
+        reportedInputTokens: 0,
+        reportedOutputTokens: 0,
+        ...(context ? { context } : {}),
+      },
+    });
+  }
+
+  updateActiveRun(botId: string, update: (run: TaskUsage) => TaskUsage): BotRecord | null {
+    const bot = this.bot(botId);
+    if (!bot?.activeRun) return bot;
+    return this.patchBot(botId, { activeRun: update(bot.activeRun) });
+  }
+
+  finishRun(botId: string, result: { ok: boolean; stopReason?: string | null; providerCost?: number | null }): BotRecord | null {
+    const bot = this.bot(botId);
+    if (!bot?.activeRun) return bot;
+    const completedAt = Date.now();
+    const lastRun: TaskUsage = {
+      ...bot.activeRun,
+      completedAt,
+      durationMs: completedAt - bot.activeRun.startedAt,
+      ok: result.ok,
+      stopReason: result.stopReason ?? null,
+      providerCost: result.providerCost ?? null,
+    };
+    // `null`, rather than `undefined`, survives JSON/SSE so the renderer can
+    // clear a previously displayed live run instead of retaining stale state.
+    return this.patchBot(botId, { activeRun: null, lastRun });
   }
 
   setResumeCursor(botId: string, instanceId: string, cursor: unknown) {

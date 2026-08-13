@@ -82,6 +82,7 @@ const ERROR_PAGE =
   );
 
 function createWindow() {
+  const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -89,8 +90,15 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    // frameless on both platforms: inset traffic lights on macOS; on
+    // Windows the overlay (min/max/close, top-right — the renderer's
+    // header leaves it room, see ChatView)
+    ...(isMac
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
+      : {
+          titleBarStyle: "hidden",
+          titleBarOverlay: { color: "#070707", symbolColor: "#b5b5b5", height: 40 },
+        }),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),

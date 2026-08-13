@@ -279,8 +279,9 @@ function userDataRoot(): string {
 }
 
 // Local computer-use contract written by Electron main on startup
-// (<userData>/cua-connection.json). Read fresh each turn — Electron may
-// restart or permissions may change.
+// (Electron's userData dir: ~/Library/Application Support on macOS,
+// %APPDATA% on Windows — <dir>/cua-connection.json). Read fresh each turn —
+// Electron may restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
   // new name first; pre-rename desktop builds used the old directory
   for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {

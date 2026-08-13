@@ -1,0 +1,9 @@
+# pnpm 11 reads allowBuilds, pnpm 10 reads onlyBuiltDependencies — keep both
+# so either version runs the postinstalls this project actually needs.
+allowBuilds:
+  electron: true # postinstall downloads the Electron dist
+  esbuild: true # postinstall validates the platform binary
+  electron-winstaller: false # unused — Windows builds ship NSIS
+onlyBuiltDependencies:
+  - electron
+  - esbuild

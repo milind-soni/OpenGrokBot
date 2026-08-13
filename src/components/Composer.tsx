@@ -93,7 +93,9 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
     });
     const offEnd = bridge.onSpeechEnd(({ code }) => {
       setRecording(false);
-      if (code === 1) {
+      if (code === 2) {
+        setSpeechError("Dictation is only available on macOS for now.");
+      } else if (code === 1) {
         setSpeechError(
           "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
         );

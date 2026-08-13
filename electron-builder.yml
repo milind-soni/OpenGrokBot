@@ -33,8 +33,6 @@ extraResources:
     to: ui
   - from: dist-server
     to: server
-  - from: electron/resources/speech-helper
-    to: speech-helper
 
 mac:
   target:
@@ -48,6 +46,10 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # the dictation helper is a signed macOS binary — Windows never sees it
+  extraResources:
+    - from: electron/resources/speech-helper
+      to: speech-helper
   extendInfo:
     NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
@@ -58,3 +60,16 @@ mac:
 dmg:
   sign: true
   artifactName: OpenMausBot-${version}.dmg
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+    - target: zip
+      arch: x64
+  icon: build/icon.ico
+
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: OpenMausBot-${version}-setup.${ext}

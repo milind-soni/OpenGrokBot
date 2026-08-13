@@ -6,3 +6,4 @@ dist-electron
 *.tsbuildinfo
 electron/resources/speech-helper
 release
+.omb-scratch

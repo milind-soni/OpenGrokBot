@@ -28,6 +28,12 @@ function ensureBuilt() {
 
 export function startSpeech(win) {
   stopSpeech();
+  if (process.platform !== "darwin") {
+    // the helper is a Swift SFSpeechRecognizer binary — macOS only; tell
+    // the renderer with a distinct code so it can say why
+    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 2 });
+    return;
+  }
   ensureBuilt();
   const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
   child = proc;

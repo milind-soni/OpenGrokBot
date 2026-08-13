@@ -3,6 +3,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("ogb", {
+  /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
+  platform: process.platform,
   /** One frame of this Mac's screen as a data: URL (Screen Recording TCC). */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
   speechStart: () => ipcRenderer.invoke("speech:start"),

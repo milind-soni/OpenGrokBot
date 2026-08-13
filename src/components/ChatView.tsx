@@ -282,15 +282,24 @@ export function ChatView({ bot }: { bot: Bot }) {
   };
 
   const first = messages[0];
+  // on Windows the frameless window's min/max/close overlay sits at the
+  // top-right: the header becomes the drag strip and clears room for it
+  const isWin = window.ogb?.platform === "win32";
+  const drag = isWin ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
+  const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3">
+      <div
+        className={cn("flex items-center justify-between px-5 py-3", isWin && "pr-[148px]")}
+        style={drag}
+      >
         <button
           onClick={() => dispatch({ type: "toggleSettings" })}
           className="flex items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-raised/50"
           title="Bot settings"
+          style={noDrag}
         >
           <MausAvatar
             color={bot.color}
@@ -302,7 +311,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           <span className="text-[15px] font-semibold text-ink">{bot.name}</span>
           {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" style={noDrag}>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}

@@ -10,7 +10,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
-    "dev:server": "node server/index.ts",
+    "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
@@ -20,7 +20,8 @@
     "build:server": "tsc -p tsconfig.server.build.json",
     "build:speech": "swiftc -O electron/resources/speech-helper.swift -o electron/resources/speech-helper",
     "build:updater": "node scripts/bundle-updater.mjs",
-    "package": "pnpm build && pnpm build:server && pnpm build:speech && pnpm build:updater && electron-builder --mac --publish never"
+    "package": "pnpm build && pnpm build:server && pnpm build:speech && pnpm build:updater && electron-builder --mac --publish never",
+    "package:win": "pnpm build && pnpm build:server && pnpm build:updater && electron-builder --win --publish never"
   },
   "dependencies": {
     "@trycua/cua-driver": "^0.19.3",

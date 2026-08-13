@@ -14,7 +14,7 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![Electron](https://img.shields.io/badge/Electron-macOS-2B2E3A?logo=electron&logoColor=9FEAF9)
+![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
 ![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
 
@@ -160,7 +160,7 @@ flowchart LR
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, routines, sections, connectors, config — HTTP + SSE. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
-| Desktop | `electron/` | macOS shell: dictation helper (SFSpeechRecognizer), local screen capture, CUA bridge. |
+| Desktop | `electron/` | macOS + Windows shells: dictation helper (SFSpeechRecognizer, macOS only), local screen capture, CUA bridge (macOS only). |
 
 ## Quick start
 
@@ -178,7 +178,7 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # or the Electron shell
 ```
 
-Requirements: **macOS**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
+Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
 [`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
 in the model picker automatically.
 
@@ -193,13 +193,14 @@ Optional, pasted once in **App Settings** (gear in the sidebar footer):
 ```sh
 pnpm typecheck     # app + server
 pnpm build         # typecheck + production build
+pnpm package:win   # Windows installer + zip → release/
 ```
 
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use → routines on a schedule. Rough edges to expect: Windows/Linux shells haven't been
-attempted (the harness itself is portable Node).
+computer use → routines on a schedule. Rough edges to expect: the Linux shell hasn't been attempted
+(macOS and Windows both run end to end; the harness itself is portable Node).
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

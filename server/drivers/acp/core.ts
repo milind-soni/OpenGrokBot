@@ -13,8 +13,9 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
+
+import { execCli, killCliTree, spawnCli } from "../../procs.ts";
 
 import type {
   DriverCreateInput,
@@ -150,11 +151,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const env = childEnv();
         const mcpServers = acpMcpServers(turn);
 
-        const child = spawn(config.cli, support.spawnArgs(config, turn), {
+        const child = spawnCli(config.cli, support.spawnArgs(config, turn), {
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
-          detached: true,
         });
 
         const state = { settled: false, promptSent: false, text: "" };
@@ -188,15 +188,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             send({ jsonrpc: "2.0", id, method, params });
           });
 
-        const stop = () => {
-          try {
-            process.kill(-child.pid!, "SIGTERM");
-          } catch {
-            try {
-              child.kill("SIGTERM");
-            } catch {}
-          }
-        };
+        const stop = () => killCliTree(child);
 
         const settle = (ok: boolean, stopReason: string | null) => {
           if (state.settled) return;
@@ -469,7 +461,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const snapshot = async (): Promise<ProviderSnapshot> => {
         const env = childEnv();
         const version = await new Promise<string | null>((resolve) => {
-          execFile(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
+          execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
             resolve(err ? null : stdout.trim()),
           );
         });

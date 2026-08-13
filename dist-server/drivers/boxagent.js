@@ -73,7 +73,9 @@ export const BoxAgentDriver = {
                 body: JSON.stringify({ provider: providerFor(model), model, prompt }),
             });
             appendNative(threadId, { dir: "out", source: "box.prompt", msg: { model, prompt, response: started } });
-            const promptId = started?.prompt?.id ?? started?.promptId ?? started?.id ?? null;
+            // real shape (2026-08): {type:"prompt.queued", promptId, promptRun:{id,…},
+            // id:<box id>} — never fall back to the bare id, it's the box's
+            const promptId = started?.promptRun?.id ?? started?.prompt?.id ?? started?.promptId ?? null;
             let cancelled = false;
             active.set(threadId, {
                 turnId,
@@ -104,8 +106,9 @@ export const BoxAgentDriver = {
                             seen.add(id);
                             appendNative(threadId, { dir: "in", source: "box.events", msg: ev });
                             const kind = String(ev.type ?? ev.kind ?? "");
-                            const text = ev.text ?? ev.message ?? ev.data?.text ?? null;
-                            if (/assistant|message|output/i.test(kind) && typeof text === "string" && text.trim()) {
+                            // "response" events carry the agent's text at data.content
+                            const text = ev.text ?? ev.message ?? ev.data?.text ?? ev.data?.content ?? null;
+                            if (/assistant|message|output|response/i.test(kind) && typeof text === "string" && text.trim()) {
                                 lastText = text;
                                 emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
                             }
@@ -121,10 +124,13 @@ export const BoxAgentDriver = {
                         }
                         if (promptId) {
                             const status = await api(`/boxes/${boxId}/prompts/${promptId}`).catch(() => null);
-                            const state = String(status?.prompt?.status ?? status?.status ?? "");
                             appendNative(threadId, { dir: "in", source: "box.prompt.status", msg: status });
-                            if (/completed|succeeded|done/i.test(state)) {
-                                const result = status?.prompt?.result ?? status?.result ?? lastText;
+                            // real shape (2026-08): {promptRun:{status:"finished",…}} —
+                            // flat fallbacks kept for drift
+                            const run = status?.promptRun ?? status?.prompt ?? status ?? {};
+                            const state = String(run?.status ?? "");
+                            if (/completed|succeeded|done|finished/i.test(state)) {
+                                const result = run?.result ?? run?.output ?? lastText;
                                 if (typeof result === "string" && result.trim() && result !== lastText) {
                                     emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: result });
                                 }

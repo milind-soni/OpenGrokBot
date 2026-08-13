@@ -9,8 +9,8 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
+import { execCli, killCliTree, spawnCli } from "../procs.js";
 import { newEventId, newId } from "../contracts.js";
 import { augmentedPath } from "../env-path.js";
 import { appendNative } from "./native.js";
@@ -63,11 +63,10 @@ export const CodexDriver = {
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)
             delete env.OPENAI_API_KEY;
-            const child = spawn(config.cli, ["app-server"], {
+            const child = spawnCli(config.cli, ["app-server"], {
                 cwd: turn.cwd ?? homedir(),
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
-                detached: true,
             });
             const state = { settled: false, lastText: "", sawStreamDelta: false };
             const asks = new Map();
@@ -85,17 +84,7 @@ export const CodexDriver = {
                 rpcPending.set(id, { resolve, reject });
                 send({ jsonrpc: "2.0", id, method, params });
             });
-            const stop = () => {
-                try {
-                    process.kill(-child.pid, "SIGTERM");
-                }
-                catch {
-                    try {
-                        child.kill("SIGTERM");
-                    }
-                    catch { }
-                }
-            };
+            const stop = () => killCliTree(child);
             const settle = (ok, stopReason) => {
                 if (state.settled)
                     return;
@@ -246,8 +235,13 @@ export const CodexDriver = {
                         break;
                     }
                     case "error":
-                        if (p.message)
-                            emit({ ...base(threadId, turnId), type: "runtime.error", message: p.message });
+                        // shape drift: 0.144 sends {message}, 0.139 nests it under
+                        // {error:{message}} — surface either (agentcal armor)
+                        {
+                            const message = p.message ?? p.error?.message;
+                            if (message)
+                                emit({ ...base(threadId, turnId), type: "runtime.error", message: String(message).slice(0, 400) });
+                        }
                         break;
                 }
             };
@@ -350,7 +344,7 @@ export const CodexDriver = {
         };
         const snapshot = async () => {
             const version = await new Promise((resolve) => {
-                execFile(config.cli, ["--version"], { timeout: 8000, env: { ...process.env, PATH: augmentedPath() } }, (err, stdout) => resolve(err ? null : stdout.trim()));
+                execCli(config.cli, ["--version"], { timeout: 8000, env: { ...process.env, PATH: augmentedPath() } }, (err, stdout) => resolve(err ? null : stdout.trim()));
             });
             if (!version)
                 return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };

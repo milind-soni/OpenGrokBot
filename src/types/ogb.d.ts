@@ -4,6 +4,7 @@ export {};
 declare global {
   interface Window {
     ogb?: {
+      platform: string;
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
       speechStop(): Promise<void>;

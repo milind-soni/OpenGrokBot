@@ -66,13 +66,20 @@ export function instanceConfigs(cfg) {
     // `grok` driver stays registered but out of the default fleet — that key is
     // a credential Milind doesn't want to manage; an `instances` entry brings
     // it back anytime.
+    //
+    // Google rides `antigravityAgent` (the `agy` CLI), not `geminiAgent`:
+    // Google retired Gemini CLI for the free/Pro/Ultra tiers on 2026-06-18
+    // (developers.googleblog.com, "transitioning Gemini CLI to Antigravity
+    // CLI"), so a default `gemini` instance could only ever show unavailable.
+    // The driver stays registered for enterprise licences, which keep Gemini
+    // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
     const map = cfg.instances && Object.keys(cfg.instances).length
         ? cfg.instances
         : {
             grok: { driver: "grokAgent" },
-            gemini: { driver: "geminiAgent" },
             claude: { driver: "claudeAgent" },
             codex: { driver: "codex" },
+            antigravity: { driver: "antigravityAgent" },
             computer: { driver: "boxAgent" },
         };
     for (const entry of Object.values(map)) {

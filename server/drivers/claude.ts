@@ -278,8 +278,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.agents = { ...turn.integrations.agents };
         allowed.push("mcp__agents");
       }
+      const configuredMcpKeys = new Set<string>();
       for (const server of turn.integrations?.mcp ?? []) {
-        const key = `user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+        const baseKey = `user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+        let key = baseKey; let suffix = 2;
+        while (configuredMcpKeys.has(key) || key in mcpServers) key = `${baseKey}_${suffix++}`;
+        configuredMcpKeys.add(key);
         if (server.transport === "stdio" && server.command) {
           mcpServers[key] = { command: server.command, args: server.args ?? [], env: server.env ?? {} };
           allowed.push(`mcp__${key}`);
@@ -487,7 +491,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session", agentsMcp: true, configuredMcp: true },
+        capabilities: { sessionModelSwitch: "in-session", agentsMcp: true, computerMcp: true, configuredMcp: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {

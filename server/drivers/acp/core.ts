@@ -140,10 +140,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
           });
         }
+        const configuredMcpNames = new Set<string>(servers.map((server) => server.name));
         for (const server of turn.integrations?.mcp ?? []) {
           if (server.transport !== "stdio" || !server.command) continue;
+          const baseName = `user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+          let name = baseName; let suffix = 2;
+          while (configuredMcpNames.has(name)) name = `${baseName}_${suffix++}`;
+          configuredMcpNames.add(name);
           servers.push({
-            name: `user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+            name,
             command: server.command,
             args: server.args ?? [],
             env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value: String(value) })),

@@ -23,6 +23,7 @@ export interface McpInspection {
 const MAX_NAME = 80;
 const MAX_TOOLS = 100;
 const INSPECTION_TIMEOUT_MS = 6_000;
+const MAX_STDIO_OUTPUT_BYTES = 1_000_000;
 
 function safeText(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -33,7 +34,7 @@ export function validRemoteUrl(value: string | undefined): boolean {
   try {
     const url = new URL(value);
     if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+    return url.protocol === "http:" && ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
   } catch {
     return false;
   }
@@ -104,6 +105,7 @@ export async function inspectMcpServer(server: McpServerConfig): Promise<McpInsp
     });
     let settled = false;
     let buffer = "";
+    let outputBytes = 0;
     const finish = (result: McpInspection) => {
       if (settled) return;
       settled = true;
@@ -116,6 +118,8 @@ export async function inspectMcpServer(server: McpServerConfig): Promise<McpInsp
     child.on("error", () => finish({ ok: false, transport: "stdio", message: "Could not start the MCP server" }));
     child.on("exit", () => finish({ ok: false, transport: "stdio", message: "MCP server exited before responding" }));
     child.stdout.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > MAX_STDIO_OUTPUT_BYTES) return finish({ ok: false, transport: "stdio", message: "MCP server produced too much output" });
       buffer += chunk.toString("utf8");
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? "";
@@ -123,6 +127,7 @@ export async function inspectMcpServer(server: McpServerConfig): Promise<McpInsp
         let message: any;
         try { message = JSON.parse(line); } catch { continue; }
         if (message.id === 1 && message.result) {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n");
           child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n");
         }
         if (message.id === 2 && message.result) {

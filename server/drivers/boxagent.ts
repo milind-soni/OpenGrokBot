@@ -138,11 +138,18 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
               seen.add(id);
               appendNative(threadId, { dir: "in", source: "box.events", msg: ev });
               const kind = String(ev.type ?? ev.kind ?? "");
-              // "response" events carry the agent's text at data.content
+              // "response" events carry the agent's text at data.content —
+              // the FULL text so far, not a chunk. Clients accumulate
+              // deltas, so forward only the growth; a drifted (non-prefix)
+              // event re-sends whole and the settled message replaces the
+              // stream anyway.
               const text = ev.text ?? ev.message ?? ev.data?.text ?? ev.data?.content ?? null;
               if (/assistant|message|output|response/i.test(kind) && typeof text === "string" && text.trim()) {
+                const delta = text.startsWith(lastText) ? text.slice(lastText.length) : text;
                 lastText = text;
-                emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
+                if (delta) {
+                  emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta });
+                }
               } else if (/tool|command|exec|browse/i.test(kind)) {
                 emit({
                   ...base(threadId, turnId),
@@ -151,6 +158,18 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
                   itemId: id,
                   title: String(ev.title ?? ev.command ?? kind).slice(0, 80),
                 });
+              }
+              // shape-drift backstop: without a promptId the status poll
+              // below can never see a terminal state, so settle off the
+              // events themselves instead of hanging to the 30-min ceiling
+              if (!promptId && /complete|finish|done|success|fail|error/i.test(kind)) {
+                active.delete(threadId);
+                if (lastText) {
+                  emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: lastText });
+                }
+                const failed = /fail|error/i.test(kind);
+                emit({ ...base(threadId, turnId), type: "turn.completed", ok: !failed, stopReason: failed ? kind : null, cost: null });
+                return;
               }
             }
             if (promptId) {
@@ -162,8 +181,15 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
               const state = String(run?.status ?? "");
               if (/completed|succeeded|done|finished/i.test(state)) {
                 const result = run?.result ?? run?.output ?? lastText;
-                if (typeof result === "string" && result.trim() && result !== lastText) {
-                  emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: result });
+                // stream only the growth past what events already sent —
+                // the settled message below carries the full text regardless
+                if (typeof result === "string" && result.trim() && result !== lastText && result.startsWith(lastText)) {
+                  emit({
+                    ...base(threadId, turnId),
+                    type: "content.delta",
+                    streamKind: "assistant_text",
+                    delta: result.slice(lastText.length),
+                  });
                 }
                 emit({
                   ...base(threadId, turnId),

@@ -16,6 +16,12 @@ let autoUpdater = null;
 let win = null;
 // status: idle | checking | available | downloading | downloaded | error
 let state = { status: "idle" };
+// Whether the in-flight check came from the user's button. Background checks
+// fail for reasons that are none of the user's business — no feed published
+// for this platform yet, offline, a GitHub blip — and a popup for those on
+// every launch is pure noise. Only a check the user asked for may surface an
+// error; automatic ones fall back to idle.
+let userInitiated = false;
 
 function setState(patch) {
   state = { ...state, ...patch };
@@ -26,18 +32,24 @@ function setState(patch) {
   }
 }
 
-function check() {
+function check(manual = false) {
   if (!autoUpdater) return;
+  userInitiated = manual;
   try {
     autoUpdater.checkForUpdates();
   } catch (e) {
-    setState({ status: "error", message: String(e?.message ?? e) });
+    reportError(e);
   }
+}
+
+function reportError(e) {
+  if (!userInitiated) return setState({ status: "idle" });
+  setState({ status: "error", message: String(e?.message ?? e) });
 }
 
 export function registerUpdaterIpc() {
   ipcMain.handle("update:get-state", () => state);
-  ipcMain.handle("update:check", () => check());
+  ipcMain.handle("update:check", () => check(true));
   ipcMain.handle("update:download", () => {
     try {
       autoUpdater?.downloadUpdate();
@@ -83,9 +95,11 @@ export function startUpdater(mainWindow) {
   autoUpdater.on("update-downloaded", (info) =>
     setState({ status: "downloaded", version: info?.version }),
   );
-  autoUpdater.on("error", (e) => setState({ status: "error", message: String(e?.message ?? e) }));
+  autoUpdater.on("error", reportError);
 
-  // first check ~15s after launch (let the app settle), then hourly
-  setTimeout(check, 15_000).unref?.();
-  setInterval(check, 60 * 60 * 1000).unref?.();
+  // first check ~15s after launch (let the app settle), then hourly — both
+  // silent on failure, hence the arrow: a bare `check` would receive the
+  // timer's argument as `manual` and start reporting errors again.
+  setTimeout(() => check(), 15_000).unref?.();
+  setInterval(() => check(), 60 * 60 * 1000).unref?.();
 }

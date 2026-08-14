@@ -574,13 +574,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [stream, setStream] = useState<StreamState>(EMPTY_STREAM);
   const deltaBuffer = useRef(new Map<string, { text: string; reasoning: string }>());
   const deltaFlush = useRef<number | null>(null);
-  const clearStream = (threadId: string) =>
+  const clearStream = (threadId: string) => {
+    // Drop the thread's un-flushed deltas too: the settled message that
+    // triggered this clear already contains them. Without this, the pending
+    // rAF re-creates a "ghost" stream bubble holding the tail fragment —
+    // it renders below any card/chip that settled next (so a permission
+    // card looks glued to the top), keeps the caret blinking while the bot
+    // is actually waiting, and the next block's deltas append onto the
+    // duplicated tail instead of starting a fresh bubble.
+    deltaBuffer.current.delete(threadId);
     setStream((prev) => {
       if (!(threadId in prev.streaming) && !(threadId in prev.reasoning)) return prev;
       const { [threadId]: _s, ...streaming } = prev.streaming;
       const { [threadId]: _r, ...reasoning } = prev.reasoning;
       return { streaming, reasoning };
     });
+  };
   const flushDeltas = () => {
     if (deltaFlush.current !== null) {
       cancelAnimationFrame(deltaFlush.current);

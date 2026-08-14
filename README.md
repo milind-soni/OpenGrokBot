@@ -46,8 +46,9 @@ it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each
 memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
 already have:
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
-  — your existing logins and subscriptions, no new accounts, no proxy in the middle.
+- **Bring your own agents and models.** Bots can run on the `claude`, `codex`, and `grok` CLIs installed on
+  your own machine, OpenRouter or Ollama Cloud, or any HTTP endpoint that implements the OpenAI chat
+  completions API (including local Ollama and vLLM servers).
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
@@ -62,7 +63,8 @@ already have:
 ### 🧠 Pick a brain per bot
 
 A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
-providers dimmed with the reason. Switch a bot's model mid-conversation.
+providers dimmed with the reason. Switch a bot's model mid-conversation. OpenRouter, Ollama Cloud, and
+custom OpenAI-compatible endpoints can be configured during onboarding or later in App Settings.
 
 <img src="docs/screenshots/model-picker.png" alt="Model picker with provider rail" width="100%">
 
@@ -198,9 +200,9 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # Electron shell; keep the two commands above running
 ```
 
-Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
-[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
-in the model picker automatically.
+Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and either an agent CLI — [`claude`](https://claude.com/claude-code),
+[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in, or one of
+the model endpoints below. Available models appear in the model picker automatically.
 
 Package the desktop application:
 
@@ -228,13 +230,17 @@ in the sidebar footer) when you want to enable its integration:
 
 | Credential | What it enables | Where to get it |
 |---|---|---|
+| OpenRouter API key | Chat through OpenRouter's OpenAI-compatible model catalog | [OpenRouter keys](https://openrouter.ai/settings/keys) |
+| Ollama Cloud API key | Chat with models hosted by Ollama Cloud | [Ollama Cloud](https://ollama.com/) |
+| OpenAI-compatible API key (optional) | Authenticate to a custom OpenAI-compatible endpoint; local Ollama and vLLM usually do not require one | Your endpoint operator |
 | Composio Connect key (`ck_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [Composio Connect setup guide](https://docs.composio.dev/docs/composio-connect) |
 | Composio API key (`ak_…`) | Browse the full app catalog with official names and logos | [Composio project API key guide](https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions) |
 | Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
 | ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
 
-Composio and Box are third-party services with their own accounts and terms. Box is a paid service after
-its trial, and using a cloud computer may incur charges.
+OpenRouter, Ollama Cloud, Composio, and Box are third-party services with their own accounts and terms.
+Box is a paid service after its trial, and using a hosted model or cloud computer may incur charges. Custom
+OpenAI-compatible endpoint URLs and default model IDs are configured under **App Settings → Models**.
 
 ```sh
 pnpm typecheck     # app + server

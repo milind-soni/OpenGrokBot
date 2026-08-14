@@ -3,7 +3,7 @@
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, Monitor, User, Volume2, X } from "lucide-react";
+import { Cpu, KeyRound, Monitor, User, Volume2, X } from "lucide-react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
@@ -11,11 +11,13 @@ import { LocalComputerSection } from "./LocalComputerSection";
 import { Card } from "./SettingsPrimitives";
 import { VoiceSettings } from "./VoiceSettings";
 import { cn } from "@/lib/cn";
+import { OpenAIEndpointFields } from "./OpenAIEndpointFields";
 
-type SectionId = "general" | "connections" | "voice" | "computer";
+type SectionId = "general" | "models" | "connections" | "voice" | "computer";
 
 const SECTIONS: Array<{ id: SectionId; label: string; icon: typeof User }> = [
   { id: "general", label: "General", icon: User },
+  { id: "models", label: "Model providers", icon: Cpu },
   { id: "connections", label: "Connections", icon: KeyRound },
   { id: "voice", label: "Voice", icon: Volume2 },
   { id: "computer", label: "Local computer", icon: Monitor },
@@ -213,6 +215,29 @@ export function SettingsModal() {
                   <ApiKeyRow section="box" />
                 </div>
               </Card>
+            )}
+
+            {section === "models" && (
+              <>
+                <Card
+                  title="Cloud model providers"
+                  subtitle="Keys stay on this computer. Model lists are discovered after connecting."
+                >
+                  <div className="flex flex-col gap-4">
+                    <ApiKeyRow section="openrouter" />
+                    <ApiKeyRow section="ollamaCloud" />
+                  </div>
+                </Card>
+                <Card
+                  title="OpenAI-compatible endpoint"
+                  subtitle="Use local Ollama, vLLM on your network, or a remote OpenAI-standard server."
+                >
+                  <div className="flex flex-col gap-4">
+                    <OpenAIEndpointFields />
+                    <ApiKeyRow section="openaiCompatible" />
+                  </div>
+                </Card>
+              </>
             )}
 
             {section === "voice" && <VoiceSettings />}

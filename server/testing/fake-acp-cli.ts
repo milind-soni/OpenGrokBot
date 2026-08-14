@@ -22,9 +22,31 @@ if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
   process.exit(0);
 }
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env }, null, 2));
-}
+const SENSITIVE_KEY = /token|secret|password|api[_-]?key|authorization/i;
+const redact = (value: unknown, key = ""): unknown => {
+  if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
+  if (Array.isArray(value)) return value.map((item) => redact(item));
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const redacted = Object.fromEntries(
+      Object.entries(record).map(([name, item]) => [name, redact(item, name)]),
+    );
+    if (typeof record.name === "string" && SENSITIVE_KEY.test(record.name) && "value" in record) {
+      redacted.value = "[REDACTED]";
+    }
+    return redacted;
+  }
+  return value;
+};
+const seenRequests: unknown[] = [];
+const dump = () => {
+  if (!process.env.FAKE_ACP_DUMP) return;
+  writeFileSync(
+    process.env.FAKE_ACP_DUMP,
+    JSON.stringify(redact({ argv, env: process.env, requests: seenRequests }), null, 2),
+  );
+};
+dump();
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const result = (id: unknown, res: unknown) => out({ jsonrpc: "2.0", id, result: res });
@@ -112,6 +134,10 @@ process.stdin.on("data", (c) => {
 });
 
 function handle(msg: any) {
+  if (msg.method) {
+    seenRequests.push(msg);
+    dump();
+  }
   // client's response to our permission request
   if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined) && msg.id === pendingPermissionId) {
     pendingPermissionId = null;

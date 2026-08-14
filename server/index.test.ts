@@ -268,6 +268,54 @@ describe("harness HTTP API", () => {
     expect(nothing.status).toBe(400);
   });
 
+  it("persists provider settings without echoing credentials", async () => {
+    const before = await api("GET", "/api/config");
+    expect(before.body).toMatchObject({
+      openrouter: { configured: false },
+      ollamaCloud: { configured: false },
+      openaiCompatible: {
+        apiKeyConfigured: false,
+        url: "http://127.0.0.1:11434/v1",
+        model: "llama3.2",
+      },
+    });
+
+    const saved = await api("PUT", "/api/config", {
+      openrouter: { key: "router-secret" },
+      ollamaCloud: { key: "ollama-secret" },
+      openaiCompatible: {
+        key: "endpoint-secret",
+        url: "http://192.168.1.25:8000/v1",
+        model: "qwen2.5-coder",
+      },
+    });
+
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({
+      openrouter: { configured: true },
+      ollamaCloud: { configured: true },
+      openaiCompatible: {
+        apiKeyConfigured: true,
+        url: "http://192.168.1.25:8000/v1",
+        model: "qwen2.5-coder",
+      },
+    });
+    expect(JSON.stringify(saved.body)).not.toMatch(/router-secret|ollama-secret|endpoint-secret/);
+  });
+
+  it("rejects an invalid endpoint before persisting it", async () => {
+    const previous = await api("GET", "/api/config");
+    const persistedUrl = previous.body.openaiCompatible.url;
+    const rejected = await api("PUT", "/api/config", {
+      openaiCompatible: { url: "https://models.example/v1?credential=leak", model: "bad" },
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toContain("query string or fragment");
+    const after = await api("GET", "/api/config");
+    expect(after.body.openaiCompatible.url).toBe(persistedUrl);
+  });
+
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {
     const put = await api("PUT", "/api/config", { profile: { name: "Ada Lovelace", email: "Ada@Example.com" } });
     expect(put.status).toBe(200);

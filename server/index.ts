@@ -11,10 +11,19 @@ import { approvalKey, autoDecision } from "./auto-approve.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { containerComputerStatus, setupCommands } from "./container-computer.ts";
-import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import {
+  ensureDirs,
+  instanceConfigs,
+  loadConfig,
+  saveConfig,
+  EVENTS_DIR,
+  NATIVE_DIR,
+  type AppConfig,
+} from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import { normalizeBaseUrl } from "./drivers/openai-compatible.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
@@ -787,6 +796,13 @@ function startGroupTurn(groupId: string, text: string) {
 function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
+    openrouter: { configured: Boolean(cfg.openrouter?.key) },
+    ollamaCloud: { configured: Boolean(cfg.ollamaCloud?.key) },
+    openaiCompatible: {
+      apiKeyConfigured: Boolean(cfg.openaiCompatible?.key),
+      url: cfg.openaiCompatible?.url ?? "http://127.0.0.1:11434/v1",
+      model: cfg.openaiCompatible?.model ?? "llama3.2",
+    },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
     // the chosen voice is a setting, not a secret; the key is reported the
@@ -1354,11 +1370,31 @@ const server = createServer(async (req, res) => {
     }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
-      const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "tts", "profile"] as const) {
+      const patch: Partial<AppConfig> = {};
+      for (const key of [
+        "xai",
+        "openrouter",
+        "ollamaCloud",
+        "openaiCompatible",
+        "composio",
+        "box",
+        "tts",
+        "profile",
+      ] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      for (const key of ["openrouter", "ollamaCloud", "openaiCompatible"] as const) {
+        const provider = patch[key];
+        if (provider?.url !== undefined) {
+          if (typeof provider.url !== "string") return json(res, 400, { error: `${key}.url must be a string` });
+          try {
+            provider.url = normalizeBaseUrl(provider.url);
+          } catch (error) {
+            return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
       // check a box token against the provider before storing it: a
       // rejected token used to save happily and only surface as a 401 in
       // another panel later, with nothing the user could act on

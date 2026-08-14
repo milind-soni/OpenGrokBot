@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
     environment: "node",
-    include: ["server/**/*.test.ts", "electron/**/*.test.mjs", "src/**/*.test.ts"],
+    include: ["server/**/*.test.ts", "src/**/*.test.ts", "src/**/*.test.tsx", "electron/**/*.test.mjs"],
     setupFiles: ["server/testing/setup.ts"],
     // the suite spawns fake provider CLIs and a real harness server;
     // parallel files introduce load-sensitive flakes for no win

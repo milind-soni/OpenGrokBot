@@ -148,6 +148,13 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
+  openrouter: { configured: boolean };
+  ollamaCloud: { configured: boolean };
+  openaiCompatible: {
+    apiKeyConfigured: boolean;
+    url: string;
+    model: string;
+  };
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   box: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
@@ -1128,6 +1135,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             type: "configStatus",
             config: {
               xai: frame.xai,
+              openrouter: frame.openrouter,
+              ollamaCloud: frame.ollamaCloud,
+              openaiCompatible: frame.openaiCompatible,
               composio: frame.composio,
               box: frame.box,
               tts: frame.tts,

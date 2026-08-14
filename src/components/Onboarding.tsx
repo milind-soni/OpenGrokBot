@@ -3,6 +3,7 @@ import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { ProviderSetupOptions } from "./ProviderSetupOptions";
 
 // Three-step first-run onboarding: who you are (email), what's installed
 // (live engine checks from the harness), what the app may use (TCC).
@@ -98,7 +99,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
-      <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
+      <div className="flex max-h-[90vh] w-[460px] flex-col overflow-y-auto rounded-2xl border border-hairline/40 bg-panel p-8">
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" state="happy" size={72} />
@@ -199,6 +200,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                         : "Optional. Install: see antigravity.google/docs/cli"
                     }
                   />
+                  <div className="mt-2">
+                    <div className="mb-2 text-[13px] font-medium text-ink">Optional API providers</div>
+                    <ProviderSetupOptions />
+                  </div>
                 </>
               )}
             </div>

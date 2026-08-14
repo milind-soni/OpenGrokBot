@@ -10,6 +10,9 @@ import type { InstanceConfigMap } from "./contracts.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
+  openrouter?: { key?: string; url?: string; model?: string };
+  ollamaCloud?: { key?: string; url?: string; model?: string };
+  openaiCompatible?: { key?: string; url?: string; model?: string };
   /** key = ck_… Connect consumer key (connections + agent tools);
    * apiKey = ak_… project API key — optional, unlocks the full toolkit
    * catalog with official logos in the plugins marketplace. */
@@ -51,6 +54,12 @@ export function loadConfig(): AppConfig {
     /* first run — env fallbacks below */
   }
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
+  cfg.openrouter = { key: process.env.OPENROUTER_API_KEY, ...cfg.openrouter };
+  cfg.ollamaCloud = { key: process.env.OLLAMA_API_KEY, ...cfg.ollamaCloud };
+  cfg.openaiCompatible = {
+    key: process.env.OPENAI_COMPATIBLE_API_KEY,
+    ...cfg.openaiCompatible,
+  };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
   cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
@@ -67,7 +76,16 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "tts", "profile"] as const) {
+  for (const key of [
+    "xai",
+    "openrouter",
+    "ollamaCloud",
+    "openaiCompatible",
+    "composio",
+    "box",
+    "tts",
+    "profile",
+  ] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -101,13 +119,43 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           grok: { driver: "grokAgent" },
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
+          openrouter: {
+            driver: "openrouter",
+            config: {
+              url: cfg.openrouter?.url ?? "https://openrouter.ai/api/v1",
+              model: cfg.openrouter?.model,
+            },
+          },
+          "ollama-cloud": {
+            driver: "ollamaCloud",
+            config: {
+              url: cfg.ollamaCloud?.url ?? "https://ollama.com/v1",
+              model: cfg.ollamaCloud?.model,
+            },
+          },
+          "openai-compatible": {
+            driver: "openaiCompatible",
+            config: {
+              url: cfg.openaiCompatible?.url,
+              model: cfg.openaiCompatible?.model,
+            },
+          },
           antigravity: { driver: "antigravityAgent" },
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {
     entry.environment = {
-      ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-      ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
+      ...(entry.driver === "grok" && cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
+      ...(entry.driver === "openrouter" && cfg.openrouter?.key
+        ? { OPENROUTER_API_KEY: cfg.openrouter.key }
+        : {}),
+      ...(entry.driver === "ollamaCloud" && cfg.ollamaCloud?.key
+        ? { OLLAMA_API_KEY: cfg.ollamaCloud.key }
+        : {}),
+      ...(entry.driver === "openaiCompatible" && cfg.openaiCompatible?.key
+        ? { OPENAI_COMPATIBLE_API_KEY: cfg.openaiCompatible.key }
+        : {}),
+      ...(entry.driver === "boxAgent" && cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
       ...entry.environment,
     };
   }

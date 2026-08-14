@@ -38,12 +38,16 @@ describe("ACP turns (fake CLI)", () => {
   let recorder: EventRecorder;
   let scratch: string;
 
-  const create = async (driver = GrokAgentDriver, mode?: string) => {
+  const create = async (
+    driver = GrokAgentDriver,
+    mode?: string,
+    environment: Record<string, string> = {},
+  ) => {
     if (mode) process.env.FAKE_ACP_MODE = mode;
     instance = await driver.create({
       instanceId: "acp-test",
       displayName: "ACP Test",
-      environment: {},
+      environment,
       enabled: true,
       config: { cli: FAKE_CLI, fullAuto: false },
     });
@@ -105,6 +109,52 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.argv).toContain("stdio");
     expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
+  });
+
+  it("redacts provider credentials and nested integration tokens from diagnostic dumps", async () => {
+    const dump = join(scratch, "redacted-dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await create(GrokAgentDriver, undefined, {
+      OPENROUTER_API_KEY: "router-secret",
+      OLLAMA_API_KEY: "ollama-secret",
+      OPENAI_COMPATIBLE_API_KEY: "endpoint-secret",
+      DIAGNOSTIC_LABEL: "visible",
+    });
+
+    await instance.adapter.sendTurn({
+      threadId: "t-redaction",
+      text: "go",
+      integrations: {
+        agents: {
+          command: process.execPath,
+          args: ["/fake/agents-proxy.js"],
+          env: { OMB_COMMS_TOKEN: "comms-secret", SAFE_VALUE: "visible" },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.env).toMatchObject({
+      OPENROUTER_API_KEY: "[REDACTED]",
+      OLLAMA_API_KEY: "[REDACTED]",
+      OPENAI_COMPATIBLE_API_KEY: "[REDACTED]",
+      DIAGNOSTIC_LABEL: "visible",
+    });
+    const sessionNew = (seen.requests ?? []).find((request: any) => request.method === "session/new");
+    expect(sessionNew).toMatchObject({
+      params: {
+        mcpServers: expect.arrayContaining([
+          expect.objectContaining({
+            name: "agents",
+            env: expect.arrayContaining([
+              { name: "OMB_COMMS_TOKEN", value: "[REDACTED]" },
+              { name: "SAFE_VALUE", value: "visible" },
+            ]),
+          }),
+        ]),
+      },
+    });
   });
 
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {

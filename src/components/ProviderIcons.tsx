@@ -1,5 +1,5 @@
 // Provider brand marks, keyed by driver kind. Dark-theme fills.
-import { Monitor } from "lucide-react";
+import { Cloud, Monitor, Network, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export interface IconProps {
@@ -36,6 +36,18 @@ export function ComputerMark({ size = 16, className }: IconProps) {
   return <Monitor size={size} className={cn("text-ink-secondary", className)} />;
 }
 
+export function OpenRouterMark({ size = 16, className }: IconProps) {
+  return <Network size={size} className={cn("text-[#7c8cff]", className)} />;
+}
+
+export function OllamaCloudMark({ size = 16, className }: IconProps) {
+  return <Cloud size={size} className={cn("text-[#f5f5f5]", className)} />;
+}
+
+export function OpenAIEndpointMark({ size = 16, className }: IconProps) {
+  return <Server size={size} className={cn("text-[#38d591]", className)} />;
+}
+
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
     case "grok":
@@ -45,6 +57,12 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <ClaudeMark size={size} className={className} />;
     case "codex":
       return <CodexMark size={size} className={className} />;
+    case "openrouter":
+      return <OpenRouterMark size={size} className={className} />;
+    case "ollamaCloud":
+      return <OllamaCloudMark size={size} className={className} />;
+    case "openaiCompatible":
+      return <OpenAIEndpointMark size={size} className={className} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
     default:

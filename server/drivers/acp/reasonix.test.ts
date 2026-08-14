@@ -52,6 +52,14 @@ describe("hasReasonixCredentials", () => {
     expect(hasReasonixCredentials("DEEPSEEK_API_KEY=")).toBe(false);
   });
 
+  it("rejects an empty assignment followed by a comment", () => {
+    expect(hasReasonixCredentials("DEEPSEEK_API_KEY=\n# comment")).toBe(false);
+  });
+
+  it("rejects an empty assignment followed by a blank line and comment", () => {
+    expect(hasReasonixCredentials("DEEPSEEK_API_KEY=\n\n# comment")).toBe(false);
+  });
+
   it("rejects a quoted-empty assignment", () => {
     expect(hasReasonixCredentials('DEEPSEEK_API_KEY=""')).toBe(false);
     expect(hasReasonixCredentials("DEEPSEEK_API_KEY=''")).toBe(false);

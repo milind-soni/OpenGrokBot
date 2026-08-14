@@ -31,7 +31,7 @@ export function reasonixHome(
 // values are accepted by Reasonix's own reader. Rejects empty, comment-only,
 // and quoted-empty (`KEY=""`/`KEY=''`) assignments.
 export function hasReasonixCredentials(content: string): boolean {
-  return /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\s*["']?[^\s"'=]/m.test(content);
+  return /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=[ \t]*["']?[^\s"'=]/m.test(content);
 }
 
 // True when <Reasonix home>/.env holds a non-empty credential.

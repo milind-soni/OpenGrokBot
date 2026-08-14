@@ -30,29 +30,32 @@ export function McpManager() {
       setUrl("");
       setOpen(false);
       await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not add MCP server");
+    } catch {
+      setError("Could not add MCP server");
     } finally { setBusy(null); }
   };
   const update = async (id: string, patch: unknown) => {
+    setError(null);
     setBusy(id);
     try { await api(`/api/mcp/servers/${id}`, { method: "PATCH", body: JSON.stringify(patch) }); await refresh(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not update MCP server"); }
+    catch { setError("Could not update MCP server"); }
     finally { setBusy(null); }
   };
   const remove = async (id: string) => {
+    setError(null);
     setBusy(id);
     try { await api(`/api/mcp/servers/${id}`, { method: "DELETE" }); await refresh(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not remove MCP server"); }
+    catch { setError("Could not remove MCP server"); }
     finally { setBusy(null); }
   };
   const inspect = async (id: string) => {
+    setError(null);
     setBusy(id);
     try {
       const result = await api(`/api/mcp/servers/${id}/inspect`, { method: "POST" }) as Inspection;
       setResults((old) => ({ ...old, [id]: result }));
     }
-    catch (reason) { setResults((old) => ({ ...old, [id]: { ok: false, message: reason instanceof Error ? reason.message : "Inspection failed" } })); }
+    catch { setResults((old) => ({ ...old, [id]: { ok: false, message: "Inspection failed" } })); }
     finally { setBusy(null); }
   };
 

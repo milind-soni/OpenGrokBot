@@ -1134,8 +1134,8 @@ const server = createServer(async (req, res) => {
         const status = configStatus();
         broadcast({ kind: "config", ...status });
         return json(res, 201, { server: mcpSnapshot(server) });
-      } catch (error) {
-        return json(res, 400, { error: error instanceof Error ? error.message : "Invalid MCP server" });
+      } catch {
+        return json(res, 400, { error: "Invalid MCP server configuration" });
       }
     }
     m = path.match(/^\/api\/mcp\/servers\/([\w-]+)$/);
@@ -1151,8 +1151,8 @@ const server = createServer(async (req, res) => {
         const status = configStatus();
         broadcast({ kind: "config", ...status });
         return json(res, 200, { server: mcpSnapshot(server) });
-      } catch (error) {
-        return json(res, 400, { error: error instanceof Error ? error.message : "Invalid MCP server" });
+      } catch {
+        return json(res, 400, { error: "Invalid MCP server configuration" });
       }
     }
     if (m && method === "DELETE") {

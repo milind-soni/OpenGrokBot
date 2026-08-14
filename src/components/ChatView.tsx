@@ -70,7 +70,7 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
         <ol className="ml-2 border-l border-hairline/40 pb-2 pl-3">
           {recent.map((event) => (
             <li key={event.id} className="relative flex items-center gap-2 py-1 text-[12px] text-ink-secondary">
-              <span className={cn("absolute -left-[17px] size-2 rounded-full", event.state === "failed" ? "bg-danger" : event.state === "complete" ? "bg-success" : "bg-ink-secondary")} />
+              <span className={cn("absolute -left-[17px] size-2 rounded-full", event.state === "failed" ? "bg-danger" : event.state === "complete" ? "bg-success" : event.state === "running" ? "animate-pulse bg-accent" : "bg-ink-secondary")} />
               <span className="truncate">{event.label}</span>
               <time className="ml-auto shrink-0 text-[11px] text-ink-secondary/70">{formatTime(event.at)}</time>
             </li>

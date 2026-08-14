@@ -26,6 +26,16 @@
 //     type, Enter) in one round trip with one frame at the end.
 //
 // stdout is the MCP channel — never console.log here.
+import {
+  normalizeBrowserUrl,
+  normalizeCrop,
+  ObservationCoordinator,
+  parseBrowserTargets,
+  safeBrowserUrl,
+  type BrowserTarget,
+  type CropRegion,
+} from "./computer-observation.ts";
+
 const BOX_API = process.env.OGB_BOX_API ?? "https://ascii.dev/api/box/v1";
 const boxId = process.env.OGB_BOX_ID ?? "";
 const token = process.env.OGB_BOX_TOKEN ?? "";
@@ -39,6 +49,11 @@ const SHOT_PATH = "/tmp/ogb-shot.jpg";
 const SETTLE_MS = 350;
 /** Gap between batched actions so focus changes land before typing. */
 const ACTION_GAP_MS = 120;
+const CHROME_PROFILE = "$HOME/.openmausbot/chrome-profile";
+const CHROME_DEBUG_FLAGS =
+  `--user-data-dir="${CHROME_PROFILE}" --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222`;
+const CHROME_PROFILE_SETUP =
+  `mkdir -p "${CHROME_PROFILE}" && chmod 700 "${CHROME_PROFILE}"`;
 /** Frames larger than this come back over the files API instead of
  * inline stdout (keeps us clear of the command endpoint's stdout cap). */
 const INLINE_MAX_BYTES = 400_000;
@@ -93,6 +108,46 @@ async function runOnBox(command: string, timeoutMs = 60_000, allowWake = true): 
   };
 }
 
+const observations = new ObservationCoordinator();
+
+function metricsText(): string {
+  return JSON.stringify(observations.metrics);
+}
+
+async function browserTargets(countObservation = true): Promise<BrowserTarget[]> {
+  // DevTools stays loopback-only inside the box. Only redacted fields are
+  // ever formatted into tool output; comparisonUrl remains internal.
+  const out = await runOnBox("curl -sf --max-time 2 http://127.0.0.1:9222/json/list", 5_000);
+  const targets = out.ok ? parseBrowserTargets(out.stdout) : [];
+  if (countObservation && targets.length) observations.noteStructuredObservation();
+  return targets;
+}
+
+async function waitForNavigation(
+  value: string,
+  attempts = 3,
+): Promise<{ ok: boolean; targets: BrowserTarget[] }> {
+  const expected = normalizeBrowserUrl(value);
+  if (!expected) {
+    observations.noteVerification(false);
+    return { ok: false, targets: [] };
+  }
+  let targets: BrowserTarget[] = [];
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      observations.noteRetry();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    targets = await browserTargets(false);
+    if (targets.some((target) => target.comparisonUrl === expected)) {
+      observations.noteVerification(true);
+      return { ok: true, targets };
+    }
+  }
+  observations.noteVerification(false);
+  return { ok: false, targets };
+}
+
 const ENV = 'export DISPLAY=${DISPLAY:-:0}';
 /** Resolve the real display size into $W/$H for box-side click scaling. */
 const GEOMETRY = [
@@ -112,8 +167,19 @@ function scaled(varName: string, value: number): string {
   return `if [ "$W" -gt ${SHOT_WIDTH} ] 2>/dev/null; then ${varName}=$(( ${v} * W / ${SHOT_WIDTH} )); else ${varName}=${v}; fi`;
 }
 
-/** act → settle → capture → hash → (inline base64 if small). One hop. */
-function captureBlock(settleMs = SETTLE_MS): string {
+/** act → settle → capture → canonical hash → optional crop → inline bytes.
+ * The hash is taken before cropping, so change detection always describes
+ * the full screen. A requested crop fails closed when conversion fails. */
+function captureBlock(settleMs = SETTLE_MS, crop: CropRegion | null = null): string {
+  const downscale = crop
+    ? `if [ "$W" -gt ${SHOT_WIDTH} ] 2>/dev/null; then if ! command -v convert >/dev/null 2>&1 || ! convert "$f" -thumbnail ${SHOT_WIDTH}x -quality ${JPEG_QUALITY} "$f" 2>/dev/null; then echo CROP_FAILED; exit 0; fi; fi`
+    : `if [ "$W" -gt ${SHOT_WIDTH} ] 2>/dev/null && command -v convert >/dev/null 2>&1; then convert "$f" -thumbnail ${SHOT_WIDTH}x -quality ${JPEG_QUALITY} "$f" 2>/dev/null || true; fi`;
+  const cropSteps = crop
+    ? [
+        `if ! command -v convert >/dev/null 2>&1 || ! convert "$f" -crop ${crop.width}x${crop.height}+${crop.x}+${crop.y} +repage "$f" 2>/dev/null; then echo CROP_FAILED; exit 0; fi`,
+        `if [ ! -s "$f" ]; then echo CROP_FAILED; exit 0; fi`,
+      ]
+    : [];
   return [
     settleMs > 0 ? `sleep ${(settleMs / 1000).toFixed(2)}` : "true",
     `f=${SHOT_PATH}`,
@@ -121,10 +187,11 @@ function captureBlock(settleMs = SETTLE_MS): string {
     `scrot -o -q ${JPEG_QUALITY} "$f" 2>/dev/null || import -window root -quality ${JPEG_QUALITY} "$f" 2>/dev/null || ffmpeg -y -f x11grab -i "$DISPLAY" -frames:v 1 -q:v 6 "$f" >/dev/null 2>&1`,
     // only re-encode when the display is bigger than the model's space —
     // ImageMagick startup is the most expensive step in the old pipeline
-    `if [ "$W" -gt ${SHOT_WIDTH} ] 2>/dev/null && command -v convert >/dev/null 2>&1; then convert "$f" -thumbnail ${SHOT_WIDTH}x -quality ${JPEG_QUALITY} "$f" 2>/dev/null || true; fi`,
+    downscale,
     `if [ ! -s "$f" ]; then echo SHOT_FAILED; exit 0; fi`,
     'echo "GEOM $W $H"',
     'echo "HASH $(md5sum "$f" 2>/dev/null | cut -d\' \' -f1)"',
+    ...cropSteps,
     's=$(stat -c%s "$f" 2>/dev/null || echo 0)',
     // SIZE is what makes the inline path safe: the frame is only trusted
     // when the bytes we decoded match the bytes the box says it wrote
@@ -196,10 +263,33 @@ interface Frame {
 }
 
 let inlineWorks = true; // flipped off for the proxy's life on first garbage
-let lastFrameHash: string | null = null;
+let lastDisplayGeometry: Frame["geometry"] = null;
+
+function geometryFrom(stdout: string): Frame["geometry"] {
+  const match = stdout.match(/^GEOM\s+(\d+)\s+(\d+)$/m);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+async function observationBounds(): Promise<{ width: number; height: number } | null> {
+  let geometry = lastDisplayGeometry;
+  if (!geometry) {
+    const out = await runOnBox([ENV, GEOMETRY, 'echo "GEOM $W $H"'].join("; "), 15_000);
+    geometry = geometryFrom(out.stdout);
+    if (geometry) lastDisplayGeometry = geometry;
+  }
+  if (!geometry) return null;
+  const scale = geometry.width > SHOT_WIDTH ? SHOT_WIDTH / geometry.width : 1;
+  return {
+    width: Math.round(geometry.width * scale),
+    height: Math.round(geometry.height * scale),
+  };
+}
 
 async function frameFrom(out: RunOut): Promise<Frame | null> {
-  if (/SHOT_FAILED/.test(out.stdout)) return null;
+  if (/SHOT_FAILED|CROP_FAILED/.test(out.stdout)) return null;
   let hash: string | null = null;
   let geometry: Frame["geometry"] = null;
   let inline = "";
@@ -212,6 +302,7 @@ async function frameFrom(out: RunOut): Promise<Frame | null> {
       if (Number.isFinite(w) && w > 0) geometry = { width: w, height: Number.isFinite(h) ? h : 0 };
     } else if (line.startsWith("B64 ")) inline = line.slice(4).trim();
   }
+  if (geometry?.height) lastDisplayGeometry = geometry;
   if (inline && inlineWorks) {
     const bytes = Buffer.from(inline, "base64");
     if (wholeImage(bytes, size || undefined)) return { data: inline, mime: "image/jpeg", hash, geometry };
@@ -233,20 +324,25 @@ const text = (id: unknown, t: string, isError = false): void =>
 /** An action result: the text plus the frame the action produced. When
  * the pixels are byte-identical to the frame the model just saw, the
  * image is dropped — it already has it, and it costs ~1.2k tokens. */
-function observed(id: unknown, note: string, frame: Frame | null) {
+function observed(
+  id: unknown,
+  note: string,
+  frame: Frame | null,
+  crop: CropRegion | null = null,
+  followsAction = true,
+) {
   if (!frame) {
     return text(id, `${note}\n(couldn't capture the screen — call screenshot to retry)`);
   }
-  const unchanged = frame.hash != null && frame.hash === lastFrameHash;
-  lastFrameHash = frame.hash ?? lastFrameHash;
-  if (unchanged) {
+  const observation = observations.observeFrame(frame.hash ?? (crop ? null : frame.data), crop);
+  if (!observation.changed) {
     // deliberately does NOT suggest repeating the action: the action may
     // well have landed, and re-clicking a button that already submitted
     // is the expensive kind of wrong
-    return text(
-      id,
-      `${note}\n(the screen is identical to the frame you already have, so no new image is attached. Don't repeat the action — if you expected a change, it may still be rendering: call screenshot again in a moment, or re-check your coordinates against that frame.)`,
-    );
+    const guidance = followsAction
+      ? " Don't repeat the action — it may already have succeeded. If you expected a change, call screenshot again after it has had time to render."
+      : " No new image is attached.";
+    return text(id, `${note}\n(the screen is identical to the frame you already have.${guidance})`);
   }
   send({
     jsonrpc: "2.0",
@@ -273,7 +369,43 @@ const TOOLS = [
   {
     name: "screenshot",
     description:
-      "See the bot's cloud computer screen (returns an image). The desktop runs Chrome and a full Linux GUI. You usually do NOT need this after acting — click, type_text, press_key, scroll and open_url already return the resulting screen.",
+      "See the bot's cloud computer screen when visual state is needed. First prefer browser_state for Chrome title/URL checks. The frame is captured fresh; byte-identical pixels are not resent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        region: {
+          type: "object",
+          description: "Optional crop in the coordinates of the last screenshot.",
+          properties: {
+            x: { type: "number" },
+            y: { type: "number" },
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+          required: ["x", "y", "width", "height"],
+        },
+      },
+    },
+  },
+  {
+    name: "browser_state",
+    description:
+      "Read structured Chrome page titles and safe URLs. Credentials, query strings, and fragments are removed before output.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "wait_for_navigation",
+    description:
+      "Verify that Chrome reached one exact http(s) URL, including its query and fragment, with at most three bounded checks.",
+    inputSchema: {
+      type: "object",
+      properties: { url: { type: "string" } },
+      required: ["url"],
+    },
+  },
+  {
+    name: "observation_metrics",
+    description: "Return this turn's observation, action, retry, and verification counters.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -374,7 +506,8 @@ const TOOLS = [
   },
   {
     name: "open_url",
-    description: "Open a URL in the computer's own Chrome and return the resulting screen.",
+    description:
+      "Open a URL in the computer's own Chrome, verify the exact destination when DevTools is available, and return the resulting screen.",
     inputSchema: {
       type: "object",
       properties: { url: { type: "string" }, ...OBSERVE_PROPS },
@@ -438,6 +571,7 @@ async function actAndObserve(
     if (parts.length) parts.push(`sleep ${(ACTION_GAP_MS / 1000).toFixed(2)}`);
     parts.push(shell);
   }
+  observations.noteAction(actions.filter((action) => action?.action !== "wait").length);
   const observe = wantsFrame(args);
   // The actions run in a guarded group so a failing xdotool is REPORTED
   // rather than silently swallowed by the capture that follows it — but
@@ -464,19 +598,55 @@ async function actAndObserve(
 
 async function call(id: unknown, name: string, args: any) {
   if (name === "screenshot") {
-    const out = await runOnBox([ENV, GEOMETRY, captureBlock(0)].join("; "), 60_000);
+    let crop: CropRegion | null = null;
+    if (args.region !== undefined) {
+      const bounds = await observationBounds();
+      if (!bounds) return text(id, "crop unavailable: could not determine the screenshot dimensions", true);
+      crop = normalizeCrop(args.region, bounds.width, bounds.height);
+      if (!crop) {
+        return text(
+          id,
+          `region must be at least 32×32 and stay within the ${bounds.width}×${bounds.height} screenshot`,
+          true,
+        );
+      }
+    }
+    const out = await runOnBox([ENV, GEOMETRY, captureBlock(0, crop)].join("; "), 60_000);
+    if (/CROP_FAILED/.test(out.stdout)) {
+      return text(id, `crop failed: ${out.stderr.slice(0, 200) || "ImageMagick could not create the requested region"}`, true);
+    }
     const frame = await frameFrom(out);
     if (!frame) {
       return text(id, `screenshot failed: ${out.stderr.slice(0, 200) || "capture produced no frame"}`, true);
     }
-    // an explicit look always returns pixels, even if nothing moved
-    lastFrameHash = frame.hash ?? lastFrameHash;
-    return send({
-      jsonrpc: "2.0",
-      id,
-      result: { content: [{ type: "image", data: frame.data, mimeType: frame.mime }] },
-    });
+    return observed(id, crop ? "cropped screen captured" : "screen captured", frame, crop, false);
   }
+  if (name === "browser_state") {
+    const targets = await browserTargets();
+    return text(
+      id,
+      targets.length
+        ? `Structured browser state:\n${targets.map((target) => `- ${target.title || "Untitled"}: ${target.url}`).join("\n")}`
+        : "Structured browser state unavailable. Use screenshot only if visual state is necessary.",
+    );
+  }
+  if (name === "wait_for_navigation") {
+    const url = String(args.url ?? "");
+    const publicUrl = safeBrowserUrl(url);
+    if (!normalizeBrowserUrl(url) || !publicUrl) {
+      observations.noteVerification(false);
+      return text(id, "wait_for_navigation needs a valid http(s) URL", true);
+    }
+    const result = await waitForNavigation(url);
+    return text(
+      id,
+      result.ok
+        ? `navigation verified: ${publicUrl}`
+        : `navigation not verified after 3 checks. Current structured state: ${result.targets.map((target) => target.url).join(", ") || "unavailable"}. Use screenshot only if needed.`,
+      !result.ok,
+    );
+  }
+  if (name === "observation_metrics") return text(id, metricsText());
   if (name === "click") {
     const x = Math.round(Number(args.x));
     const y = Math.round(Number(args.y));
@@ -519,6 +689,7 @@ async function call(id: unknown, name: string, args: any) {
   }
   if (name === "computer_exec") {
     const command = String(args.command ?? "").slice(0, 4000);
+    observations.noteAction();
     const out = await runOnBox(command, 120_000);
     const note = `exit ${out.exitCode}\n${out.stdout.slice(-6000)}${out.stderr ? `\n[stderr]\n${out.stderr.slice(-2000)}` : ""}`;
     if (args.observe !== true) return text(id, note);
@@ -527,21 +698,30 @@ async function call(id: unknown, name: string, args: any) {
   }
   if (name === "open_url") {
     const url = String(args.url ?? "");
-    if (!/^https?:\/\//.test(url)) return text(id, "only http(s) URLs", true);
-    const q = shellQuote(url.replace(/'/g, "%27"));
+    const normalized = normalizeBrowserUrl(url);
+    const publicUrl = safeBrowserUrl(url);
+    if (!normalized || !publicUrl) return text(id, "only valid http(s) URLs", true);
+    const q = shellQuote(normalized);
     const observe = wantsFrame(args);
     // launch, then poll for a browser window instead of a blind sleep —
     // a fast page returns in a fraction of the old fixed 3s
     const command = [
       ENV,
       GEOMETRY,
-      `(google-chrome ${q} || chromium ${q} || chromium-browser ${q} || xdg-open ${q}) >/dev/null 2>&1 &`,
+      CHROME_PROFILE_SETUP,
+      `(google-chrome ${CHROME_DEBUG_FLAGS} ${q} || chromium ${CHROME_DEBUG_FLAGS} ${q} || chromium-browser ${CHROME_DEBUG_FLAGS} ${q} || xdg-open ${q}) >/dev/null 2>&1 &`,
       'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do xdotool search --onlyvisible --class "chrom" >/dev/null 2>&1 && break; sleep 0.25; done',
       observe ? captureBlock(600) : "true",
     ].join("; ");
+    observations.noteAction();
     const out = await runOnBox(command, 60_000);
-    if (!observe) return text(id, `opened ${url}`);
-    return observed(id, `opened ${url}`, await frameFrom(out));
+    const verification = await waitForNavigation(normalized, 1);
+    const current = verification.targets.map((target) => target.url).join(", ") || "unavailable";
+    const note = verification.ok
+      ? `opened and navigation verified: ${publicUrl}`
+      : `opened ${publicUrl}, but the exact destination was not verified. Current structured state: ${current}`;
+    if (!observe) return text(id, note);
+    return observed(id, note, await frameFrom(out));
   }
   return text(id, `unknown tool ${name}`, true);
 }

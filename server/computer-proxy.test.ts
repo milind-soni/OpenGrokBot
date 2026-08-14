@@ -34,6 +34,8 @@ describe("computer proxy (fake box)", () => {
   const commands: string[] = [];
   let fileReads = 0;
   let hash = "aaaa1111";
+  let browserUrl = "https://example.com/";
+  let cropFails = false;
 
   const rpc = (msg: unknown) => proxy.stdin!.write(JSON.stringify(msg) + "\n");
   const results = new Map<number, any>();
@@ -57,9 +59,15 @@ describe("computer proxy (fake box)", () => {
           commands.push(command);
           // a real box echoes what the capture block printed
           const size = Buffer.from(JPEG, "base64").length;
-          const stdout = /GEOM/.test(command)
-            ? `GEOM 1920 1080\nHASH ${hash}\nSIZE ${size}\nB64 ${JPEG}\nACT ok\n`
-            : "ACT ok\n";
+          const stdout = command.includes("127.0.0.1:9222/json/list")
+            ? JSON.stringify([
+                { id: "page-1", type: "page", title: " Example ", url: browserUrl },
+              ])
+            : cropFails && /convert "\$f" -crop/.test(command)
+              ? `GEOM 1920 1080\nHASH ${hash}\nCROP_FAILED\n`
+              : /GEOM/.test(command)
+                ? `GEOM 1920 1080\nHASH ${hash}\nSIZE ${size}\nB64 ${JPEG}\nACT ok\n`
+                : "ACT ok\n";
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ exitCode: 0, stdout, stderr: "" }));
         });
@@ -110,13 +118,16 @@ describe("computer proxy (fake box)", () => {
     box?.close();
   });
 
-  it("exposes a batch tool and advertises that actions return the screen", async () => {
+  it("exposes action, structured-state, crop, and metrics tools", async () => {
     rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const res = await waitFor(2);
     const names = res.result.tools.map((t: any) => t.name);
     expect(names).toContain("computer_batch");
+    expect(names).toEqual(expect.arrayContaining(["browser_state", "wait_for_navigation", "observation_metrics"]));
     const click = res.result.tools.find((t: any) => t.name === "click");
     expect(click.description).toMatch(/return the resulting screen/i);
+    const screenshot = res.result.tools.find((t: any) => t.name === "screenshot");
+    expect(screenshot.inputSchema.properties.region).toBeTruthy();
   });
 
   it("clicks and returns the frame in ONE round trip, scaled box-side", async () => {
@@ -211,5 +222,171 @@ describe("computer proxy (fake box)", () => {
     const res = await waitFor(7);
     expect(commands.at(-1)).not.toMatch(/scrot/);
     expect(res.result.content).toHaveLength(1);
+  });
+
+  it("never exposes browser credentials, queries, or fragments", async () => {
+    browserUrl = "https://user:password@example.com/path?token=secret#private";
+    rpc({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "browser_state", arguments: {} } });
+    const res = await waitFor(8);
+    const output = res.result.content[0].text;
+    expect(output).toContain("https://example.com/path");
+    expect(output).not.toMatch(/user|password|token|secret|private/);
+  });
+
+  it("does not verify a different query or an invalid expected URL", async () => {
+    browserUrl = "https://example.com/path?step=2#done";
+    rpc({ jsonrpc: "2.0", id: 90, method: "tools/call", params: { name: "observation_metrics", arguments: {} } });
+    const metricsBefore = JSON.parse((await waitFor(90)).result.content[0].text);
+    const beforeInvalid = commands.length;
+    rpc({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "wait_for_navigation", arguments: { url: "not a URL" } },
+    });
+    const invalid = await waitFor(9);
+    expect(invalid.result.isError).toBe(true);
+    expect(commands.length).toBe(beforeInvalid);
+
+    rpc({
+      jsonrpc: "2.0",
+      id: 10,
+      method: "tools/call",
+      params: {
+        name: "wait_for_navigation",
+        arguments: { url: "https://example.com/path?step=1#done" },
+      },
+    });
+    const mismatch = await waitFor(10);
+    expect(mismatch.result.isError).toBe(true);
+    expect(mismatch.result.content[0].text).toMatch(/not verified/i);
+
+    rpc({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: {
+        name: "wait_for_navigation",
+        arguments: { url: "https://example.com/path?step=2#done" },
+      },
+    });
+    const exact = await waitFor(11);
+    expect(exact.result.isError).not.toBe(true);
+    expect(exact.result.content[0].text).toMatch(/verified/i);
+    expect(exact.result.content[0].text).not.toContain("step=2");
+
+    rpc({ jsonrpc: "2.0", id: 91, method: "tools/call", params: { name: "observation_metrics", arguments: {} } });
+    const metricsAfter = JSON.parse((await waitFor(91)).result.content[0].text);
+    expect(metricsAfter.structuredBrowserObservations).toBe(metricsBefore.structuredBrowserObservations);
+  });
+
+  it("rejects out-of-height crops and fails closed when conversion fails", async () => {
+    rpc({
+      jsonrpc: "2.0",
+      id: 120,
+      method: "tools/call",
+      params: { name: "screenshot", arguments: {} },
+    });
+    await waitFor(120);
+    const beforeBounds = commands.length;
+    rpc({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "screenshot",
+        arguments: { region: { x: 0, y: 700, width: 100, height: 50 } },
+      },
+    });
+    const bounds = await waitFor(12);
+    expect(bounds.result.isError).toBe(true);
+    expect(bounds.result.content[0].text).toMatch(/1280×720/);
+    expect(commands.length).toBe(beforeBounds);
+
+    cropFails = true;
+    rpc({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "tools/call",
+      params: {
+        name: "screenshot",
+        arguments: { region: { x: 10, y: 20, width: 100, height: 80 } },
+      },
+    });
+    const failed = await waitFor(13);
+    expect(failed.result.isError).toBe(true);
+    expect(failed.result.content).toHaveLength(1);
+    expect(failed.result.content[0].text).toMatch(/crop failed/i);
+
+    cropFails = false;
+  });
+
+  it("uses a private Chrome profile, strips URL credentials, and reports redirects", async () => {
+    browserUrl = "https://example.com/landed?private=value#done";
+    const before = commands.length;
+    rpc({
+      jsonrpc: "2.0",
+      id: 130,
+      method: "tools/call",
+      params: {
+        name: "open_url",
+        arguments: {
+          url: "https://user:password@example.com/requested?token=secret#fragment",
+          observe: false,
+        },
+      },
+    });
+    const result = await waitFor(130);
+    const issued = commands.slice(before);
+    expect(issued).toHaveLength(2);
+    expect(issued[0]).toContain('mkdir -p "$HOME/.openmausbot/chrome-profile"');
+    expect(issued[0]).toContain('chmod 700 "$HOME/.openmausbot/chrome-profile"');
+    expect(issued[0]).toContain('--user-data-dir="$HOME/.openmausbot/chrome-profile"');
+    expect(issued[0]).not.toContain("user:password@");
+    expect(issued[0]).toContain("'https://example.com/requested?token=secret#fragment'");
+    expect(result.result.content[0].text).toContain("https://example.com/landed");
+    expect(result.result.content[0].text).not.toMatch(/private|value|token|secret|fragment/);
+  });
+
+  it("hashes the full frame while treating distinct crops as distinct observations", async () => {
+    hash = "dddd4444";
+    rpc({
+      jsonrpc: "2.0",
+      id: 14,
+      method: "tools/call",
+      params: {
+        name: "screenshot",
+        arguments: { region: { x: 10, y: 20, width: 100, height: 80 } },
+      },
+    });
+    const first = await waitFor(14);
+    expect(first.result.content.some((item: any) => item.type === "image")).toBe(true);
+    const command = commands.at(-1)!;
+    expect(command.indexOf('echo "HASH')).toBeLessThan(command.indexOf('-crop 100x80+10+20'));
+
+    rpc({
+      jsonrpc: "2.0",
+      id: 15,
+      method: "tools/call",
+      params: {
+        name: "screenshot",
+        arguments: { region: { x: 20, y: 20, width: 100, height: 80 } },
+      },
+    });
+    const second = await waitFor(15);
+    expect(second.result.content.some((item: any) => item.type === "image")).toBe(true);
+
+    rpc({
+      jsonrpc: "2.0",
+      id: 16,
+      method: "tools/call",
+      params: {
+        name: "screenshot",
+        arguments: { region: { x: 20, y: 20, width: 100, height: 80 } },
+      },
+    });
+    const repeated = await waitFor(16);
+    expect(repeated.result.content).toHaveLength(1);
+    expect(repeated.result.content[0].text).toMatch(/identical/i);
   });
 });

@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
+import capabilitiesModule from "./capabilities.cjs";
+
+const { desktopCapabilities } = capabilitiesModule;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -12,6 +15,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+
+// GNOME groups the window with its installed desktop entry only when both
+// identities match. This must run before Electron becomes ready.
+if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.desktop");
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -49,6 +56,7 @@ async function startServerOn(port) {
       ...process.env,
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       OMB_PORT: String(port),
+      OMB_USER_DATA: app.getPath("userData"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -107,6 +115,8 @@ const ERROR_PAGE =
     `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
+let cuaReady = Promise.resolve({ mode: "unavailable", reason: "not-started" });
+
 function createWindow() {
   const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
@@ -116,19 +126,21 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    // frameless on both platforms: inset traffic lights on macOS; on
-    // Windows the overlay (min/max/close, top-right — the renderer's
-    // header leaves it room, see ChatView)
+    autoHideMenuBar: process.platform !== "darwin",
+    // macOS keeps inset traffic lights, Windows keeps its custom overlay,
+    // and Linux uses the native desktop title bar and window controls.
     ...(isMac
       ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
-      : {
-          titleBarStyle: "hidden",
-          // height MUST match the ChatView/GroupView header strip (px-5 py-3
-          // around a 36px control row = 60). Windows draws the caption buttons
-          // to fill the overlay, so anything shorter leaves a dead band under
-          // them and anything taller overhangs the header.
-          titleBarOverlay: { color: "#070707", symbolColor: "#b5b5b5", height: 60 },
-        }),
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden",
+            // height MUST match the ChatView/GroupView header strip (px-5 py-3
+            // around a 36px control row = 60). Windows draws the caption buttons
+            // to fill the overlay, so anything shorter leaves a dead band under
+            // them and anything taller overhangs the header.
+            titleBarOverlay: { color: "#070707", symbolColor: "#b5b5b5", height: 60 },
+          }
+        : {}),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -139,6 +151,41 @@ function createWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+
+  // Packaged CI smoke hook. It validates the real renderer/preload bridge and
+  // same-origin embedded server, then follows the normal window-close path.
+  // No debugging port or sandbox override is needed.
+  if (process.env.OMB_SMOKE_TEST === "1") {
+    win.webContents.once("did-finish-load", async () => {
+      try {
+        const result = await win.webContents.executeJavaScript(`
+          (async () => {
+            if (!window.ogb?.getCapabilities) throw new Error("desktop preload bridge is unavailable");
+            const [capabilities, healthResponse] = await Promise.all([
+              window.ogb.getCapabilities(),
+              fetch("/api/health"),
+            ]);
+            if (!healthResponse.ok) {
+              throw new Error(\`health request failed: \${healthResponse.status} \${healthResponse.statusText}\`);
+            }
+            const health = await healthResponse.json();
+            return { capabilities, health, location: window.location.href, title: document.title };
+          })()
+        `);
+        const expectedLocation = `http://127.0.0.1:${SERVER_PORT}/`;
+        if (result.location !== expectedLocation) {
+          throw new Error(
+            `unexpected packaged renderer URL: ${result.location} (expected ${expectedLocation})`,
+          );
+        }
+        console.log(`[smoke] renderer-ready ${JSON.stringify(result)}`);
+      } catch (error) {
+        console.error(`[smoke] renderer-failed ${error?.stack ?? error}`);
+      } finally {
+        win.close();
+      }
+    });
+  }
 
   if (app.isPackaged) {
     win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : ERROR_PAGE);
@@ -151,6 +198,7 @@ function createWindow() {
 // "This Mac" screen preview — served from the main process so the Screen
 // Recording permission prompt attributes to the app, never the server
 ipcMain.handle("screen:frame", async () => {
+  if (process.platform !== "darwin") return null;
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: { width: 1280, height: 800 },
@@ -173,9 +221,13 @@ ipcMain.handle("screen:frame", async () => {
 // prompts then, attributed correctly, at the moment of actual use. The
 // perm:open-settings deep link stays as the repair path for denials.
 ipcMain.handle("perm:status", () => ({
-  mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
+  mic:
+    process.platform === "darwin"
+      ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown"
+      : "unsupported",
 }));
 ipcMain.handle("perm:request-mic", async () => {
+  if (process.platform !== "darwin") return false;
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch {
@@ -186,21 +238,39 @@ ipcMain.handle("perm:request-mic", async () => {
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
+  if (process.platform !== "darwin") return false;
   const panes = {
     mic: "Privacy_Microphone",
     screen: "Privacy_ScreenCapture",
     speech: "Privacy_SpeechRecognition",
   };
-  return shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
-  );
+  // own-property lookup only — a renderer-supplied "__proto__"/"constructor"
+  // would otherwise resolve up the prototype chain to a truthy object
+  const anchor = Object.hasOwn(panes, pane) ? panes[pane] : "Privacy";
+  return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`);
 });
 
-ipcMain.handle("speech:start", (event) => {
+ipcMain.handle("speech:start", (event, options) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win) startSpeech(win);
+  if (!win) return;
+  if (process.platform !== "darwin") {
+    win.webContents.send("speech:end", { code: 2, reason: "unsupported-platform" });
+    return;
+  }
+  startSpeech(win, options);
 });
-ipcMain.handle("speech:stop", () => stopSpeech());
+ipcMain.handle("speech:stop", () => {
+  if (process.platform === "darwin") stopSpeech();
+});
+
+ipcMain.handle("desktop:capabilities", async () =>
+  desktopCapabilities({
+    platform: process.platform,
+    env: process.env,
+    packaged: app.isPackaged,
+    localConnection: await cuaReady,
+  }),
+);
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
@@ -208,21 +278,29 @@ app.whenReady().then(async () => {
   // inside the app's own processes — the one capture path macOS reliably
   // attributes to the app (registers it in the Screen Recording pane and
   // prompts). Used by the onboarding "Enable screen preview" button.
-  session.defaultSession.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      desktopCapturer
-        .getSources({ types: ["screen"] })
-        .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
-        .catch(() => callback({}));
-    },
-    { useSystemPicker: false },
-  );
+  if (process.platform === "darwin") {
+    session.defaultSession.setDisplayMediaRequestHandler(
+      (_request, callback) => {
+        desktopCapturer
+          .getSources({ types: ["screen"] })
+          .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
+          .catch(() => callback({}));
+      },
+      { useSystemPicker: false },
+    );
+  }
   registerCuaIpc();
   registerUpdaterIpc();
   // Start the CUA daemon before the window so the harness can pick up the
   // connection descriptor on first render. Never blocks window creation on
   // failure — computer use degrades to "unavailable", the rest still works.
-  startCua().catch((e) => console.error("[cua] start failed:", e));
+  cuaReady =
+    process.platform === "darwin"
+      ? startCua().catch((e) => {
+          console.error("[cua] start failed:", e);
+          return { mode: "unavailable", reason: String(e) };
+        })
+      : Promise.resolve({ mode: "unavailable", reason: "unsupported-platform" });
   if (app.isPackaged) serverReady = await startServerPackaged();
   const win = createWindow();
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
@@ -239,6 +317,8 @@ app.on("window-all-closed", () => {
 
 // EMBEDDING.md lifecycle rule: defer the first quit until the embedded
 // daemon's async cleanup completes — it can't run after the host exits.
+// Cap the defer so a wedged daemon cannot keep the app alive forever.
+const CUA_STOP_TIMEOUT_MS = 2500;
 let cuaCleanedUp = false;
 app.on("before-quit", (e) => {
   if (cuaCleanedUp) return;
@@ -246,7 +326,14 @@ app.on("before-quit", (e) => {
   try {
     serverProc?.kill();
   } catch {}
-  stopCua().finally(() => {
+  // a live dictation session runs its own helper child that holds the mic —
+  // stop it here so quitting never orphans a recording process
+  stopSpeech();
+  const cleanup = Promise.race([
+    stopCua().catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, CUA_STOP_TIMEOUT_MS).unref()),
+  ]);
+  cleanup.then(() => {
     cuaCleanedUp = true;
     app.quit();
   });

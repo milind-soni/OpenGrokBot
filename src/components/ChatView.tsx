@@ -20,9 +20,13 @@ import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
+import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { TaskPicker } from "./TaskPicker";
 import { ReactionBar, ReactionChips } from "./Reactions";
+import { SpeakButton } from "./SpeakButton";
+import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -303,6 +307,9 @@ function Bubble({
         {!user && (
           <div className="flex flex-col gap-0.5 self-end pb-0.5">
             <CopyButton text={text} />
+            {message.kind === "text" && (
+              <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} />
+            )}
             {isLastBotText && !bot.busy && onRegenerate && (
               <button
                 onClick={onRegenerate}
@@ -484,7 +491,13 @@ const MessagesList = memo(function MessagesList({
         const row = (() => {
           switch (m.kind) {
             case "options":
-              return <OptionCard botId={bot.id} message={m} />;
+              // a live permission ask gets the approval box; questions and
+              // the onboarding quiz keep the list card
+              return m.card?.requestId && m.card.tool ? (
+                <ApprovalCard bot={bot} message={m} />
+              ) : (
+                <OptionCard botId={bot.id} message={m} />
+              );
             case "activity":
               // a failed turn is an error, not a tool run — render it as one
               return m.tool?.name.startsWith("error:") ? (
@@ -606,6 +619,8 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {/* Call mode covers the thread while the bot is on the line */}
+      <CallOverlay bot={bot} />
       {/* Header */}
       <div
         className={cn("flex items-center justify-between px-5 py-3", isWin && "pr-[148px]")}
@@ -638,7 +653,9 @@ export function ChatView({ bot }: { bot: Bot }) {
               Stop
             </button>
           )}
+          <TaskPicker bot={bot} />
           <ModelPicker bot={bot} />
+          <CallButton bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(

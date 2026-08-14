@@ -1,7 +1,19 @@
 {
   "name": "openmausbot",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
+  "description": "A local-first chat app for running a team of AI agents.",
+  "homepage": "https://github.com/milind-soni/OpenMausBot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/milind-soni/OpenMausBot.git"
+  },
+  "author": {
+    "name": "Milind Soni",
+    "email": "46266943+milind-soni@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "desktopName": "com.openmausbot.app.desktop",
   "type": "module",
   "main": "electron/main.mjs",
   "engines": {
@@ -15,13 +27,19 @@
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "vitest run",
+    "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",
+    "check:electron": "node --check electron/main.mjs && node --check electron/preload.cjs && node --check electron/capabilities.cjs && node --check electron/cua-connection.cjs && node --check electron/cua.mjs && node --check electron/speech.mjs",
     "preview": "vite preview",
     "build:server": "tsc -p tsconfig.server.build.json",
-    "build:speech": "swiftc -O electron/resources/speech-helper.swift -o electron/resources/speech-helper",
+    "build:speech": "node electron/build-speech-helper.mjs",
     "build:updater": "node scripts/bundle-updater.mjs",
-    "package": "pnpm build && pnpm build:server && pnpm build:speech && pnpm build:updater && electron-builder --mac --publish never",
-    "package:win": "pnpm build && pnpm build:server && pnpm build:updater && electron-builder --win --publish never"
+    "package:prepare": "pnpm build && pnpm build:server && pnpm build:updater",
+    "package:mac": "pnpm package:prepare && pnpm build:speech && electron-builder --mac --publish never",
+    "package:win": "pnpm package:prepare && electron-builder --win --publish never",
+    "package:linux": "pnpm package:prepare && electron-builder --linux --x64 --publish never",
+    "package:linux:dir": "pnpm package:prepare && electron-builder --linux dir --x64 --publish never",
+    "package": "pnpm package:mac"
   },
   "dependencies": {
     "@trycua/cua-driver": "^0.19.3",

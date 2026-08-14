@@ -3,22 +3,24 @@
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, Monitor, User, Volume2, X } from "lucide-react";
+import { KeyRound, Monitor, User, Volume2, X, ListChecks } from "lucide-react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { LocalComputerSection } from "./LocalComputerSection";
 import { Card } from "./SettingsPrimitives";
 import { VoiceSettings } from "./VoiceSettings";
+import { TaskTemplatesManager } from "./TaskTemplatesManager";
 import { cn } from "@/lib/cn";
 
-type SectionId = "general" | "connections" | "voice" | "computer";
+type SectionId = "general" | "connections" | "voice" | "computer" | "templates";
 
 const SECTIONS: Array<{ id: SectionId; label: string; icon: typeof User }> = [
   { id: "general", label: "General", icon: User },
   { id: "connections", label: "Connections", icon: KeyRound },
   { id: "voice", label: "Voice", icon: Volume2 },
   { id: "computer", label: "Local computer", icon: Monitor },
+  { id: "templates", label: "Task templates", icon: ListChecks },
 ];
 
 /** Name + email, persisted to /api/config {profile} on blur. */
@@ -218,6 +220,7 @@ export function SettingsModal() {
             {section === "voice" && <VoiceSettings />}
 
             {section === "computer" && <LocalComputerSection />}
+            {section === "templates" && <TaskTemplatesManager />}
           </div>
         </div>
       </div>

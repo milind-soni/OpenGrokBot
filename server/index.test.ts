@@ -182,6 +182,45 @@ describe("harness HTTP API", () => {
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
   });
 
+  it("stores template instructions locally and instantiates a configured bot", async () => {
+    const created = await api("POST", "/api/templates", {
+      name: "Source research",
+      title: "Research brief",
+      instructions: "Find primary sources and state uncertainty.",
+      computer: "off",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.item).toMatchObject({ name: "Source research", computer: "off" });
+    expect(created.body.item).not.toHaveProperty("instructions");
+
+    const catalog = await api("GET", "/api/templates");
+    expect(catalog.body.items).toHaveLength(1);
+    expect(JSON.stringify(catalog.body)).not.toContain("Find primary sources");
+
+    const fromTemplate = await api("POST", "/api/bots", { templateId: created.body.item.id });
+    expect(fromTemplate.status).toBe(201);
+    expect(fromTemplate.body.bot).toMatchObject({
+      name: "Source research",
+      title: "Research brief",
+      description: "Find primary sources and state uncertainty.",
+      computer: "off",
+    });
+    expect(fromTemplate.body.bot.messages[0].text).toContain("I'm Source research");
+
+    const sameClientId = await api("POST", "/api/templates", {
+      id: created.body.item.id,
+      name: "Separate template",
+      instructions: "This must get its own server ID.",
+    });
+    expect(sameClientId.status).toBe(201);
+    expect(sameClientId.body.item.id).not.toBe(created.body.item.id);
+
+    const missing = await api("POST", "/api/bots", { templateId: "gone" });
+    expect(missing.status).toBe(404);
+    expect((await api("DELETE", `/api/templates/${created.body.item.id}`)).status).toBe(200);
+    expect((await api("GET", "/api/templates")).body.items).toMatchObject([{ id: sameClientId.body.item.id }]);
+  });
+
   it("persists an answered onboarding card", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];

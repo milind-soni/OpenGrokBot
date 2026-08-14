@@ -154,6 +154,7 @@ export interface ConfigStatus {
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */
   tts?: { configured: boolean; ready: boolean; voice: string };
+  templates?: { items: Array<{ id: string; name: string; description?: string; title?: string; computer?: "cloud" | "local" | "off" }> };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
 }

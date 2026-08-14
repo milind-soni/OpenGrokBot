@@ -38,7 +38,7 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "media";
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome. `spoken` is the server's
@@ -47,6 +47,7 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
+  media?: MediaOutput[];
   at: number;
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
@@ -79,6 +80,25 @@ export interface ModelSelection {
   model: string;
 }
 
+export type ModelTask = "chat" | "image" | "video";
+export type MediaKind = "image" | "video";
+export type MediaStatus = "queued" | "generating" | "downloading" | "ready" | "failed" | "cancelled";
+
+export interface MediaOutput {
+  id: string;
+  kind: MediaKind;
+  status: MediaStatus;
+  mime?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  bytes?: number;
+  progress?: number;
+  cacheKey?: string;
+  providerJobId?: string;
+  error?: string;
+}
+
 /** One of a bot's separate contexts: its own thread, transcript and
  * provider session. The bot's threadId points at the active one. */
 export interface Task {
@@ -101,6 +121,7 @@ export interface Bot {
   unread: boolean;
   busy?: boolean;
   modelSelection: ModelSelection;
+  specialists?: { image?: ModelSelection; video?: ModelSelection };
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "local" | "off";
   /** auto mode: the bot approves its own tool permissions */
@@ -154,6 +175,9 @@ export interface ConfigStatus {
     apiKeyConfigured: boolean;
     url: string;
     model: string;
+    modelTasks: Record<string, ModelTask>;
+    imagePath: string;
+    videoPath: string;
   };
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   box: { configured: boolean };
@@ -176,7 +200,16 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
-  models: { default: string; options: Array<{ id: string; label: string }> };
+  models: {
+    default: string;
+    options: Array<{
+      id: string;
+      label: string;
+      task?: ModelTask;
+      inputModalities?: string[];
+      outputModalities?: string[];
+    }>;
+  };
 }
 
 interface AppState {
@@ -263,6 +296,7 @@ type Action =
   | { type: "provisioning"; botId: string; on: boolean }
   | { type: "setModel"; botId: string; selection: ModelSelection }
   | { type: "interrupt"; botId: string }
+  | { type: "cancelMedia"; botId: string; messageId: string }
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
   | { type: "toggleSettings"; open?: boolean }
@@ -287,6 +321,7 @@ type Action =
           | "voice"
           | "pinned"
           | "hidden"
+          | "specialists"
         >
       >;
     };
@@ -620,6 +655,7 @@ function reducer(state: AppState, action: Action): AppState {
     case "newBot":
     case "duplicateBot":
     case "interrupt":
+    case "cancelMedia":
     case "createGroup":
     case "sendGroup":
     case "deleteGroup":
@@ -945,6 +981,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
+          break;
+        case "cancelMedia":
+          api(`/api/bots/${action.botId}/messages/${action.messageId}/cancel-media`, { method: "POST" }).catch(showError);
           break;
         // tasks: the server answers with the bot AND the live transcript,
         // because switching changes which conversation is on screen

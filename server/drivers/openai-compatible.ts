@@ -1,6 +1,9 @@
 import type {
   DriverCreateInput,
+  GeneratedMedia,
+  GenerateMediaInput,
   ModelCatalog,
+  ModelTask,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -9,12 +12,16 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import { mediaPromptOptions } from "../media-intent.ts";
 import { appendNative } from "./native.ts";
 
 export interface OpenAIEndpointConfig {
   url: string;
   model: string;
   apiKeyEnv: string;
+  modelTasks: Record<string, ModelTask>;
+  imagePath: string;
+  videoPath: string;
 }
 
 interface EndpointDriverSpec {
@@ -25,6 +32,10 @@ interface EndpointDriverSpec {
   apiKeyEnv: string;
   credentialRequired: boolean;
   headers?: Record<string, string>;
+  imageModelsPath?: string;
+  videoModelsPath?: string;
+  imagePath?: string;
+  videoPath?: string;
 }
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -42,6 +53,21 @@ export function normalizeBaseUrl(value: string): string {
   if (parsed.username || parsed.password) throw new Error("url must not contain embedded credentials");
   if (parsed.search || parsed.hash) throw new Error("url must not contain a query string or fragment");
   return parsed.href.replace(/\/+$/, "");
+}
+
+export function normalizeEndpointPath(value: unknown, fallback: string): string {
+  const candidate = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  if (!candidate.startsWith("/") || candidate.startsWith("//")) {
+    throw new Error("endpoint path must be a same-origin absolute path");
+  }
+  if (candidate.includes("?") || candidate.includes("#")) {
+    throw new Error("endpoint path must not contain a query string or fragment");
+  }
+  const segments = candidate.split("/");
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("endpoint path must not contain relative segments");
+  }
+  return `/${segments.filter(Boolean).join("/")}`;
 }
 
 function endpointUrl(baseUrl: string, path: string): string {
@@ -91,8 +117,9 @@ async function readResponseBytes(response: Response, limitBytes: number): Promis
   }
 }
 
-async function readJson(response: Response, limitBytes = 4 * 1024 * 1024): Promise<any> {
+async function readJson(response: Response, limitBytes = 2 * 1024 * 1024): Promise<any> {
   const bytes = await readResponseBytes(response, limitBytes);
+  if (!bytes.byteLength) return {};
   try {
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
@@ -100,8 +127,23 @@ async function readJson(response: Response, limitBytes = 4 * 1024 * 1024): Promi
   }
 }
 
-async function boundedError(response: Response): Promise<string> {
-  return new TextDecoder().decode(await readResponseBytes(response, 1024 * 1024)).slice(0, 200);
+async function requireOk(response: Response, displayName: string): Promise<void> {
+  if (response.ok) return;
+  const bytes = await readResponseBytes(response, 1024 * 1024);
+  const body = new TextDecoder().decode(bytes).slice(0, 200);
+  throw new Error(`${displayName} HTTP ${response.status}${body ? `: ${body}` : ""}`);
+}
+
+function discoveredTask(entry: Record<string, unknown>): ModelTask | undefined {
+  const output = Array.isArray(entry.output_modalities)
+    ? entry.output_modalities
+    : entry.architecture && typeof entry.architecture === "object" &&
+        Array.isArray((entry.architecture as Record<string, unknown>).output_modalities)
+      ? ((entry.architecture as Record<string, unknown>).output_modalities as unknown[])
+      : [];
+  if (output.some((item) => item === "video")) return "video";
+  if (output.some((item) => item === "image")) return "image";
+  return undefined;
 }
 
 export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDriver<OpenAIEndpointConfig> {
@@ -111,6 +153,16 @@ export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDr
       url: normalizeBaseUrl(typeof value.url === "string" && value.url.trim() ? value.url.trim() : spec.defaultUrl),
       model: typeof value.model === "string" && value.model.trim() ? value.model.trim() : spec.defaultModel,
       apiKeyEnv: spec.apiKeyEnv,
+      modelTasks: value.modelTasks && typeof value.modelTasks === "object"
+        ? Object.fromEntries(
+            Object.entries(value.modelTasks as Record<string, unknown>).filter(
+              (entry): entry is [string, ModelTask] =>
+                Boolean(entry[0].trim()) && (entry[1] === "chat" || entry[1] === "image" || entry[1] === "video"),
+            ),
+          )
+        : {},
+      imagePath: normalizeEndpointPath(value.imagePath, spec.imagePath ?? "/images/generations"),
+      videoPath: normalizeEndpointPath(value.videoPath, spec.videoPath ?? "/videos"),
     };
   };
   const declaredModels: ModelCatalog = {
@@ -158,30 +210,61 @@ export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDr
         }
       };
 
-      const discoverModels = async () => {
-        requireCredential();
-        const response = await fetch(endpointUrl(config.url, "/models"), {
-          method: "GET",
-          headers: headers(),
-          signal: abortSignal(undefined, 15_000),
-        });
-        if (!response.ok) {
-          const body = await boundedError(response);
-          throw new Error(`${spec.displayName} models HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
-        }
-        const payload = (await readJson(response)) as Record<string, unknown>;
+      const parseModels = (payload: Record<string, unknown>, forcedTask?: ModelTask) => {
         const rawModels = Array.isArray(payload.data)
           ? payload.data
           : Array.isArray(payload.models)
             ? payload.models
             : [];
-        const discovered = rawModels.flatMap((entry): Array<{ id: string; label: string }> => {
-          if (typeof entry === "string") return [{ id: entry, label: entry }];
+        return rawModels.flatMap((entry): ModelCatalog["options"] => {
+          if (typeof entry === "string") {
+            const task = config.modelTasks[entry] ?? forcedTask;
+            return [{ id: entry, label: entry, ...(task ? { task } : {}) }];
+          }
           if (!entry || typeof entry !== "object") return [];
           const record = entry as Record<string, unknown>;
           const id = typeof record.id === "string" ? record.id : typeof record.name === "string" ? record.name : "";
-          return id ? [{ id, label: id }] : [];
+          if (!id) return [];
+          const task = config.modelTasks[id] ?? forcedTask ?? discoveredTask(record);
+          const architecture = record.architecture && typeof record.architecture === "object"
+            ? record.architecture as Record<string, unknown>
+            : {};
+          const inputModalities = Array.isArray(record.input_modalities)
+            ? record.input_modalities.filter((item): item is string => typeof item === "string")
+            : Array.isArray(architecture.input_modalities)
+              ? architecture.input_modalities.filter((item): item is string => typeof item === "string")
+              : undefined;
+          const outputModalities = Array.isArray(record.output_modalities)
+            ? record.output_modalities.filter((item): item is string => typeof item === "string")
+            : Array.isArray(architecture.output_modalities)
+              ? architecture.output_modalities.filter((item): item is string => typeof item === "string")
+              : undefined;
+          return [{ id, label: id, ...(task ? { task } : {}), ...(inputModalities ? { inputModalities } : {}), ...(outputModalities ? { outputModalities } : {}) }];
         });
+      };
+
+      const fetchModelCatalog = async (path: string, forcedTask?: ModelTask) => {
+        const response = await fetch(endpointUrl(config.url, path), {
+          method: "GET",
+          headers: headers(),
+          signal: abortSignal(undefined, 15_000),
+        });
+        await requireOk(response, `${spec.displayName} models`);
+        return parseModels(await readJson(response), forcedTask);
+      };
+
+      const discoverModels = async () => {
+        requireCredential();
+        const discovered = await fetchModelCatalog("/models");
+        if (spec.imageModelsPath) {
+          try { discovered.push(...await fetchModelCatalog(spec.imageModelsPath, "image")); } catch {}
+        }
+        if (spec.videoModelsPath) {
+          try { discovered.push(...await fetchModelCatalog(spec.videoModelsPath, "video")); } catch {}
+        }
+        for (const [id, task] of Object.entries(config.modelTasks)) {
+          discovered.push({ id, label: id, task });
+        }
         const unique = [...new Map(discovered.map((entry) => [entry.id, entry])).values()];
         models.options = unique.some((entry) => entry.id === config.model)
           ? unique
@@ -199,12 +282,9 @@ export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDr
           body: JSON.stringify({ model, messages, stream: options.stream }),
           signal: abortSignal(options.signal),
         });
-        if (!response.ok) {
-          const body = await boundedError(response);
-          throw new Error(`${spec.displayName} HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
-        }
+        await requireOk(response, spec.displayName);
         if (!options.stream) {
-          const payload = (await readJson(response)) as any;
+          const payload = (await readJson(response, 4 * 1024 * 1024)) as any;
           const apiError = errorMessage(payload);
           if (apiError) throw new Error(`${spec.displayName}: ${apiError}`);
           return {
@@ -269,6 +349,122 @@ export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDr
           reader.releaseLock();
         }
         return { text, usage };
+      };
+
+      const generateImage = async (request: GenerateMediaInput): Promise<GeneratedMedia[]> => {
+        const options = mediaPromptOptions(request.prompt);
+        const response = await fetch(endpointUrl(config.url, config.imagePath), {
+          method: "POST",
+          headers: headers(true),
+          body: JSON.stringify({
+            model: request.model,
+            prompt: request.prompt,
+            response_format: "b64_json",
+            ...(options.aspectRatio ? { aspect_ratio: options.aspectRatio } : {}),
+          }),
+          signal: abortSignal(request.signal, 3 * 60_000),
+        });
+        await requireOk(response, spec.displayName);
+        const payload = await readJson(response, 40 * 1024 * 1024) as Record<string, unknown>;
+        const apiError = errorMessage(payload);
+        if (apiError) throw new Error(`${spec.displayName}: ${apiError}`);
+        const data = Array.isArray(payload.data) ? payload.data : [];
+        const generated = data.flatMap((entry): GeneratedMedia[] => {
+          if (!entry || typeof entry !== "object") return [];
+          const record = entry as Record<string, unknown>;
+          const base64 = typeof record.b64_json === "string" ? record.b64_json : "";
+          if (!base64) return [];
+          const mime = typeof record.mime_type === "string" ? record.mime_type : "image/png";
+          return [{ kind: "image", source: { type: "base64", data: base64, mime }, mime }];
+        });
+        if (!generated.length) {
+          throw new Error(`${spec.displayName} did not return embedded image data`);
+        }
+        return generated;
+      };
+
+      const abortablePause = (milliseconds: number, signal: AbortSignal) =>
+        new Promise<void>((resolve, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          const timer = setTimeout(resolve, milliseconds);
+          timer.unref?.();
+          signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+          }, { once: true });
+        });
+
+      const generateVideo = async (request: GenerateMediaInput): Promise<GeneratedMedia[]> => {
+        const options = mediaPromptOptions(request.prompt);
+        const submit = await fetch(endpointUrl(config.url, config.videoPath), {
+          method: "POST",
+          headers: headers(true),
+          body: JSON.stringify({
+            model: request.model,
+            prompt: request.prompt,
+            ...(options.aspectRatio ? { aspect_ratio: options.aspectRatio } : {}),
+            ...(options.durationSeconds ? { duration: options.durationSeconds } : {}),
+          }),
+          signal: abortSignal(request.signal, 60_000),
+        });
+        await requireOk(submit, spec.displayName);
+        const submitted = await readJson(submit) as Record<string, unknown>;
+        const jobId = typeof submitted.id === "string"
+          ? submitted.id
+          : typeof submitted.job_id === "string"
+            ? submitted.job_id
+            : "";
+        if (!jobId) throw new Error(`${spec.displayName} did not return a video job id`);
+        request.onProgress?.({ providerJobId: jobId });
+        const statusPath = `${config.videoPath}/${encodeURIComponent(jobId)}`;
+        const interval = Math.max(0, request.pollIntervalMs ?? 2_000);
+
+        for (;;) {
+          if (interval) await abortablePause(interval, request.signal);
+          const statusResponse = await fetch(endpointUrl(config.url, statusPath), {
+            method: "GET",
+            headers: headers(),
+            signal: abortSignal(request.signal, 30_000),
+          });
+          await requireOk(statusResponse, spec.displayName);
+          const statusPayload = await readJson(statusResponse) as Record<string, unknown>;
+          const status = String(statusPayload.status ?? "").toLowerCase();
+          const progress = Number(statusPayload.progress);
+          request.onProgress?.({
+            providerJobId: jobId,
+            ...(Number.isFinite(progress) ? { progress: Math.max(0, Math.min(1, progress > 1 ? progress / 100 : progress)) } : {}),
+          });
+          if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+            throw new Error(`${spec.displayName} video generation ${status}`);
+          }
+          if (["completed", "complete", "succeeded", "ready"].includes(status)) break;
+        }
+
+        const content = await fetch(endpointUrl(config.url, `${statusPath}/content?index=0`), {
+          method: "GET",
+          headers: headers(),
+          signal: abortSignal(request.signal, 3 * 60_000),
+        });
+        await requireOk(content, spec.displayName);
+        const mime = content.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "video/mp4";
+        const bytes = await readResponseBytes(content, 512 * 1024 * 1024);
+        if (!bytes.byteLength) throw new Error(`${spec.displayName} returned an empty video`);
+        return [{
+          kind: "video",
+          source: { type: "bytes", data: bytes, mime },
+          mime,
+          providerJobId: jobId,
+          ...(options.durationSeconds ? { durationSeconds: options.durationSeconds } : {}),
+        }];
+      };
+
+      const generateMedia = async (request: GenerateMediaInput): Promise<GeneratedMedia[]> => {
+        requireCredential();
+        request.signal.throwIfAborted();
+        return request.task === "image" ? generateImage(request) : generateVideo(request);
       };
 
       const sendTurn = async (turn: SendTurnInput) => {
@@ -400,6 +596,7 @@ export function createOpenAIEndpointDriver(spec: EndpointDriverSpec): ProviderDr
           });
           return result.text;
         },
+        generateMedia,
         dispose: async () => {
           for (const { abort } of active.values()) abort.abort();
           active.clear();

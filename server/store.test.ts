@@ -61,6 +61,40 @@ describe("Store", () => {
     expect(store.patchMessage(bot.threadId, "nope", {})).toBeNull();
   });
 
+  it("persists stable media IDs and refuses to overwrite a terminal output", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const message = store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "media",
+      media: [{ id: "stable-output-id", kind: "video", status: "generating" }],
+    });
+
+    const cancelled = store.patchMediaOutput(
+      bot.threadId,
+      message.id,
+      "stable-output-id",
+      ["generating"],
+      { status: "cancelled", error: "Video generation cancelled" },
+    );
+    expect(cancelled?.media?.[0]).toMatchObject({ id: "stable-output-id", status: "cancelled" });
+    expect(
+      store.patchMediaOutput(
+        bot.threadId,
+        message.id,
+        "stable-output-id",
+        ["generating", "downloading"],
+        { status: "ready", cacheKey: "late.mp4" },
+      ),
+    ).toBeNull();
+
+    const reloaded = new Store(selection);
+    expect(reloaded.messagesFor(bot.threadId).find((item) => item.id === message.id)?.media?.[0]).toMatchObject({
+      id: "stable-output-id",
+      status: "cancelled",
+    });
+  });
+
   it("deleteBot removes the bot and its transcript file", () => {
     const store = new Store(selection);
     const bot = store.createBot();

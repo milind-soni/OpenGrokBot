@@ -47,6 +47,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "autoApprove"
         | "speakReplies"
         | "voice"
+        | "specialists"
       >
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
@@ -179,14 +180,25 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             />
           </Field>
 
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
-              <div className="text-[15px] font-medium text-ink">Model</div>
-              <div className="mt-0.5 text-[13px] text-ink-secondary">
-                Which provider and model this bot runs on
+          <div className="rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Model team</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              Keep chat and coding on one provider, then route explicit image or video requests to specialists.
+            </div>
+            <div className="mt-3 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] text-ink-secondary">Chat & coding</span>
+                <ModelPicker bot={bot} role="chat" />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] text-ink-secondary">Images</span>
+                <ModelPicker bot={bot} role="image" />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] text-ink-secondary">Video</span>
+                <ModelPicker bot={bot} role="video" />
               </div>
             </div>
-            <ModelPicker bot={bot} />
           </div>
 
           <div className="rounded-xl bg-card p-4">

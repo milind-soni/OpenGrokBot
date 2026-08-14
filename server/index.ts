@@ -2,7 +2,7 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,20 +16,24 @@ import {
   instanceConfigs,
   loadConfig,
   saveConfig,
+  DATA_DIR,
   EVENTS_DIR,
   NATIVE_DIR,
   type AppConfig,
 } from "./config.ts";
-import type { RuntimeEvent } from "./contracts.ts";
+import { newId, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
-import { normalizeBaseUrl } from "./drivers/openai-compatible.ts";
+import { normalizeBaseUrl, normalizeEndpointPath } from "./drivers/openai-compatible.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
+import { createMediaCache, parseRange } from "./media-cache.ts";
+import { detectMediaIntent } from "./media-intent.ts";
+import { MediaRunCoordinator } from "./media-runs.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -126,6 +130,8 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+const mediaCache = createMediaCache({ rootDir: join(DATA_DIR, "media") });
+const mediaRuns = new MediaRunCoordinator();
 
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   ...bot,
@@ -438,6 +444,81 @@ async function startTurn(
   const commsDepth = opts?.commsDepth ?? 0;
   // a task takes its name from the first thing you asked it to do
   if (text.trim()) store.titleTaskFromFirstMessage(bot.id, text, threadId);
+
+  const mediaTask = !opts?.runOn ? detectMediaIntent(text) : null;
+  const specialist = mediaTask ? bot.specialists?.[mediaTask] : undefined;
+  if (mediaTask && specialist) {
+    const instance = registry.get(specialist.instanceId);
+    if (!instance?.generateMedia) {
+      throw Object.assign(new Error(`the selected ${mediaTask} specialist is unavailable`), { status: 409 });
+    }
+    let userMessage = opts?.userMessage;
+    if (!userMessage) {
+      userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
+      broadcast({ kind: "message", threadId, message: userMessage });
+    }
+    const outputId = newId();
+    const message = store.appendMessage(threadId, {
+      role: "bot",
+      kind: "media",
+      media: [{ id: outputId, kind: mediaTask, status: "queued" }],
+    });
+    store.patchBot(bot.id, { busy: true, unread: false });
+    broadcast({ kind: "message", threadId, message });
+    broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    mediaRuns.start({
+      botId: bot.id,
+      threadId,
+      messageId: message.id,
+      outputId,
+      task: mediaTask,
+      onPatch: (patch) => {
+        const updated = store.patchMediaOutput(
+          threadId,
+          message.id,
+          outputId,
+          ["queued", "generating", "downloading"],
+          patch,
+        );
+        if (updated) broadcast({ kind: "message.patch", threadId, message: updated });
+      },
+      execute: async (signal, onProgress) => {
+        const generated = await instance.generateMedia!({
+          threadId,
+          task: mediaTask,
+          model: specialist.model,
+          prompt: text,
+          signal,
+          onProgress,
+        });
+        const first = generated.find((item) => item.kind === mediaTask);
+        if (!first) throw new Error(`${instance.displayName} returned no ${mediaTask}`);
+        const downloading = store.patchMediaOutput(
+          threadId,
+          message.id,
+          outputId,
+          ["queued", "generating"],
+          { status: "downloading", providerJobId: first.providerJobId },
+        );
+        if (downloading) broadcast({ kind: "message.patch", threadId, message: downloading });
+        const cached = await mediaCache.store(first.source, { kind: mediaTask, signal });
+        return {
+          ...cached,
+          width: first.width,
+          height: first.height,
+          durationSeconds: first.durationSeconds,
+          providerJobId: first.providerJobId,
+        };
+      },
+      onDone: () => {
+        const current = store.bot(bot.id);
+        if (!current) return;
+        store.patchBot(bot.id, { busy: false });
+        broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      },
+    });
+    return;
+  }
 
   const instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
@@ -802,6 +883,9 @@ function configStatus() {
       apiKeyConfigured: Boolean(cfg.openaiCompatible?.key),
       url: cfg.openaiCompatible?.url ?? "http://127.0.0.1:11434/v1",
       model: cfg.openaiCompatible?.model ?? "llama3.2",
+      modelTasks: cfg.openaiCompatible?.modelTasks ?? {},
+      imagePath: cfg.openaiCompatible?.imagePath ?? "/images/generations",
+      videoPath: cfg.openaiCompatible?.videoPath ?? "/videos",
     },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
@@ -816,6 +900,7 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  mediaRuns.cancelAll();
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
@@ -885,6 +970,28 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
   const method = req.method ?? "GET";
   try {
+    const mediaMatch = path.match(/^\/api\/media\/([\w.-]+)$/);
+    if (mediaMatch && method === "GET") {
+      const media = mediaCache.resolve(mediaMatch[1]);
+      if (!media) return json(res, 404, { error: "no such media" });
+      const requestedRange = typeof req.headers.range === "string" ? req.headers.range : undefined;
+      const range = parseRange(requestedRange, media.bytes);
+      if (requestedRange && !range) {
+        res.writeHead(416, { "content-range": `bytes */${media.bytes}` });
+        return res.end();
+      }
+      const start = range?.start ?? 0;
+      const end = range?.end ?? media.bytes - 1;
+      res.writeHead(range ? 206 : 200, {
+        "content-type": media.mime,
+        "content-length": String(end - start + 1),
+        "accept-ranges": "bytes",
+        "cache-control": "private, max-age=31536000, immutable",
+        ...(range ? { "content-range": `bytes ${start}-${end}/${media.bytes}` } : {}),
+      });
+      return createReadStream(media.path, { start, end }).pipe(res);
+    }
+
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
@@ -1135,7 +1242,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "PATCH") {
       const body = await readBody(req);
       const patch: Record<string, unknown> = {};
-      for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden", "speakReplies", "voice"] as const) {
+      for (const key of ["name", "title", "description", "notifications", "modelSelection", "specialists", "unread", "computer", "color", "mascotExpression", "pinned", "hidden", "speakReplies", "voice"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
       // the two permission fields decide what runs unattended, so they are
@@ -1161,6 +1268,7 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       // a running turn dies with its bot
+      mediaRuns.cancel(bot.id);
       await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
       stopScreenPoller(bot.id);
       routines!.disableForBot(bot.id);
@@ -1289,9 +1397,18 @@ const server = createServer(async (req, res) => {
         await routines!.cancelRun(routineRun.id);
         return json(res, 200, { ok: true });
       }
+      if (mediaRuns.cancel(bot.id)) return json(res, 200, { ok: true });
       const instance = registry.get(bot.modelSelection.instanceId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)\/cancel-media$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return mediaRuns.cancel(bot.id, m[2])
+        ? json(res, 200, { ok: true })
+        : json(res, 409, { error: "that generation is no longer running" });
     }
 
     // ── tasks: a bot's separate contexts ────────────────────────────────
@@ -1393,6 +1510,28 @@ const server = createServer(async (req, res) => {
           } catch (error) {
             return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
+        }
+      }
+      if (patch.openaiCompatible) {
+        for (const key of ["imagePath", "videoPath"] as const) {
+          const value = patch.openaiCompatible[key];
+          if (value !== undefined) {
+            try {
+              patch.openaiCompatible[key] = normalizeEndpointPath(value, key === "imagePath" ? "/images/generations" : "/videos");
+            } catch (error) {
+              return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            }
+          }
+        }
+        if (patch.openaiCompatible.modelTasks !== undefined) {
+          if (!patch.openaiCompatible.modelTasks || typeof patch.openaiCompatible.modelTasks !== "object" || Array.isArray(patch.openaiCompatible.modelTasks)) {
+            return json(res, 400, { error: "openaiCompatible.modelTasks must be an object" });
+          }
+          const modelTasks = Object.entries(patch.openaiCompatible.modelTasks);
+          if (modelTasks.some(([model, task]) => !model.trim() || !["chat", "image", "video"].includes(String(task)))) {
+            return json(res, 400, { error: "openaiCompatible.modelTasks contains an invalid model or task" });
+          }
+          patch.openaiCompatible.modelTasks = Object.fromEntries(modelTasks);
         }
       }
       // check a box token against the provider before storing it: a

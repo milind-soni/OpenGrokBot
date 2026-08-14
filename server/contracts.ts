@@ -18,6 +18,50 @@ export interface ModelSelection {
   model: string;
 }
 
+export type ModelTask = "chat" | "image" | "video";
+export type MediaKind = "image" | "video";
+export type MediaStatus = "queued" | "generating" | "downloading" | "ready" | "failed" | "cancelled";
+
+export type MediaSource =
+  | { type: "base64"; data: string; mime?: string }
+  | { type: "bytes"; data: Uint8Array; mime?: string };
+
+export interface GeneratedMedia {
+  kind: MediaKind;
+  source: MediaSource;
+  mime?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  providerJobId?: string;
+}
+
+export interface MediaOutput {
+  id: string;
+  kind: MediaKind;
+  status: MediaStatus;
+  mime?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  bytes?: number;
+  progress?: number;
+  cacheKey?: string;
+  providerJobId?: string;
+  error?: string;
+}
+
+export interface GenerateMediaInput {
+  threadId: ThreadId;
+  task: MediaKind;
+  model: string;
+  prompt: string;
+  signal: AbortSignal;
+  /** Test and provider-specific tuning only; normal callers use the default. */
+  pollIntervalMs?: number;
+  onProgress?: (progress: { progress?: number; providerJobId?: string }) => void;
+}
+
 // ── instance configuration envelope ────────────────────────────────────
 // `driver` is any slug — NOT validated against known drivers; unknown
 // drivers round-trip and surface as unavailable shadow snapshots so a
@@ -157,7 +201,13 @@ export interface ProviderSnapshot {
 // a rejection to an unavailable shadow snapshot.
 export interface ModelCatalog {
   default: string;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{
+    id: string;
+    label: string;
+    task?: ModelTask;
+    inputModalities?: string[];
+    outputModalities?: string[];
+  }>;
 }
 
 export interface DriverCreateInput<Config> {
@@ -178,6 +228,8 @@ export interface ProviderInstance {
   snapshot(): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
   generateText?(prompt: string): Promise<string>;
+  /** Direct image/video generation for an explicitly selected specialist. */
+  generateMedia?(input: GenerateMediaInput): Promise<GeneratedMedia[]>;
   dispose(): Promise<void>;
 }
 

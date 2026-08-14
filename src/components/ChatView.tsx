@@ -25,6 +25,7 @@ import { OptionCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { MediaMessage } from "./MediaMessage";
 import { TaskPicker } from "./TaskPicker";
 import { ArtifactPanel } from "./ArtifactPanel";
 import {
@@ -496,6 +497,7 @@ const MessagesList = memo(function MessagesList({
   onRegenerate,
   selectedArtifactId,
   onPreviewArtifact,
+  onCancelMedia,
 }: {
   bot: Bot;
   messages: Message[];
@@ -508,6 +510,7 @@ const MessagesList = memo(function MessagesList({
   onRegenerate: () => void;
   selectedArtifactId: string | null;
   onPreviewArtifact: (artifact: HtmlArtifact) => void;
+  onCancelMedia: (messageId: string) => void;
 }) {
   return (
     <>
@@ -545,6 +548,8 @@ const MessagesList = memo(function MessagesList({
               );
             case "screen":
               return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+            case "media":
+              return m.media ? <MediaMessage messageId={m.id} outputs={m.media} onCancel={onCancelMedia} /> : null;
             default:
               return (
                 <Bubble
@@ -672,6 +677,15 @@ export function ChatView({ bot }: { bot: Bot }) {
       dispatch({ type: "editMessage", botId: bot.id, messageId: lastUserMessage.id, text: lastUserMessage.text });
     }
   }, [lastUserMessage, bot.busy, bot.id, dispatch]);
+  const cancelMedia = useCallback(
+    (messageId: string) => dispatch({ type: "cancelMedia", botId: bot.id, messageId }),
+    [bot.id, dispatch],
+  );
+  const mediaBusy = useMemo(
+    () => messages.some((message) => message.kind === "media" && message.media?.some((output) =>
+      output.status === "queued" || output.status === "generating" || output.status === "downloading")),
+    [messages],
+  );
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
@@ -827,6 +841,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             onRegenerate={regenerate}
             selectedArtifactId={selectedArtifact?.id ?? null}
             onPreviewArtifact={openArtifact}
+            onCancelMedia={cancelMedia}
           />
           {provisioning && (
             <div className="flex justify-start">
@@ -836,7 +851,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               </div>
             </div>
           )}
-          {reasoning && bot.busy && <ThinkingStrip text={reasoning} active={!streaming} />}
+          {reasoning && bot.busy && !mediaBusy && <ThinkingStrip text={reasoning} active={!streaming} />}
           {streaming ? (
             <StreamingBubble
               text={streaming}
@@ -844,7 +859,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               onHtmlExpandedChange={setStreamingHtmlExpanded}
             />
           ) : (
-            bot.busy && (
+            bot.busy && !mediaBusy && (
               <div className="flex justify-start">
                 <div className="flex items-center gap-2.5 rounded-2xl bg-raised px-4 py-3">
                   <span className="flex items-center gap-1.5">

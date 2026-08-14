@@ -7,7 +7,14 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
+import {
+  newId,
+  type MediaOutput,
+  type MediaStatus,
+  type ModelSelection,
+  type ThreadId,
+} from "./contracts.ts";
+export type { MediaOutput } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 
 export type MausColor =
@@ -49,7 +56,7 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "media";
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome. `spoken` is the same chip as
@@ -60,6 +67,7 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  media?: MediaOutput[];
   at: number;
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
@@ -130,6 +138,7 @@ export interface BotRecord {
   mascotExpression?: MausExpression | null;
   unread: boolean;
   modelSelection: ModelSelection;
+  specialists?: { image?: ModelSelection; video?: ModelSelection };
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
@@ -447,6 +456,23 @@ export class Store {
     t.messages[idx] = { ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card };
     this.saveThread(threadId);
     return t.messages[idx];
+  }
+
+  patchMediaOutput(
+    threadId: string,
+    messageId: string,
+    outputId: string,
+    expectedStatuses: readonly MediaStatus[],
+    patch: Partial<MediaOutput>,
+  ): Message | null {
+    const message = this.thread(threadId).messages.find((candidate) => candidate.id === messageId);
+    const output = message?.media?.find((candidate) => candidate.id === outputId);
+    if (!message || !output || !expectedStatuses.includes(output.status)) return null;
+    return this.patchMessage(threadId, messageId, {
+      media: message.media!.map((candidate) =>
+        candidate.id === outputId ? { ...candidate, ...patch, id: candidate.id, kind: candidate.kind } : candidate,
+      ),
+    });
   }
 
   bot(id: string) {

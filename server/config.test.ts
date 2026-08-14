@@ -11,6 +11,9 @@ describe("model provider instance configuration", () => {
         key: "endpoint-key",
         url: "http://10.0.0.42:8000/v1",
         model: "org/open-model",
+        modelTasks: { "org/image-model": "image", "org/video-model": "video" },
+        imagePath: "/images/generations",
+        videoPath: "/videos",
       },
     });
 
@@ -26,7 +29,13 @@ describe("model provider instance configuration", () => {
     });
     expect(configs["openai-compatible"]).toMatchObject({
       driver: "openaiCompatible",
-      config: { url: "http://10.0.0.42:8000/v1", model: "org/open-model" },
+      config: {
+        url: "http://10.0.0.42:8000/v1",
+        model: "org/open-model",
+        modelTasks: { "org/image-model": "image", "org/video-model": "video" },
+        imagePath: "/images/generations",
+        videoPath: "/videos",
+      },
       environment: { OPENAI_COMPATIBLE_API_KEY: "endpoint-key" },
     });
   });

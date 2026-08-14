@@ -6,13 +6,22 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
-import type { InstanceConfigMap } from "./contracts.ts";
+import type { InstanceConfigMap, ModelTask } from "./contracts.ts";
+
+export interface OpenAICompatibleConfig {
+  key?: string;
+  url?: string;
+  model?: string;
+  modelTasks?: Record<string, ModelTask>;
+  imagePath?: string;
+  videoPath?: string;
+}
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   openrouter?: { key?: string; url?: string; model?: string };
   ollamaCloud?: { key?: string; url?: string; model?: string };
-  openaiCompatible?: { key?: string; url?: string; model?: string };
+  openaiCompatible?: OpenAICompatibleConfig;
   /** key = ck_… Connect consumer key (connections + agent tools);
    * apiKey = ak_… project API key — optional, unlocks the full toolkit
    * catalog with official logos in the plugins marketplace. */
@@ -138,6 +147,9 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
             config: {
               url: cfg.openaiCompatible?.url,
               model: cfg.openaiCompatible?.model,
+              modelTasks: cfg.openaiCompatible?.modelTasks,
+              imagePath: cfg.openaiCompatible?.imagePath,
+              videoPath: cfg.openaiCompatible?.videoPath,
             },
           },
           antigravity: { driver: "antigravityAgent" },

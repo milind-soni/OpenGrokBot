@@ -124,6 +124,25 @@ describe("harness HTTP API", () => {
     expect(unknownApi.body.error).toContain("/api/not-a-real-route");
   });
 
+  it("serves validated cached media with byte ranges", async () => {
+    const cacheKey = "11111111-1111-4111-8111-111111111111.png";
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(join(home, ".openmausbot", "media", "objects", cacheKey), png);
+
+    const full = await fetch(`${BASE}/api/media/${cacheKey}`);
+    expect(full.status).toBe(200);
+    expect(full.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await full.arrayBuffer())).toEqual(png);
+
+    const partial = await fetch(`${BASE}/api/media/${cacheKey}`, { headers: { range: "bytes=0-7" } });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("content-range")).toBe(`bytes 0-7/${png.length}`);
+    expect(Buffer.from(await partial.arrayBuffer())).toEqual(png.subarray(0, 8));
+  });
+
   it("rejects malformed and oversized JSON bodies without hanging", async () => {
     const malformed = await fetch(`${BASE}/api/config`, {
       method: "PUT",
@@ -169,9 +188,10 @@ describe("harness HTTP API", () => {
     expect(created.status).toBe(201);
     const bot = created.body.bot;
 
-    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true });
+    const specialists = { image: { instanceId: "ghost", model: "image-model" } };
+    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true, specialists });
     expect(patched.status).toBe(200);
-    expect(patched.body.bot).toMatchObject({ name: "Renamed", pinned: true });
+    expect(patched.body.bot).toMatchObject({ name: "Renamed", pinned: true, specialists });
 
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);

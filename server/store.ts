@@ -312,8 +312,24 @@ export class Store {
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
     t.messages.push(full);
     t.activeLeafId = full.id;
+    if (full.kind === "screen") this.pruneScreenFrames(t);
     this.saveThread(threadId);
     return full;
+  }
+
+  /** Screen frames are ~100-500KB of base64 each and the whole thread file
+   * is rewritten on every append, so keeping every frame of a long
+   * computer session makes each later message slower than the last. The
+   * newest few keep their pixels; older ones stay in the transcript as
+   * placeholders. Mirrors the client's own frame cap. */
+  private pruneScreenFrames(t: { messages: Message[] }, keep = 4) {
+    let seen = 0;
+    for (let i = t.messages.length - 1; i >= 0 && seen < t.messages.length; i--) {
+      const m = t.messages[i];
+      if (m.kind !== "screen" || !m.png) continue;
+      seen += 1;
+      if (seen > keep) m.png = undefined;
+    }
   }
 
   /** Fork the conversation: a new user message that replaces `sourceId`

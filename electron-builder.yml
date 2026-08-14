@@ -2,10 +2,13 @@ appId: com.openmausbot.app
 productName: OpenMausBot
 artifactName: OpenMausBot-${version}-${arch}.${ext}
 
-# In-app auto-update reads latest-mac.yml + the .zip from this PUBLIC releases
-# repo (separate from the source repo). Public → no token on users' machines.
-# Baked into app-update.yml; `latest-mac.yml` is emitted here even with
-# --publish never, and uploaded to the GitHub release alongside the artifacts.
+# In-app auto-update reads latest-mac.yml + the .zip (macOS) or latest.yml +
+# the NSIS .exe (Windows) from this PUBLIC releases repo (separate from the
+# source repo). Public → no token on users' machines. Baked into
+# app-update.yml; both metadata files are emitted here even with
+# --publish never, and must be uploaded to the GitHub release alongside the
+# artifacts — a release missing latest.yml leaves every Windows install
+# stranded on its installed version.
 publish:
   - provider: github
     owner: milind-soni
@@ -68,8 +71,21 @@ win:
     - target: zip
       arch: x64
   icon: build/icon.ico
+  # No signing config yet (would go under win.signtoolOptions or
+  # win.azureSignOptions — eb 26 nests it, there is no top-level
+  # win.certificateFile). The installer is unsigned, so SmartScreen shows
+  # "unknown publisher" on first run (README says so). verifyUpdateCodeSignature
+  # defaults true, but electron-updater skips the check when app-update.yml
+  # carries no publisherName — so auto-update still works today. Do NOT set
+  # publisherName without actually signing, or every update is rejected as
+  # untrusted; and once signed, keep the cert subject stable (or list both old
+  # and new in publisherName) or you strand already-installed users.
 
 nsis:
   oneClick: true
   perMachine: false
+  shortcutName: OpenMausBot
+  # Versioned, like the .dmg. The README's /latest/download/ button needs a
+  # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
+  # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.
   artifactName: OpenMausBot-${version}-setup.${ext}

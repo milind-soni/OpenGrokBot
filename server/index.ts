@@ -22,6 +22,7 @@ import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
+import { completionEvidence, emptyEvidence, type TurnEvidence } from "./verification.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -146,6 +147,7 @@ function broadcast(payload: unknown) {
 // once can collide on a bare id and patch each other's messages.
 const toolMessageByItem = new Map<string, string>(); // threadId:itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
+const evidenceByTurn = new Map<string, TurnEvidence>();
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
@@ -176,6 +178,11 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "assistant_text") {
         pushMessage({ role: "bot", kind: "text", text: event.text });
       } else if (event.itemType === "tool" && event.itemId) {
+        if (event.turnId) {
+          const evidence = evidenceByTurn.get(event.turnId) ?? emptyEvidence();
+          event.ok ? evidence.succeeded++ : evidence.failed++;
+          evidenceByTurn.set(event.turnId, evidence);
+        }
         const itemKey = `${event.threadId}:${event.itemId}`;
         const messageId = toolMessageByItem.get(itemKey);
         let toolName = "tool";
@@ -214,6 +221,11 @@ bus.subscribe((event: RuntimeEvent) => {
           tool: { name, spoken: narrateTool(name) ?? undefined },
         });
         if (event.itemId) toolMessageByItem.set(`${event.threadId}:${event.itemId}`, message.id);
+        if (event.turnId) {
+          const evidence = evidenceByTurn.get(event.turnId) ?? emptyEvidence();
+          evidence.started++;
+          evidenceByTurn.set(event.turnId, evidence);
+        }
       }
       break;
     case "request.opened": {
@@ -303,6 +315,10 @@ bus.subscribe((event: RuntimeEvent) => {
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       break;
     case "turn.completed": {
+      const evidence = event.turnId ? evidenceByTurn.get(event.turnId) : undefined;
+      if (event.turnId) evidenceByTurn.delete(event.turnId);
+      const summary = completionEvidence(evidence ?? emptyEvidence(), event.ok);
+      if (summary) pushMessage({ role: "bot", kind: "activity", tool: summary });
       if (bot) {
         store.patchBot(bot.id, { busy: false, unread: true });
         broadcast({ kind: "bot", bot: store.bot(bot.id) });

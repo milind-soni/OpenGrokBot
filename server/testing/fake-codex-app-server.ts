@@ -4,7 +4,7 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | resume | stream
+//   FAKE_CODEX_MODE   happy (default) | approval | resume | stream | late
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -37,6 +37,10 @@ const finishTurn = () => {
   notify("thread/tokenUsage/updated", { tokenUsage: { total: { inputTokens: 7, outputTokens: 3 } } });
   dump();
   notify("turn/completed", { turn: { status: "completed" } });
+  if (mode === "late") {
+    // ACP can flush a queued notification after its completion notification.
+    notify("item/started", { item: { id: "late", type: "commandExecution", command: "late command" } });
+  }
 };
 
 let buf = "";

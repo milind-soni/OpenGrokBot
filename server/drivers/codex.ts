@@ -67,6 +67,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
+      interrupt: () => void;
       turnId: string;
       asks: Map<string, (behavior: string, message?: string) => void>;
     }
@@ -99,7 +100,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
-      const state = { settled: false, lastText: "", sawStreamDelta: false };
+      const state = { settled: false, stopping: false, lastText: "", sawStreamDelta: false };
       const asks = new Map<string, (behavior: string, message?: string) => void>();
       let nextId = 1;
       const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
@@ -147,6 +148,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       // server→client approval request → canonical request.opened
       const handleServerRequest = (msg: any) => {
+        if (state.settled || state.stopping) return;
         const method = msg.method as string;
         const params = msg.params ?? {};
         const legacy = method === "execCommandApproval" || method === "applyPatchApproval";
@@ -208,6 +210,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       const handleNotification = (msg: any) => {
+        // ACP can flush queued notifications after a cancellation or an
+        // already-settled completion. They belong to the old turn and must
+        // not recreate harness state (including per-turn evidence).
+        if (state.settled || state.stopping) return;
         const p = msg.params ?? {};
         switch (msg.method) {
           // token-level chat text; the item/completed frame follows with the
@@ -345,7 +351,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       });
 
-      active.set(threadId, { stop, turnId, asks });
+      active.set(threadId, { stop, interrupt: () => { state.stopping = true; stop(); }, turnId, asks });
       emit({ ...base(threadId, turnId), type: "turn.started" });
 
       // handshake + kickoff; any refusal surfaces as failure, not a hang
@@ -412,7 +418,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         provider: DRIVER_KIND,
         capabilities: { sessionModelSwitch: "unsupported" },
         sendTurn,
-        interruptTurn: async (threadId) => active.get(threadId)?.stop(),
+        interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
         respondToRequest: async (threadId, requestId, decision) => {
           const turn = active.get(threadId);
           const finish = turn?.asks.get(requestId);
@@ -421,7 +427,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
-          for (const { stop } of active.values()) stop();
+          for (const turn of active.values()) turn.interrupt();
         },
         onEvent: (listener) => {
           listeners.add(listener);
@@ -429,7 +435,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         },
       },
       dispose: async () => {
-        for (const { stop } of active.values()) stop();
+        for (const turn of active.values()) turn.interrupt();
         listeners.clear();
       },
     };

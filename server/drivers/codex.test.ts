@@ -120,6 +120,16 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect((settled[0] as any).text).toBe("done from fake codex");
   });
 
+  it("ignores notifications flushed after the turn settles", async () => {
+    await create({ mode: "late" });
+    await instance.adapter.sendTurn({ threadId: "t-late", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const started = recorder.events.filter((e: any) => e.type === "item.started");
+    expect(started.some((e: any) => e.title === "ls -la")).toBe(true);
+    expect(started.some((e: any) => e.title === "late command")).toBe(false);
+  });
+
   it("tries thread/resume with a cursor and reuses the thread id", async () => {
     await create({ mode: "resume" });
     const dump = join(scratch, "dump.json");

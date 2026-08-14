@@ -765,10 +765,13 @@ async function refreshProviderModels(provider: ApiProviderConfig): Promise<ApiPr
 }
 
 async function saveProvider(id: string, provider: ApiProviderConfig) {
+  const existing = cfg.apiProviders?.[id];
+  if (existing && JSON.stringify(existing) === JSON.stringify(provider)) return safeProviderSummary(id, existing);
   const providers = { ...(cfg.apiProviders ?? {}), [id]: provider };
   saveConfig({ apiProviders: providers });
   Object.assign(cfg, loadConfig());
-  await reloadProviders();
+  const instance = await registry.reload(`api-${id}`, instanceConfigs(cfg)[`api-${id}`]);
+  if (instance) bus.attach([instance]);
   broadcast({ kind: "providers" });
   return safeProviderSummary(id, provider);
 }
@@ -1177,7 +1180,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { instances: await registry.describe() });
     }
 
-    // â”€â”€ direct OpenAI-compatible providers â”€â”€
+    // ── direct OpenAI-compatible providers ──
     if (method === "GET" && path === "/api/providers") {
       return json(res, 200, { presets: PROVIDER_PRESETS, providers: providerSummaries() });
     }
@@ -1209,7 +1212,7 @@ const server = createServer(async (req, res) => {
       delete providers[m[1]];
       saveConfig({ apiProviders: providers });
       Object.assign(cfg, loadConfig());
-      await reloadProviders();
+      await registry.reload(`api-${m[1]}`, undefined);
       broadcast({ kind: "providers" });
       return json(res, 200, { ok: true });
     }

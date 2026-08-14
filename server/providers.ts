@@ -42,7 +42,8 @@ export function normalizeProviderBaseUrl(value: unknown): string {
   } catch {
     throw new Error("provider base URL must be a valid URL");
   }
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new Error("provider base URL must use HTTPS or local loopback HTTP");
   }
@@ -52,7 +53,7 @@ export function normalizeProviderBaseUrl(value: unknown): string {
 
 export function providerDisplayName(provider: ApiProviderConfig): string {
   if (provider.label?.trim()) return provider.label.trim();
-  return provider.preset === "custom" ? "Custom OpenAI-compatible" : PROVIDER_PRESETS[provider.preset].label;
+  return provider.preset === "custom" ? "Custom OpenAI-compatible" : PROVIDER_PRESETS[provider.preset]?.label ?? "OpenAI-compatible provider";
 }
 
 export function safeProviderSummary(id: string, provider: ApiProviderConfig) {

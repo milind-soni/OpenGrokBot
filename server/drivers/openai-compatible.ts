@@ -92,7 +92,9 @@ export const OpenAICompatibleDriver: ProviderDriver<OpenAICompatibleConfig> = {
               model: turn.model,
               messages: [
                 ...(turn.system ? [{ role: "system", content: turn.system }] : []),
-                ...(turn.transcript ?? []).map((message) => ({ role: message.role, content: message.text })),
+                // Rewound native-session turns already serialize their
+                // surviving history into `text`; replay it exactly once.
+                ...(turn.text.startsWith("[The user rewound this conversation") ? [] : (turn.transcript ?? []).map((message) => ({ role: message.role, content: message.text })),
                 { role: "user", content: turn.text },
               ],
               stream: true,

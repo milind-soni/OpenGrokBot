@@ -6,6 +6,7 @@ import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import capabilitiesModule from "./capabilities.cjs";
+import { isAllowedSubframeNavigation, isTrustedExternalOpen } from "./navigation-policy.mjs";
 
 const { desktopCapabilities } = capabilitiesModule;
 
@@ -147,9 +148,15 @@ function createWindow() {
     },
   });
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+  win.webContents.setWindowOpenHandler(({ url, referrer }) => {
+    if (isTrustedExternalOpen(url, referrer.url, win.webContents.getURL())) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  // Artifact previews run in sandboxed srcdoc frames. Their CSP blocks
+  // subresources; this main-process guard also prevents model-authored
+  // scripts or links from navigating the frame to an outbound URL.
+  win.webContents.on("will-frame-navigate", (event, details) => {
+    if (!details.isMainFrame && !isAllowedSubframeNavigation(details.url)) event.preventDefault();
   });
 
   // Packaged CI smoke hook. It validates the real renderer/preload bridge and

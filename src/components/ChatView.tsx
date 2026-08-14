@@ -10,6 +10,8 @@ import {
   Copy,
   Loader2,
   Monitor,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   RefreshCw,
   Square,
@@ -24,6 +26,13 @@ import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
 import { TaskPicker } from "./TaskPicker";
+import { ArtifactPanel } from "./ArtifactPanel";
+import {
+  artifactHeaderMode,
+  extractHtmlArtifacts,
+  toggleArtifactSelection,
+  type HtmlArtifact,
+} from "@/lib/html-artifacts";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
@@ -224,6 +233,8 @@ function Bubble({
   onCancelEdit,
   onSubmitEdit,
   onRegenerate,
+  selectedArtifactId,
+  onPreviewArtifact,
 }: {
   bot: Bot;
   message: Message;
@@ -233,6 +244,8 @@ function Bubble({
   onCancelEdit: () => void;
   onSubmitEdit: (text: string) => void;
   onRegenerate?: () => void;
+  selectedArtifactId?: string | null;
+  onPreviewArtifact?: (artifact: HtmlArtifact) => void;
 }) {
   const { dispatch } = useStore();
   const user = message.role === "user";
@@ -300,7 +313,12 @@ function Bubble({
             </>
           ) : (
             <MessageBoundary fallbackText={text}>
-              <ChatMarkdown text={text} />
+              <ChatMarkdown
+                text={text}
+                messageId={message.id}
+                selectedArtifactId={selectedArtifactId}
+                onPreviewArtifact={onPreviewArtifact}
+              />
             </MessageBoundary>
           )}
         </div>
@@ -416,7 +434,15 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
   );
 }
 
-function StreamingBubble({ text }: { text: string }) {
+function StreamingBubble({
+  text,
+  htmlExpanded,
+  onHtmlExpandedChange,
+}: {
+  text: string;
+  htmlExpanded: boolean;
+  onHtmlExpandedChange: (expanded: boolean) => void;
+}) {
   // markdown re-parses on a deferred value: when tokens arrive faster than
   // the parser keeps up, React lags the parse instead of janking the frame
   const deferred = useDeferredValue(text);
@@ -424,7 +450,12 @@ function StreamingBubble({ text }: { text: string }) {
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
         <MessageBoundary fallbackText={deferred}>
-          <ChatMarkdown text={deferred} streaming />
+          <ChatMarkdown
+            text={deferred}
+            streaming
+            streamingHtmlExpanded={htmlExpanded}
+            onStreamingHtmlExpandedChange={onHtmlExpandedChange}
+          />
         </MessageBoundary>
         <span className="animate-caret ml-0.5 inline-block h-[14px] w-[2px] bg-ink align-middle" />
       </div>
@@ -463,6 +494,8 @@ const MessagesList = memo(function MessagesList({
   onCancelEdit,
   onSubmitEdit,
   onRegenerate,
+  selectedArtifactId,
+  onPreviewArtifact,
 }: {
   bot: Bot;
   messages: Message[];
@@ -473,6 +506,8 @@ const MessagesList = memo(function MessagesList({
   onCancelEdit: () => void;
   onSubmitEdit: (id: string, text: string) => void;
   onRegenerate: () => void;
+  selectedArtifactId: string | null;
+  onPreviewArtifact: (artifact: HtmlArtifact) => void;
 }) {
   return (
     <>
@@ -521,6 +556,8 @@ const MessagesList = memo(function MessagesList({
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={(text) => onSubmitEdit(m.id, text)}
                   onRegenerate={onRegenerate}
+                  selectedArtifactId={selectedArtifactId}
+                  onPreviewArtifact={onPreviewArtifact}
                 />
               );
           }
@@ -549,6 +586,63 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
+  const artifacts = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        message.role === "bot" && message.kind === "text" && message.text
+          ? extractHtmlArtifacts(message.text, message.id)
+          : [],
+      ),
+    [messages],
+  );
+  const newestArtifact = artifacts.at(-1);
+  const [artifactSelections, setArtifactSelections] = useState<Record<string, string | null>>({});
+  const autoOpenedArtifact = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!newestArtifact || autoOpenedArtifact.current[bot.threadId] === newestArtifact.id) return;
+    autoOpenedArtifact.current[bot.threadId] = newestArtifact.id;
+    setArtifactSelections((current) => ({ ...current, [bot.threadId]: newestArtifact.id }));
+  }, [bot.threadId, newestArtifact]);
+  const selectedArtifactId = artifactSelections[bot.threadId] ?? null;
+  const selectedArtifact = artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const artifactAction = artifactHeaderMode(newestArtifact?.id, selectedArtifact?.id);
+  const openArtifact = useCallback(
+    (artifact: HtmlArtifact) => {
+      setArtifactSelections((current) => ({
+        ...current,
+        [bot.threadId]: toggleArtifactSelection(current[bot.threadId] ?? null, artifact.id),
+      }));
+    },
+    [bot.threadId],
+  );
+  const closeArtifact = useCallback(() => {
+    setArtifactSelections((current) => ({ ...current, [bot.threadId]: null }));
+  }, [bot.threadId]);
+  const [streamingHtmlExpanded, setStreamingHtmlExpanded] = useState(false);
+  useEffect(() => {
+    if (!streaming) setStreamingHtmlExpanded(false);
+  }, [bot.threadId, streaming]);
+  const [artifactWidth, setArtifactWidth] = useState(() => {
+    const maximum = Math.max(320, Math.floor(window.innerWidth * 0.7));
+    try {
+      const stored = Number(window.localStorage.getItem("openmausbot.artifactWidth"));
+      return Number.isFinite(stored) && stored > 0
+        ? Math.min(maximum, Math.max(320, stored))
+        : Math.min(maximum, 560);
+    } catch {
+      return Math.min(maximum, 560);
+    }
+  });
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem("openmausbot.artifactWidth", String(artifactWidth));
+      } catch {
+        // The preview still resizes when storage is disabled.
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [artifactWidth]);
   const lastBotTextId = useMemo(
     () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
     [messages],
@@ -618,6 +712,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
+    <div className="flex h-full min-w-0 flex-1">
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
@@ -651,6 +746,24 @@ export function ChatView({ bot }: { bot: Bot }) {
             >
               <Square size={12} className="fill-current" />
               Stop
+            </button>
+          )}
+          {artifactAction !== "hidden" && newestArtifact && (
+            <button
+              type="button"
+              onClick={() => {
+                if (artifactAction === "close") closeArtifact();
+                else openArtifact(newestArtifact);
+              }}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] hover:bg-raised hover:text-ink",
+                artifactAction === "close" ? "text-accent" : "text-ink-secondary",
+              )}
+              aria-label={artifactAction === "close" ? "Close artifact" : "Open artifact"}
+              title={artifactAction === "close" ? "Close the artifact preview" : "Open the latest artifact"}
+            >
+              {artifactAction === "close" ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+              {artifactAction === "close" ? "Close artifact" : "Open artifact"}
             </button>
           )}
           <TaskPicker bot={bot} />
@@ -712,6 +825,8 @@ export function ChatView({ bot }: { bot: Bot }) {
             onCancelEdit={cancelEdit}
             onSubmitEdit={submitEdit}
             onRegenerate={regenerate}
+            selectedArtifactId={selectedArtifact?.id ?? null}
+            onPreviewArtifact={openArtifact}
           />
           {provisioning && (
             <div className="flex justify-start">
@@ -723,7 +838,11 @@ export function ChatView({ bot }: { bot: Bot }) {
           )}
           {reasoning && bot.busy && <ThinkingStrip text={reasoning} active={!streaming} />}
           {streaming ? (
-            <StreamingBubble text={streaming} />
+            <StreamingBubble
+              text={streaming}
+              htmlExpanded={streamingHtmlExpanded}
+              onHtmlExpandedChange={setStreamingHtmlExpanded}
+            />
           ) : (
             bot.busy && (
               <div className="flex justify-start">
@@ -764,5 +883,14 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+    {selectedArtifact && (
+      <ArtifactPanel
+        artifact={selectedArtifact}
+        width={artifactWidth}
+        onWidthChange={setArtifactWidth}
+        onClose={closeArtifact}
+      />
+    )}
+    </div>
   );
 }

@@ -477,7 +477,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session", agentsMcp: true },
+        capabilities: { sessionModelSwitch: "in-session", agentsMcp: true, computerMcp: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {

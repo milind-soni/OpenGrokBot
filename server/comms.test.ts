@@ -157,15 +157,30 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
       expect(reply.text).toContain("Helper replied:");
       expect(reply.text).toContain("hello from fake acp"); // B's happy-path turn text
 
-      // visibility: A's thread shows the outbound ask as an activity note
-      const note = askerBot.messages.find((m: any) => m.kind === "activity" && m.tool?.name?.startsWith("asked @Helper"));
+      // visibility: A's thread shows a clickable "Messaged @Helper" chip
+      // that links to the auto-created bot⇄bot channel
+      const note = askerBot.messages.find((m: any) => m.kind === "activity" && m.tool?.name === "Messaged @Helper");
       expect(note).toBeTruthy();
+      expect(note.comm?.groupId).toBeTruthy();
+      expect(note.comm?.withName).toBe("Helper");
 
-      // B's thread received the attributed message and ran a real turn
-      const helperBot = (await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === helper.id);
+      // the exchange is mirrored into that channel, attributed to each bot
+      const state = (await api("GET", "/api/bots")).body;
+      const channel = state.groups.find((g: any) => g.id === note.comm.groupId);
+      expect(channel?.dm).toBe(true);
+      expect(channel.memberIds).toContain(asker.id);
+      expect(channel.memberIds).toContain(helper.id);
+      expect(channel.messages.some((m: any) => m.from?.botId === asker.id)).toBe(true);
+      expect(channel.messages.some((m: any) => m.from?.botId === helper.id && m.text?.includes("hello from fake acp"))).toBe(true);
+
+      // B's thread received the attributed message and ran a real turn,
+      // plus a receive-side chip pointing at the same channel
+      const helperBot = state.bots.find((b: any) => b.id === helper.id);
       const inbound = helperBot.messages.find((m: any) => m.role === "user" && m.kind === "text");
       expect(inbound.text).toContain("[Message from @Asker");
       expect(inbound.text).toContain("ping from fake");
+      const rnote = helperBot.messages.find((m: any) => m.kind === "activity" && m.tool?.name === "Message from @Asker");
+      expect(rnote?.comm?.groupId).toBe(note.comm.groupId);
       expect(helperBot.busy).toBeFalsy();
     },
     40_000,

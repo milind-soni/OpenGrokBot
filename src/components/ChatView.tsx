@@ -22,6 +22,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { ReactionBar, ReactionChips } from "./Reactions";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -181,7 +182,8 @@ function BubbleEditor({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // isComposing: an IME confirm-Enter must not submit the edit
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             submit();
           }
@@ -265,6 +267,7 @@ function Bubble({
             <Pencil size={14} />
           </button>
         )}
+        {user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
         {user && <CopyButton text={text} />}
         <div
           className={cn(
@@ -312,6 +315,7 @@ function Bubble({
             )}
           </div>
         )}
+        {!user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
         <span
           className={cn(
             "self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100",
@@ -321,6 +325,7 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
+      <ReactionChips threadId={bot.threadId} message={message} align={user ? "right" : "left"} />
       {versions.length > 1 && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
           <button
@@ -350,8 +355,26 @@ function Bubble({
 
 /** A tool run: spinner while live, check/cross once settled. */
 function ActivityChip({ message }: { message: Message }) {
+  const { dispatch } = useStore();
   const tool = message.tool;
   if (!tool) return null;
+  // bot⇄bot comm chip: opens the channel where the exchange lives
+  const comm = message.comm;
+  if (comm) {
+    return (
+      <div className="flex justify-start">
+        <button
+          onClick={() => dispatch({ type: "select", id: comm.groupId })}
+          title={`Open the conversation with ${comm.withName}`}
+          className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          <MausAvatar color={comm.withColor} state="happy" size={16} />
+          <span className="max-w-[480px] truncate">{tool.name}</span>
+          <ChevronRight size={13} />
+        </button>
+      </div>
+    );
+  }
   const failed = tool.ok === false;
   return (
     <div className="flex justify-start">
@@ -714,11 +737,13 @@ export function ChatView({ bot }: { bot: Bot }) {
 
       {/* keyed by bot: a draft belongs to the conversation it was typed in,
           so switching bots starts from an empty composer instead of carrying
-          the previous bot's half-written message over */}
+          the previous bot's half-written message over. ArrowUp-to-edit is
+          gated on busy like the pencil button — editing rewinds the thread,
+          which a live turn forbids (the server 409s it). */}
       <Composer
         key={bot.id}
         bot={bot}
-        onEditLast={lastUserMessage ? () => setEditingId(lastUserMessage.id) : undefined}
+        onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
       />
 
     </main>

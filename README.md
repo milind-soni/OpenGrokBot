@@ -21,10 +21,14 @@ Talk to them like contacts. Watch them work. Approve what matters.
 <br>
 
 <a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS&labelColor=070707&color=1084fe" alt="Download the latest OpenMausBot for macOS (.dmg)" height="40">
+  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest OpenMausBot for macOS (.dmg)" height="40">
+</a>
+&nbsp;
+<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe">
+  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest OpenMausBot for Windows (.exe)" height="40">
 </a>
 
-<sub>Apple silicon · signed & notarized · one-click .dmg, always the latest · [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
+<sub>macOS: Apple silicon · signed & notarized · one-click .dmg &nbsp;·&nbsp; Windows: 64-bit · one-click installer, no admin rights &nbsp;·&nbsp; both always the latest · [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
 
 <br>
 <br>
@@ -42,8 +46,8 @@ it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each
 memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
 already have:
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your Mac — your
-  existing logins and subscriptions, no new accounts, no proxy in the middle.
+- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
+  — your existing logins and subscriptions, no new accounts, no proxy in the middle.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
@@ -161,8 +165,12 @@ flowchart LR
 
 ## Quick start
 
-**Easiest:** [download the latest .dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest),
-drag it to Applications, open it. The harness server is embedded — no setup.
+**Easiest:** grab the build for your machine — the harness server is embedded, so there's no setup either way.
+
+| | Download | Install |
+|---|---|---|
+| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
+| **Windows** (x64) | [OpenMausBot-setup.exe](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
 
 **From source:**
 

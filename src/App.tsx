@@ -5,6 +5,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
+import { GroupView } from "@/components/GroupView";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
@@ -13,7 +14,8 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 
 function Shell() {
   const { state, dispatch } = useStore();
-  const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+  const group = state.groups.find((g) => g.id === state.selectedId);
+  const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
 
   // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next.
   // Kept deliberately small; every panel already closes on Esc.
@@ -50,7 +52,9 @@ function Shell() {
       <UpdateBanner />
       <div className="relative flex min-h-0 flex-1">
       <Sidebar />
-      {bot ? (
+      {group ? (
+        <GroupView key={group.id} group={group} />
+      ) : bot ? (
         <ChatView bot={bot} />
       ) : (
         <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">

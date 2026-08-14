@@ -41,6 +41,27 @@ export interface Message {
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+  /** rooms: which member said this (sender attribution). */
+  from?: { botId: string; name: string; color: MausColor };
+  /** emoji reactions; by = "user" or a member botId. */
+  reactions?: Array<{ emoji: string; by: string }>;
+  /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
+  comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+}
+
+/** A room: several bots + you in one shared thread. */
+export interface Group {
+  id: string;
+  threadId: string;
+  name: string;
+  memberIds: string[];
+  bulletin: string;
+  unread: boolean;
+  createdAt: number;
+  /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
+  dm?: boolean;
+  busyBotId?: string | null;
+  messages: Message[];
 }
 
 export interface ModelSelection {
@@ -121,8 +142,10 @@ export interface InstanceInfo {
 
 interface AppState {
   bots: Bot[];
+  groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** selected chat — a bot id OR a group id */
   selectedId: string;
   settingsOpen: boolean;
   pluginsOpen: boolean;
@@ -142,7 +165,15 @@ interface AppState {
 }
 
 type Action =
-  | { type: "hydrate"; bots: Bot[] }
+  | { type: "hydrate"; bots: Bot[]; groups: Group[] }
+  | { type: "groupPatched"; group: Partial<Group> & { id: string } }
+  | { type: "groupDeleted"; groupId: string }
+  | { type: "createGroup"; memberIds: string[]; name?: string }
+  | { type: "sendGroup"; groupId: string; text: string }
+  | { type: "patchGroup"; groupId: string; patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds">> }
+  | { type: "deleteGroup"; groupId: string }
+  | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string }
+  | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -212,22 +243,41 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
-        action.bots.some((b) => b.id === state.selectedId) && state.selectedId
-          ? state.selectedId
-          : (action.bots[0]?.id ?? "");
-      return { ...state, bots: action.bots, selectedId };
+        state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+      return { ...state, bots: action.bots, groups: action.groups, selectedId };
+    }
+    case "groupPatched": {
+      const exists = state.groups.some((g) => g.id === action.group.id);
+      const groups = exists
+        ? state.groups.map((g) => (g.id === action.group.id ? { ...g, ...action.group, messages: action.group.messages ?? g.messages } : g))
+        : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
+      return { ...state, groups };
+    }
+    case "groupDeleted": {
+      const groups = state.groups.filter((g) => g.id !== action.groupId);
+      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
+      return { ...state, groups, selectedId };
     }
     case "instances":
       return { ...state, instances: action.instances };
     case "configStatus":
       return { ...state, config: action.config };
-    case "select":
+    case "select": {
+      if (state.groups.some((g) => g.id === action.id)) {
+        return {
+          ...state,
+          selectedId: action.id,
+          groups: state.groups.map((g) => (g.id === action.id ? { ...g, unread: false } : g)),
+        };
+      }
       return updateBot(
         withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch"),
         action.id,
         (b) => ({ ...b, unread: false }),
       );
+    }
     // optimistic card settle; the server's message.patch confirms it later
     case "answerCard":
       return withMascotMotion(
@@ -266,7 +316,18 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        // room thread — plain linear append, no branching/mascot machinery
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        if (group.messages.some((m) => m.id === action.message.id)) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id ? { ...g, messages: [...g.messages, action.message] } : g,
+          ),
+        };
+      }
       // every server-side append chains onto (and becomes) the active leaf
       const next = updateBot(state, bot.id, (b) => {
         if (b.messages.some((m) => m.id === action.message.id)) {
@@ -303,7 +364,18 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "messagePatched": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id
+              ? { ...g, messages: g.messages.map((m) => (m.id === action.message.id ? action.message : m)) }
+              : g,
+          ),
+        };
+      }
       const motion =
         action.message.kind === "activity"
           ? action.message.tool?.ok === false
@@ -400,6 +472,30 @@ function reducer(state: AppState, action: Action): AppState {
       }
       return updateBot(state, action.botId, (b) => ({ ...b, activeLeafId: cur }));
     }
+    // optimistic room edits; the server's group frame confirms them later
+    case "patchGroup":
+      return {
+        ...state,
+        groups: state.groups.map((g) => (g.id === action.groupId ? { ...g, ...action.patch } : g)),
+      };
+    case "toggleReaction": {
+      const toggle = (m: Message): Message => {
+        if (m.id !== action.messageId) return m;
+        const reactions = m.reactions ?? [];
+        const at = reactions.findIndex((r) => r.emoji === action.emoji && r.by === "user");
+        const next = at >= 0 ? reactions.filter((_, i) => i !== at) : [...reactions, { emoji: action.emoji, by: "user" }];
+        return { ...m, reactions: next.length ? next : undefined };
+      };
+      return {
+        ...state,
+        bots: state.bots.map((b) =>
+          b.threadId === action.threadId ? { ...b, messages: b.messages.map(toggle) } : b,
+        ),
+        groups: state.groups.map((g) =>
+          g.threadId === action.threadId ? { ...g, messages: g.messages.map(toggle) } : g,
+        ),
+      };
+    }
     // handled entirely by the async wrapper
     case "send":
     case "editMessage":
@@ -407,6 +503,10 @@ function reducer(state: AppState, action: Action): AppState {
     case "newBot":
     case "duplicateBot":
     case "interrupt":
+    case "createGroup":
+    case "sendGroup":
+    case "deleteGroup":
+    case "interruptGroup":
       return state;
   }
 }
@@ -416,6 +516,7 @@ const MAX_KEPT_SCREEN_FRAMES = 8;
 
 const initialState: AppState = {
   bots: [],
+  groups: [],
   instances: [],
   config: null,
   selectedId: "",
@@ -473,13 +574,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [stream, setStream] = useState<StreamState>(EMPTY_STREAM);
   const deltaBuffer = useRef(new Map<string, { text: string; reasoning: string }>());
   const deltaFlush = useRef<number | null>(null);
-  const clearStream = (threadId: string) =>
+  const clearStream = (threadId: string) => {
+    // Drop the thread's un-flushed deltas too: the settled message that
+    // triggered this clear already contains them. Without this, the pending
+    // rAF re-creates a "ghost" stream bubble holding the tail fragment —
+    // it renders below any card/chip that settled next (so a permission
+    // card looks glued to the top), keeps the caret blinking while the bot
+    // is actually waiting, and the next block's deltas append onto the
+    // duplicated tail instead of starting a fresh bubble.
+    deltaBuffer.current.delete(threadId);
     setStream((prev) => {
       if (!(threadId in prev.streaming) && !(threadId in prev.reasoning)) return prev;
       const { [threadId]: _s, ...streaming } = prev.streaming;
       const { [threadId]: _r, ...reasoning } = prev.reasoning;
       return { streaming, reasoning };
     });
+  };
   const flushDeltas = () => {
     if (deltaFlush.current !== null) {
       cancelAnimationFrame(deltaFlush.current);
@@ -611,11 +721,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "select": {
           const bot = stateRef.current.bots.find((b) => b.id === action.id);
+          const group = stateRef.current.groups.find((g) => g.id === action.id);
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
+          } else if (group?.unread) {
+            api(`/api/groups/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           break;
         }
+        case "createGroup":
+          api(`/api/groups`, {
+            method: "POST",
+            body: JSON.stringify({ memberIds: action.memberIds, name: action.name }),
+          })
+            .then(({ group }) => {
+              rawDispatch({ type: "groupPatched", group });
+              rawDispatch({ type: "select", id: group.id });
+            })
+            .catch(showError);
+          break;
+        case "sendGroup":
+          api(`/api/groups/${action.groupId}/messages`, {
+            method: "POST",
+            body: JSON.stringify({ text: action.text }),
+          }).catch(showError);
+          break;
+        case "patchGroup":
+          api(`/api/groups/${action.groupId}`, {
+            method: "PATCH",
+            body: JSON.stringify(action.patch),
+          }).catch(showError);
+          break;
+        case "deleteGroup":
+          api(`/api/groups/${action.groupId}`, { method: "DELETE" }).catch(showError);
+          break;
+        case "toggleReaction":
+          api(`/api/threads/${action.threadId}/messages/${action.messageId}/reactions`, {
+            method: "POST",
+            body: JSON.stringify({ emoji: action.emoji, by: "user" }),
+          }).catch(showError);
+          break;
         case "setModel":
           api(`/api/bots/${action.botId}`, {
             method: "PATCH",
@@ -624,6 +769,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
+          break;
+        case "interruptGroup":
+          api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
           const timers = patchTimers.current;
@@ -651,7 +799,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let alive = true;
     const loadAll = () => {
       api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
+        .then(({ bots, groups }) => alive && rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
         .catch(() => {});
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
@@ -703,6 +851,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "botPatched", bot });
           break;
         }
+        case "group": {
+          const group = frame.group as Partial<Group> & { id: string };
+          // reading the selected room clears its badge immediately
+          if (group.unread && group.id === stateRef.current.selectedId) {
+            group.unread = false;
+            fetch(`/api/groups/${group.id}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ unread: false }),
+            }).catch(() => {});
+          }
+          rawDispatch({ type: "groupPatched", group });
+          break;
+        }
+        case "group.deleted":
+          rawDispatch({ type: "groupDeleted", groupId: frame.groupId });
+          break;
         case "runtime": {
           const event = frame.event;
           if (event.type === "content.delta") {

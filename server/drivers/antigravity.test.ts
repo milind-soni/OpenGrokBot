@@ -2,8 +2,8 @@
 // in server/testing/fake-agy-cli.ts: normalize the print-mode stream-json turn
 // into canonical events, and report availability from `agy --version`.
 //
-// Spawn-based tests are POSIX-only (the fake CLI is a shebang script Windows
-// cannot exec directly), matching acp.test.ts.
+// The fake CLI is a shebang script Windows cannot exec directly;
+// spawnCli resolves it to `node <script>`, so these run everywhere.
 import { chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,6 @@ import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { AntigravityDriver } from "./antigravity.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
-const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("Antigravity decodeConfig", () => {
   it("defaults to the agy binary and fullAuto on", () => {
@@ -33,7 +32,7 @@ describe("Antigravity decodeConfig", () => {
   });
 });
 
-posixOnly("Antigravity turns (fake CLI)", () => {
+describe("Antigravity turns (fake CLI)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
 
@@ -102,7 +101,7 @@ posixOnly("Antigravity turns (fake CLI)", () => {
   });
 });
 
-describe.skipIf(process.platform === "win32")("Antigravity snapshot", () => {
+describe("Antigravity snapshot", () => {
   it("reports available with the CLI version against the fake", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const instance = await AntigravityDriver.create({

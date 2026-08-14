@@ -4,8 +4,8 @@
 // normalize the ACP handshake into canonical events, keep argv/env hygiene,
 // broker permission asks, and settle interrupts/crashes cleanly.
 //
-// Spawn-based tests are POSIX-only until Windows CLI spawning lands (the fake
-// CLI is a shebang script Windows cannot exec directly).
+// The fake CLI is a shebang script Windows cannot exec directly —
+// resolveCliSpawn turns it into `node <script>`, so these run everywhere.
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,7 +19,6 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
-const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("ACP decodeConfig", () => {
   it("grok defaults to the grok binary", () => {
@@ -34,7 +33,7 @@ describe("ACP decodeConfig", () => {
   });
 });
 
-posixOnly("ACP turns (fake CLI)", () => {
+describe("ACP turns (fake CLI)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
   let scratch: string;
@@ -165,7 +164,7 @@ posixOnly("ACP turns (fake CLI)", () => {
   });
 });
 
-describe.skipIf(process.platform === "win32")("ACP snapshot", () => {
+describe("ACP snapshot", () => {
   it("a missing binary is unavailable", async () => {
     const instance = await GrokAgentDriver.create({
       instanceId: "grok-missing",

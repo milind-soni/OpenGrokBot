@@ -2,12 +2,13 @@
 // well-known install dir — or an nvm bin dir — must be findable even
 // when the process itself started with a bare GUI PATH.
 import { execFile } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { augmentedPath, resetPathCacheForTests } from "./env-path.ts";
+import { resolveCli } from "./procs.ts";
 
 const posixIt = it.skipIf(process.platform === "win32");
 
@@ -74,5 +75,137 @@ describe("augmentedPath", () => {
     const parts = augmentedPath().split(delimiter);
     // temp home: .volta was never created, so it must not appear
     expect(parts).not.toContain(join(homedir(), ".volta", "bin"));
+  });
+});
+
+// Windows CLI resolution — spawn(cli) alone finds nothing on Windows (no
+// PATHEXT in libuv, no #!, and a .cmd throws outright since Node's
+// CVE-2024-27980 fix). Fixtures are the two real npm shim shapes.
+const winOnly = describe.skipIf(process.platform !== "win32");
+
+// the exact bytes npm writes for a CLI whose bin is a native binary
+const EXE_SHIM = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\node_modules\\pkg\\bin\\ombfake.exe"   %*
+`;
+
+// ...and for one whose bin is a node script (the "_prog" dance)
+const JS_SHIM = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\\node.exe" (
+  SET "_prog=%dp0%\\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\pkg\\bin\\ombfake.js" %*
+`;
+
+describe("resolveCli", () => {
+  it.skipIf(process.platform === "win32")("is identity off Windows — the kernel already resolves PATH and #!", () => {
+    expect(resolveCli("claude", ["-p", "hi"])).toEqual({ command: "claude", args: ["-p", "hi"] });
+  });
+});
+
+winOnly("resolveCli (Windows)", () => {
+  let dir: string;
+  const onPath = () => {
+    process.env.OMB_EXTRA_PATH = dir;
+    resetPathCacheForTests();
+  };
+  const shimWith = (name: string, body: string, target: string, targetBody: string) => {
+    writeFileSync(join(dir, name), body);
+    mkdirSync(join(dir, "node_modules", "pkg", "bin"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "pkg", "bin", target), targetBody);
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "omb-shim-"));
+  });
+  afterEach(() => {
+    delete process.env.OMB_EXTRA_PATH;
+    resetPathCacheForTests();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("parses an npm .cmd shim down to the .exe it wraps", () => {
+    shimWith("ombfake.cmd", EXE_SHIM, "ombfake.exe", "MZ-not-really");
+    onPath();
+    expect(resolveCli("ombfake", ["-p", "hi"])).toEqual({
+      command: join(dir, "node_modules", "pkg", "bin", "ombfake.exe"),
+      args: ["-p", "hi"],
+    });
+  });
+
+  it("parses an npm .cmd shim down to `node <cli.js>`, never the shim's own node.exe", async () => {
+    shimWith("ombfake.cmd", JS_SHIM, "ombfake.js", "console.log('js target ' + process.argv.slice(2).join(','));\n");
+    onPath();
+    const r = resolveCli("ombfake", ["-p", "hi"]);
+    expect(r.args).toEqual([join(dir, "node_modules", "pkg", "bin", "ombfake.js"), "-p", "hi"]);
+    expect(r.command.toLowerCase()).toMatch(/node\.exe$/);
+    const stdout = await new Promise<string>((resolve, reject) =>
+      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+    );
+    expect(stdout.trim()).toBe("js target -p,hi");
+  });
+
+  it("prefers the PATHEXT hit over the extensionless sibling npm installs beside it", () => {
+    shimWith("ombfake.cmd", EXE_SHIM, "ombfake.exe", "MZ-not-really");
+    writeFileSync(join(dir, "ombfake"), "#!/bin/sh\n# the POSIX shim — unrunnable here\n");
+    onPath();
+    expect(resolveCli("ombfake", []).command).toBe(join(dir, "node_modules", "pkg", "bin", "ombfake.exe"));
+  });
+
+  it("runs a #!node script through node — Windows has no shebang support", async () => {
+    const script = join(dir, "ombfake-cli.ts");
+    writeFileSync(script, "#!/usr/bin/env node\nconsole.log('shebang ' + process.argv.slice(2).join(','));\n");
+    const r = resolveCli(script, ["a", "b"]);
+    expect(r.command.toLowerCase()).toMatch(/node(\.exe)?$/);
+    expect(r.args).toEqual([script, "a", "b"]);
+
+    const stdout = await new Promise<string>((resolve, reject) =>
+      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+    );
+    expect(stdout.trim()).toBe("shebang a,b");
+  });
+
+  it("never crosses the no-shell boundary for an unparseable shim", () => {
+    const shim = join(dir, "ombfake.cmd");
+    writeFileSync(shim, "@ECHO OFF\ncustom-launcher %*\n");
+    onPath();
+    const payload = JSON.stringify({
+      mcpServers: {
+        ogb: {
+          command: "C:\\Program Files\\nodejs\\node.exe",
+          args: ["a b", "%PATH%", "x&y|z", "q^r", "<in>out"],
+          env: { TOK: 'he said "hi"' },
+        },
+      },
+    });
+    const resolved = resolveCli("ombfake", ["--mcp-config", payload]);
+    expect(resolved.command.toLowerCase()).toBe(shim.toLowerCase());
+    expect(resolved.args).toEqual(["--mcp-config", payload]);
+  });
+
+  it("hands an unknown CLI back untouched so spawn reports its own ENOENT", () => {
+    onPath();
+    expect(resolveCli("definitely-not-installed", ["-p"])).toEqual({
+      command: "definitely-not-installed",
+      args: ["-p"],
+    });
   });
 });

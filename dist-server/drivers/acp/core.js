@@ -13,10 +13,19 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execCli, killCliTree, spawnCli } from "../../procs.js";
 import { newEventId, newId } from "../../contracts.js";
 import { augmentedPath } from "../../env-path.js";
+// the computer proxy entry: .ts in dev (node type stripping), .js in the
+// compiled dist-server the packaged app ships
+const COMPUTER_PROXY_PATH = (() => {
+    const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "computer-proxy.ts");
+    return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
 import { appendNative } from "../native.js";
 const INIT_TIMEOUT = 20_000;
 const NEW_SESSION_TIMEOUT = 30_000;
@@ -72,13 +81,34 @@ export function createAcpDriver(support) {
             // fine here. env is the ACP {name,value}[] shape.
             const acpMcpServers = (turn) => {
                 const servers = [];
+                const acpEnv = (env) => Object.entries(env).map(([name, value]) => ({ name, value: String(value) }));
                 const agents = turn.integrations?.agents;
                 if (agents) {
+                    servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
+                }
+                // the bot's computer, mounted exactly like the claude driver does:
+                // an ACP agent gets the same screenshot/click/batch tools instead of
+                // being told it has a machine it cannot touch
+                const computer = turn.integrations?.computer;
+                if (computer) {
                     servers.push({
-                        name: "agents",
-                        command: agents.command,
-                        args: agents.args,
-                        env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
+                        name: "computer",
+                        command: process.execPath,
+                        args: [COMPUTER_PROXY_PATH],
+                        env: acpEnv({
+                            ELECTRON_RUN_AS_NODE: "1",
+                            OGB_BOX_ID: computer.boxId,
+                            OGB_BOX_TOKEN: computer.token,
+                        }),
+                    });
+                }
+                else if (turn.integrations?.localComputer) {
+                    const local = turn.integrations.localComputer;
+                    servers.push({
+                        name: "computer",
+                        command: local.command,
+                        args: local.args,
+                        env: acpEnv(local.env ?? {}),
                     });
                 }
                 return servers;
@@ -420,7 +450,7 @@ export function createAcpDriver(support) {
                 snapshot,
                 adapter: {
                     provider: DRIVER_KIND,
-                    capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+                    capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, computerMcp: true },
                     sendTurn,
                     interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
                     respondToRequest: async (threadId, requestId, decision) => {

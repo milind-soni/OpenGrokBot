@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import { useDesktopCapabilities } from "./DesktopCapabilities";
 
 // Three-step first-run onboarding: who you are (email), what's installed
 // (live engine checks from the harness), what the app may use (TCC).
@@ -13,8 +14,6 @@ type InstanceRow = {
   displayName: string;
   snapshot: { state: "available" | "unavailable"; reason?: string; version?: string | null; authenticated?: boolean };
 };
-
-const isElectron = navigator.userAgent.includes("Electron");
 
 function StatusRow({
   ok,
@@ -45,6 +44,7 @@ function StatusRow({
 }
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
+  const { capabilities } = useDesktopCapabilities();
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -72,14 +72,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .then((d) => setInstances(d.instances ?? []))
         .catch(() => setInstances([]));
     }
-    if (step === 2 && isElectron) {
+    if (step === 2 && capabilities.dictation.available) {
       const poll = () => window.ogb?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
       const t = setInterval(poll, 2000);
       return () => clearInterval(t);
     }
-  }, [step, instances]);
+  }, [step, instances, capabilities.dictation.available]);
 
   const finish = () => {
     track("onboarding_completed", {
@@ -146,7 +146,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="flex flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on AI tools installed on this computer — here&rsquo;s what we found.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (
@@ -203,7 +203,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
+              onClick={() => (capabilities.dictation.available ? setStep(2) : finish())}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue

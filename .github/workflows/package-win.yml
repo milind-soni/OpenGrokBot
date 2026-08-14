@@ -1,0 +1,59 @@
+# Windows installer, built on a real Windows runner and published as a
+# workflow artifact.
+#
+# Why this exists: releases are cut by hand from a Mac, which cannot build
+# an NSIS installer (electron-builder needs wine, and a cross-built exe
+# that never ran on Windows is exactly the artifact that looks fine and
+# breaks in the field). So every release so far shipped Windows behind the
+# mac build — different trees under one version number. Run this from the
+# same commit as the mac build and attach the artifact to the release.
+#
+# Deliberately artifact-only: pushing straight to the separate releases
+# repo would need a cross-repo token this workflow has no business holding.
+name: Package Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit/tag/branch to build (defaults to the branch this is run from)"
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: NSIS installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # the packaged app ships compiled JS, so a stale dist/ or dist-server/
+      # would ride along unsigned-for and unsealed (the 0.1.15 "damaged"
+      # incident) — a fresh checkout is clean, but be explicit
+      - name: clean build outputs
+        shell: bash
+        run: rm -rf dist dist-server release
+      - run: pnpm package:win
+      - name: report what was built
+        shell: bash
+        run: |
+          echo "version: $(node -p "require('./package.json').version")"
+          echo "commit:  $(git rev-parse HEAD)"
+          ls -lh release/*.exe release/*.yml 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 14

@@ -3,8 +3,8 @@
 // JSON-RPC handshake, normalize notifications into canonical events, and
 // surface server->client approval requests as request.opened.
 //
-// Spawn-based tests are POSIX-only until Windows CLI spawning lands (the
-// fake is a shebang script — same constraint as codex.cmd itself).
+// The fake is a shebang script — the same constraint codex.cmd itself
+// hits on Windows. resolveCliSpawn covers both, so these run everywhere.
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +16,6 @@ import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { CodexDriver } from "./codex.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
-const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("CodexDriver.decodeConfig", () => {
   it("defaults to the codex binary with fullAuto off", () => {
@@ -28,7 +27,7 @@ describe("CodexDriver.decodeConfig", () => {
   });
 });
 
-posixOnly("CodexDriver turns (fake app-server)", () => {
+describe("CodexDriver turns (fake app-server)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
   let scratch: string;

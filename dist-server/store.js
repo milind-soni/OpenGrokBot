@@ -8,6 +8,7 @@ import { DATA_DIR } from "./config.js";
 import { newId } from "./contracts.js";
 import { pickBotName } from "./names.js";
 const BOTS_FILE = join(DATA_DIR, "bots.json");
+const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId) => join(DATA_DIR, `messages-${threadId}.json`);
 const COLORS = [
     "green",
@@ -49,6 +50,7 @@ const onboardingCard = () => ({
 });
 export class Store {
     bots = [];
+    groups = [];
     threads = new Map();
     defaultSelection;
     constructor(defaultSelection) {
@@ -60,12 +62,81 @@ export class Store {
         catch {
             this.bots = [];
         }
+        try {
+            this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
+        }
+        catch {
+            this.groups = [];
+        }
         // busy never survives a restart — no turn does either
         for (const b of this.bots)
             b.busy = false;
+        for (const g of this.groups)
+            g.busyBotId = null;
     }
     saveBots() {
         writeFileSync(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+    }
+    saveGroups() {
+        writeFileSync(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId, ...g }) => g), null, 2));
+    }
+    // ── groups ────────────────────────────────────────────────────────────
+    group(id) {
+        return this.groups.find((g) => g.id === id);
+    }
+    groupByThread(threadId) {
+        return this.groups.find((g) => g.threadId === threadId);
+    }
+    createGroup(name, memberIds, dm = false) {
+        const group = {
+            id: newId(),
+            threadId: newId(),
+            name,
+            memberIds,
+            bulletin: "",
+            unread: false,
+            createdAt: Date.now(),
+            dm: dm || undefined,
+            busyBotId: null,
+        };
+        this.groups.unshift(group);
+        this.saveGroups();
+        return group;
+    }
+    /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
+    dmGroup(a, b) {
+        return this.groups.find((g) => g.dm && g.memberIds.length === 2 && g.memberIds.includes(a) && g.memberIds.includes(b));
+    }
+    patchGroup(id, patch) {
+        const group = this.group(id);
+        if (!group)
+            return null;
+        Object.assign(group, patch);
+        this.saveGroups();
+        return group;
+    }
+    deleteGroup(id) {
+        const group = this.group(id);
+        if (!group)
+            return false;
+        this.groups = this.groups.filter((g) => g.id !== id);
+        this.threads.delete(group.threadId);
+        this.saveGroups();
+        try {
+            unlinkSync(messagesFile(group.threadId));
+        }
+        catch { }
+        return true;
+    }
+    /** Toggle an emoji reaction on a message ("user" or a member botId). */
+    toggleReaction(threadId, messageId, emoji, by) {
+        const existing = this.messagesFor(threadId).find((m) => m.id === messageId);
+        if (!existing)
+            return null;
+        const reactions = existing.reactions ?? [];
+        const at = reactions.findIndex((r) => r.emoji === emoji && r.by === by);
+        const next = at >= 0 ? reactions.filter((_, i) => i !== at) : [...reactions, { emoji, by }];
+        return this.patchMessage(threadId, messageId, { reactions: next.length ? next : undefined });
     }
     thread(threadId) {
         let t = this.threads.get(threadId);
@@ -125,8 +196,26 @@ export class Store {
         const full = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...message };
         t.messages.push(full);
         t.activeLeafId = full.id;
+        if (full.kind === "screen")
+            this.pruneScreenFrames(t);
         this.saveThread(threadId);
         return full;
+    }
+    /** Screen frames are ~100-500KB of base64 each and the whole thread file
+     * is rewritten on every append, so keeping every frame of a long
+     * computer session makes each later message slower than the last. The
+     * newest few keep their pixels; older ones stay in the transcript as
+     * placeholders. Mirrors the client's own frame cap. */
+    pruneScreenFrames(t, keep = 4) {
+        let seen = 0;
+        for (let i = t.messages.length - 1; i >= 0 && seen < t.messages.length; i--) {
+            const m = t.messages[i];
+            if (m.kind !== "screen" || !m.png)
+                continue;
+            seen += 1;
+            if (seen > keep)
+                m.png = undefined;
+        }
     }
     /** Fork the conversation: a new user message that replaces `sourceId`
      * (same parent, new text) and becomes the active leaf. */

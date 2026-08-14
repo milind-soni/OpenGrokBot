@@ -6,6 +6,19 @@ import { useState } from "react";
 import { ArrowDownToLine, RefreshCw, Sparkles, X } from "lucide-react";
 import { useUpdaterState } from "@/lib/updater";
 
+// electron-updater surfaces failures as a whole HTTP dump — status line,
+// every response header, stack trace. That is unreadable in a 300px popup,
+// so name the two cases that actually happen and clip anything else to its
+// first line.
+function friendlyError(message?: string): string {
+  if (!message) return "Something went wrong.";
+  if (/cannot find .*\.yml|404/i.test(message))
+    return "No update has been published for this platform yet.";
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|net::/i.test(message))
+    return "Couldn't reach the update server.";
+  return message.split("\n")[0].slice(0, 140);
+}
+
 export function UpdateBanner() {
   const s = useUpdaterState();
   // dismissal is per status+version, so the popup returns for the next
@@ -31,7 +44,7 @@ export function UpdateBanner() {
         ? `${Math.round(s.percent ?? 0)}%`
         : s.status === "downloaded"
           ? "Restart to finish updating."
-          : (s.message ?? "Something went wrong.");
+          : friendlyError(s.message);
 
   return (
     <div className="animate-panel-in fixed bottom-4 left-4 z-50 w-[300px] rounded-xl border border-hairline/40 bg-panel p-3.5 shadow-2xl shadow-black/50">

@@ -108,6 +108,23 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
   });
 
+  it("forwards watch-skill environment values in ACP MCP format", async () => {
+    await create();
+    const dump = join(scratch, "watch-skill.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-watch-skill-env",
+      text: "go",
+      integrations: { watchSkill: { command: "watch-skill", args: ["serve"], env: { WATCH_SKILL_HOME: "/tmp/index" } } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpServers.find((server: { name: string }) => server.name === "watch_skill").env)
+      .toEqual([{ name: "WATCH_SKILL_HOME", value: "/tmp/index" }]);
+  });
+
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-perm", text: "go" });

@@ -141,7 +141,14 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           });
         }
         const watchSkill = turn.integrations?.watchSkill;
-        if (watchSkill) servers.push({ name: "watch_skill", command: watchSkill.command, args: watchSkill.args, env: [] });
+        if (watchSkill) {
+          servers.push({
+            name: "watch_skill",
+            command: watchSkill.command,
+            args: watchSkill.args,
+            env: Object.entries(watchSkill.env).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
         return servers;
       };
 

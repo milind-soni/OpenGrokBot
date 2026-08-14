@@ -135,6 +135,9 @@ function handle(msg: any) {
       break;
     case "session/new": {
       const servers: McpEntry[] = Array.isArray(msg.params?.mcpServers) ? msg.params.mcpServers : [];
+      if (process.env.FAKE_ACP_DUMP) {
+        writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env, mcpServers: servers }, null, 2));
+      }
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
       result(msg.id, { sessionId: "fake-acp-session" });
       break;

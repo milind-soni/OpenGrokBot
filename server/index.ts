@@ -477,7 +477,13 @@ async function startTurn(
         integrations.agents = agentsIntegration(bot.id, commsDepth);
       }
       const videos = videoReferences(text);
-      if (videos.length && hasWatchSkill()) integrations.watchSkill = watchSkillIntegration();
+      const activeVideo = videos.at(-1) ?? bot.watchSkillVideo;
+      // The detected source is persisted with the thread's bot record. The
+      // local watch-skill server owns its durable index, so a later question
+      // with no URL can still mount the same tool and reuse that index after a
+      // harness restart.
+      if (videos.length) store.patchBot(bot.id, { watchSkillVideo: activeVideo });
+      if (activeVideo && await hasWatchSkill()) integrations.watchSkill = watchSkillIntegration();
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
@@ -506,7 +512,11 @@ async function startTurn(
             ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
             : "") +
           (integrations.watchSkill
-            ? ` The user included ${videos.length} video reference${videos.length === 1 ? "" : "s"}. Use the watch_skill tools to index it once, cite timestamped evidence, and reuse its index for follow-up questions.`
+            ? videos.length === 1
+              ? " The user included a video reference. Use the watch_skill tools to index it once, cite timestamped evidence, and reuse its index for follow-up questions."
+              : videos.length > 1
+                ? " The user included multiple video references. Use the watch_skill tools to index each referenced video once, cite timestamped evidence, and reuse each corresponding index for follow-up questions."
+                : " Continue using the active video's existing watch_skill index; cite timestamped evidence when relevant."
             : "") +
           (tagged.length
             ? ` The user tagged ${tagged

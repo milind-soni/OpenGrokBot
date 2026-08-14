@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { approvalKey, autoDecision } from "./auto-approve.js";
 import * as box from "./box.js";
 import * as composio from "./composio.js";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.js";
@@ -181,6 +182,54 @@ bus.subscribe((event) => {
             break;
         case "request.opened": {
             const permission = event.requestType === "permission";
+            // Auto mode / always-allow: answer routine tool permissions for the
+            // bot so it keeps working. A QUESTION always reaches the human — the
+            // whole point of asking is that a person decides — and anything that
+            // looks destructive stops even in auto mode.
+            const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
+            const settled = permission && asker && event.requestId
+                ? autoDecision(asker, event.tool, event.summary)
+                : null;
+            if (settled && asker && event.requestId) {
+                const instance = registry.get(asker.modelSelection.instanceId);
+                const requestId = event.requestId;
+                const { tool, summary } = event;
+                // The chip is written only AFTER the provider takes the answer.
+                // Claiming approval first and correcting later means a moment
+                // where the transcript says "approved" over a request nothing
+                // answered — and if the provider is gone entirely, forever.
+                void (async () => {
+                    try {
+                        if (!instance)
+                            throw new Error("provider unavailable");
+                        await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+                        pushMessage({
+                            role: "bot",
+                            kind: "activity",
+                            tool: { name: `${settled}: ${summary.slice(0, 120)}`, ok: true },
+                        });
+                    }
+                    catch {
+                        // couldn't answer it for them — hand it back to the human
+                        // rather than leaving the bot waiting on nobody
+                        const card = pushMessage({
+                            role: "bot",
+                            kind: "options",
+                            card: {
+                                title: "Approval needed",
+                                subtitle: summary,
+                                options: ["Allow", "Deny"],
+                                requestId,
+                                tool,
+                                allowKey: approvalKey(tool, summary),
+                                held: "Auto mode couldn't answer this one.",
+                            },
+                        });
+                        askMessageByRequest.set(requestId, card.id);
+                    }
+                })();
+                break;
+            }
             const message = pushMessage({
                 role: "bot",
                 kind: "options",
@@ -189,6 +238,12 @@ bus.subscribe((event) => {
                     subtitle: event.summary,
                     options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
                     requestId: event.requestId,
+                    tool: permission ? event.tool : undefined,
+                    // the exact grant "always allow" would remember, decided here so
+                    // client and server can never derive it differently
+                    allowKey: permission ? approvalKey(event.tool, event.summary) : undefined,
+                    // in auto mode a card can only mean the guard stopped it — say so
+                    held: permission && asker?.autoApprove ? "This looked destructive, so auto mode stopped to ask." : undefined,
                 },
             });
             if (event.requestId)
@@ -935,6 +990,20 @@ const server = createServer(async (req, res) => {
                 if (body[key] !== undefined)
                     patch[key] = body[key];
             }
+            // the two permission fields decide what runs unattended, so they are
+            // type-checked rather than copied through: a string alwaysAllow would
+            // still answer .includes() — with substring matches, not tool names
+            if (body.autoApprove !== undefined) {
+                if (typeof body.autoApprove !== "boolean")
+                    return json(res, 400, { error: "autoApprove must be true or false" });
+                patch.autoApprove = body.autoApprove;
+            }
+            if (body.alwaysAllow !== undefined) {
+                if (!Array.isArray(body.alwaysAllow) || body.alwaysAllow.some((t) => typeof t !== "string")) {
+                    return json(res, 400, { error: "alwaysAllow must be a list of tool keys" });
+                }
+                patch.alwaysAllow = [...new Set(body.alwaysAllow)].slice(0, 200);
+            }
             const bot = store.patchBot(m[1], patch);
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
@@ -1057,6 +1126,26 @@ const server = createServer(async (req, res) => {
             });
             return json(res, 200, { ok: true });
         }
+        // Answer by THREAD, so a request raised inside a room can be answered
+        // too: a member's turn runs on the room's thread, and the bot that
+        // owns the pending request is the one currently speaking there.
+        m = path.match(/^\/api\/threads\/([\w-]+)\/respond$/);
+        if (m && method === "POST") {
+            const threadId = m[1];
+            const body = await readBody(req);
+            const group = store.groupByThread(threadId);
+            const owner = group ? (group.busyBotId ? store.bot(group.busyBotId) : undefined) : store.botByThread(threadId);
+            if (!owner)
+                return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
+            const instance = registry.get(owner.modelSelection.instanceId);
+            if (!instance)
+                return json(res, 409, { error: "provider unavailable" });
+            await instance.adapter.respondToRequest(threadId, String(body.requestId), {
+                behavior: body.behavior,
+                message: body.message,
+            });
+            return json(res, 200, { ok: true });
+        }
         m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
         if (m && method === "POST") {
             const bot = store.bot(m[1]);
@@ -1089,6 +1178,15 @@ const server = createServer(async (req, res) => {
             }
             if (!Object.keys(patch).length)
                 return json(res, 400, { error: "nothing to save" });
+            // check a box token against the provider before storing it: a
+            // rejected token used to save happily and only surface as a 401 in
+            // another panel later, with nothing the user could act on
+            const newBoxToken = patch.box?.token;
+            if (typeof newBoxToken === "string" && newBoxToken.trim()) {
+                const check = await box.verifyToken(newBoxToken.trim());
+                if (!check.ok)
+                    return json(res, 400, { error: check.message });
+            }
             saveConfig(patch);
             Object.assign(cfg, loadConfig());
             // provider keys change the fleet; a profile edit must not kill

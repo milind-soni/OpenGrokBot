@@ -4,6 +4,7 @@
 // suite is deterministic with or without agent CLIs installed — and pins
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
+import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +17,11 @@ const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 let child: ChildProcess;
+/** stands in for the box provider so config saving never touches the network */
+let boxStub: Server;
+let boxStubPort = 0;
 let home: string;
+let staticDir: string;
 let stderr = "";
 
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
@@ -30,12 +35,24 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  staticDir = join(home, "static");
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(staticDir, "assets"), { recursive: true });
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged OpenMausBot</title>");
+  writeFileSync(join(staticDir, "assets", "smoke.css"), "body { color: white; }");
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
+
+  boxStub = createServer((req, res) => {
+    const ok = req.headers.authorization === "Bearer box_good";
+    res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+    res.end(JSON.stringify(ok ? { ok: true, boxes: [] } : { ok: false, code: "unauthorized" }));
+  });
+  await new Promise<void>((r) => boxStub.listen(0, "127.0.0.1", r));
+  boxStubPort = (boxStub.address() as { port: number }).port;
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
@@ -45,6 +62,8 @@ beforeAll(async () => {
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
+      OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
+      OMB_STATIC_DIR: staticDir,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -65,6 +84,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
+  boxStub?.close();
   child?.kill("SIGTERM");
   await new Promise<void>((resolve) => {
     if (!child || child.exitCode !== null) return resolve();
@@ -80,6 +100,48 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.app).toBe("openmausbot");
     expect(typeof body.pid).toBe("number");
+    expect(body.static).toBe(true);
+  });
+
+  it("serves packaged UI assets and preserves API 404s", async () => {
+    const root = await fetch(`${BASE}/`);
+    expect(root.status).toBe(200);
+    expect(root.headers.get("content-type")).toBe("text/html");
+    expect(await root.text()).toContain("Packaged OpenMausBot");
+
+    const asset = await fetch(`${BASE}/assets/smoke.css`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toBe("text/css");
+    expect(await asset.text()).toContain("color: white");
+
+    const spa = await fetch(`${BASE}/settings/desktop`);
+    expect(spa.status).toBe(200);
+    expect(spa.headers.get("content-type")).toBe("text/html");
+    expect(await spa.text()).toContain("Packaged OpenMausBot");
+
+    const unknownApi = await api("GET", "/api/not-a-real-route");
+    expect(unknownApi.status).toBe(404);
+    expect(unknownApi.body.error).toContain("/api/not-a-real-route");
+  });
+
+  it("rejects malformed and oversized JSON bodies without hanging", async () => {
+    const malformed = await fetch(`${BASE}/api/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({ error: "invalid JSON body" });
+
+    const oversized = await fetch(`${BASE}/api/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profile: { name: "x".repeat(1_000_001) } }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toEqual({ error: "body too large" });
+
+    expect((await fetch(`${BASE}/api/health`)).status).toBe(200);
   });
 
   it("seeds one starter bot with its greeting", async () => {
@@ -180,18 +242,27 @@ describe("harness HTTP API", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("refuses a box token the provider rejects, at the point of pasting", async () => {
+    // the stub answers 401 for anything but the good token
+    const bad = await api("PUT", "/api/config", { box: { token: "box_wrong" } });
+    expect(bad.status).toBe(400);
+    expect(String(bad.body.error)).toMatch(/rejected/i);
+    const after = await api("GET", "/api/config");
+    expect(after.body.box).toEqual({ configured: false });
+  });
+
   it("saves config keys write-only and reports booleans", async () => {
     const before = await api("GET", "/api/config");
     expect(before.body.box).toEqual({ configured: false });
 
-    const put = await api("PUT", "/api/config", { box: { token: "tok_secret_value" } });
+    const put = await api("PUT", "/api/config", { box: { token: "box_good" } });
     expect(put.status).toBe(200);
     expect(put.body.box).toEqual({ configured: true });
-    expect(JSON.stringify(put.body)).not.toContain("tok_secret_value");
+    expect(JSON.stringify(put.body)).not.toContain("box_good");
 
     const after = await api("GET", "/api/config");
     expect(after.body.box).toEqual({ configured: true });
-    expect(JSON.stringify(after.body)).not.toContain("tok_secret_value");
+    expect(JSON.stringify(after.body)).not.toContain("box_good");
 
     const nothing = await api("PUT", "/api/config", {});
     expect(nothing.status).toBe(400);

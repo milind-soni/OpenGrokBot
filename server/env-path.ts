@@ -10,9 +10,9 @@
 // on this machine, plus (async, best-effort) whatever PATH the user's
 // real login shell reports.
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, dirname, extname, join } from "node:path";
 
 /** nvm keeps every node version's bin dir separately; newest first so a
  * CLI installed under the latest node wins. */
@@ -93,4 +93,130 @@ function probeLoginShellPath(): void {
 export function resetPathCacheForTests(): void {
   cached = null;
   probed = false;
+}
+
+// Windows CLI resolution ───────────────────────────────────────────────
+// PATH alone is not enough on Windows. libuv ignores PATHEXT, so
+// spawn("claude") never finds claude.cmd — and since Node's
+// CVE-2024-27980 fix, spawning a .cmd without shell:true throws
+// synchronously anyway. shell:true is not an option here: the drivers
+// pass raw JSON in argv (claude's --mcp-config), which cmd would mangle.
+// Windows also has no #! support, so a node-shebang script (every fake
+// CLI in server/testing) is unspawnable as itself.
+//
+// So resolve the real file ourselves, PATHEXT-aware, and turn what we
+// find into a spawn that needs no shell: npm's .cmd shims are parsed
+// down to the .exe or node script they wrap, and shebang scripts become
+// `node <script>`. An unknown shim is deliberately left unspawnable instead
+// of crossing the repository's no-shell security boundary.
+
+export interface ResolvedSpawn {
+  command: string;
+  args: string[];
+}
+
+function isFile(p: string): boolean {
+  try {
+    return statSync(p, { throwIfNoEntry: false })?.isFile() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** PATHEXT-aware `which`. A path-ish cli is probed where it points. */
+function whichWin(cli: string): string | null {
+  const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  // an extensionless name is not runnable on Windows, so PATHEXT wins over
+  // the bare file — npm installs both `claude` (a sh script) and `claude.cmd`
+  const probe = (base: string) => {
+    const order = extname(base) ? [base, ...exts.map((e) => base + e)] : [...exts.map((e) => base + e), base];
+    return order.find(isFile) ?? null;
+  };
+  if (/[\\/]/.test(cli) || /^[a-zA-Z]:/.test(cli)) return probe(cli);
+  for (const dir of augmentedPath().split(delimiter)) {
+    if (!dir) continue;
+    const hit = probe(join(dir, cli));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** node.exe to run a script with: the one npm's shim would pick, else PATH,
+ * else this executable only when it really is Node. In a packaged app,
+ * process.execPath is Electron and must never be mistaken for node.exe. */
+function nodeExe(near: string): string | null {
+  const local = join(near, "node.exe");
+  if (isFile(local)) return local;
+  // Ask for the executable explicitly so a custom PATHEXT ordering cannot
+  // make a stray node.cmd hide the real node.exe beside it.
+  const onPath = whichWin("node.exe");
+  if (onPath && extname(onPath).toLowerCase() === ".exe") return onPath;
+  return (process.versions as Record<string, string | undefined>).electron ? null : process.execPath;
+}
+
+/** npm/pnpm .cmd shims all spell their target as "%dp0%\..." (or
+ * "%~dp0\..."). Whatever of those exists on disk is what the shim runs. */
+function parseCmdShim(shim: string): ResolvedSpawn | null {
+  let text: string;
+  try {
+    text = readFileSync(shim, "utf8");
+  } catch {
+    return null;
+  }
+  const dir = dirname(shim);
+  const targets = [...text.matchAll(/"%~?dp0%?\\?([^"]+)"/g)]
+    .map((m) => join(dir, m[1]))
+    .filter((p) => isFile(p) && basename(p).toLowerCase() !== "node.exe");
+  const script = targets.find((p) => /\.[cm]?js$/i.test(p));
+  if (script) {
+    const node = nodeExe(dir);
+    if (node) return { command: node, args: [script] };
+  }
+  const exe = targets.find((p) => extname(p).toLowerCase() === ".exe");
+  return exe ? { command: exe, args: [] } : null;
+}
+
+/** `#!/usr/bin/env node` → `node <script>`. Only node: nothing else has a
+ * meaningful Windows equivalent worth guessing at. */
+function parseNodeShebang(file: string): ResolvedSpawn | null {
+  let head = "";
+  let fd: number | null = null;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(128);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    head = buf.subarray(0, n).toString("utf8").split("\n", 1)[0];
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* best-effort descriptor cleanup */
+      }
+    }
+  }
+  if (!/^#!.*\bnode(\.exe)?\b/.test(head)) return null;
+  const node = nodeExe(dirname(file));
+  return node ? { command: node, args: [file] } : null;
+}
+
+/**
+ * How to actually spawn `cli` with `args` on this platform. Identity
+ * everywhere but win32 — POSIX already resolves PATH and #! itself.
+ */
+export function resolveCliSpawn(cli: string, args: string[]): ResolvedSpawn {
+  if (process.platform !== "win32") return { command: cli, args };
+  const file = whichWin(cli);
+  // not found: hand back the name so spawn reports its own ENOENT
+  if (!file) return { command: cli, args };
+  const ext = extname(file).toLowerCase();
+  if (ext === ".cmd" || ext === ".bat") {
+    const direct = parseCmdShim(file);
+    return direct ? { command: direct.command, args: [...direct.args, ...args] } : { command: file, args };
+  }
+  if (ext === ".exe" || ext === ".com") return { command: file, args };
+  const viaNode = parseNodeShebang(file);
+  return viaNode ? { command: viaNode.command, args: [...viaNode.args, ...args] } : { command: file, args };
 }

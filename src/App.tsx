@@ -9,8 +9,10 @@ import { GroupView } from "@/components/GroupView";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
-import { AppSettingsPanel } from "@/components/AppSettingsPanel";
+import { SettingsModal } from "@/components/SettingsModal";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
+import { RoutinesPage } from "@/components/RoutinesPage";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -52,7 +54,9 @@ function Shell() {
       <UpdateBanner />
       <div className="relative flex min-h-0 flex-1">
       <Sidebar />
-      {group ? (
+      {state.activeView === "routines" ? (
+        <RoutinesPage />
+      ) : group ? (
         <GroupView key={group.id} group={group} />
       ) : bot ? (
         <ChatView bot={bot} />
@@ -71,7 +75,7 @@ function Shell() {
       )}
       {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
       {state.computerOpen && bot && <ComputerPanel bot={bot} />}
-      {state.appSettingsOpen && <AppSettingsPanel />}
+      {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
       </div>
     </div>
@@ -84,9 +88,11 @@ export default function App() {
     initAnalytics();
   }, []);
   return (
-    <StoreProvider>
-      <Shell />
-      {gated && <Onboarding onDone={() => setGated(false)} />}
-    </StoreProvider>
+    <DesktopCapabilitiesProvider>
+      <StoreProvider>
+        <Shell />
+        {gated && <Onboarding onDone={() => setGated(false)} />}
+      </StoreProvider>
+    </DesktopCapabilitiesProvider>
   );
 }

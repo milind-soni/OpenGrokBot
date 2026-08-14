@@ -19,8 +19,8 @@ makes a PR easy to merge. Read it once before opening anything; it's short on pu
 
 Requirements: **Node 24+**, **pnpm**, and for actually chatting with a bot, at least one agent CLI
 ([`claude`](https://claude.com/claude-code) or [`codex`](https://github.com/openai/codex)) installed
-and logged in. macOS is the primary platform; the harness server itself is portable Node and the
-test suite runs on macOS, Linux, and Windows.
+and logged in. macOS is the primary release platform and Ubuntu 24.04 x64 is the Linux desktop beta;
+the harness server itself is portable Node and the test suite runs on macOS, Linux, and Windows.
 
 ```sh
 git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
@@ -28,12 +28,18 @@ pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
 pnpm dev           # app → http://127.0.0.1:5199
-pnpm dev:desktop   # Electron shell (macOS)
+pnpm dev:desktop   # Electron shell (macOS/Ubuntu; keep server + Vite running)
 
 pnpm typecheck     # app + server
 pnpm test          # vitest suite (server unit + driver contract + API smoke)
 pnpm test:watch    # same, in watch mode
+pnpm check:electron # syntax-check the plain JS Electron entrypoints
+
+pnpm package:mac   # DMG + ZIP; requires Swift/Xcode tools
+pnpm package:linux # Ubuntu x64 .deb + AppImage; no Swift required
 ```
+
+For Ubuntu installation and real desktop checks, see [`docs/linux-desktop.md`](docs/linux-desktop.md).
 
 ## Repo map
 
@@ -70,8 +76,8 @@ House rules for tests:
   `recordEvents(...).until(...)`). A test that needs a timeout to pass is wrong.
 - **Never touch the real `~/.openmausbot`.** The setup file points `HOME` at a temp dir; keep it
   that way.
-- Tests that must spawn a shebang script are gated `describe.skipIf(process.platform === "win32")`
-  until Windows CLI spawning lands — don't add new POSIX-only tests without that gate.
+- Fake CLI shebang scripts must be launched through `spawnCli`/`execCli`, which resolve them through
+  Node on Windows. Only gate a test when the behavior itself is genuinely platform-specific.
 
 ## Adding a provider driver
 
@@ -92,6 +98,11 @@ The SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately small. A
 
 - The harness (`server/`) must stay portable Node. Anything macOS-only (TCC, Swift helpers,
   `~/Library` paths) belongs in `electron/` behind a `process.platform === "darwin"` gate.
+- Renderer code must consume the desktop capability contract rather than infer support from Electron,
+  the user agent, or the presence of a preload bridge. Screen preview, dictation, and local control are
+  independent capabilities.
+- Test Ubuntu platform claims on a real GNOME session. Xvfb proves packaging and lifecycle, not Wayland
+  portal behavior or local computer control.
 - **Never build command strings for a shell.** No `shell: true`, no spawning through `cmd.exe` with
   quoted strings — model names, personas, and MCP config JSON travel through argv, and cmd.exe
   metacharacter expansion is a real injection class. On Windows, resolve `.cmd` shims to their JS
@@ -108,6 +119,8 @@ responses or events, no baking them into argv where another local process could 
 ## Before you open the PR
 
 - [ ] `pnpm typecheck` and `pnpm test` pass
+- [ ] `pnpm check:electron` passes for desktop-shell changes
+- [ ] Ubuntu packaging changes pass `pnpm package:linux` and `node scripts/verify-linux-package.mjs`
 - [ ] New server behavior has a test; driver changes keep the contract tests green
 - [ ] No `dist-server/` churn, no lockfile churn beyond your actual dependency change
 - [ ] macOS-only code is platform-gated; nothing breaks the packaged app

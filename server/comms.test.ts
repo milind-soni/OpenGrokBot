@@ -6,8 +6,9 @@
 // session/new mcpServers → agents-proxy → /api/internal/ask-bot →
 // askBotAndWait → bus fold. The internal endpoints' auth is pinned too.
 //
-// The fake CLI is a shebang script, so the e2e half is POSIX-only (same
-// gating as acp.test.ts); the mention-resolution unit tests run everywhere.
+// The fake CLI is a shebang script — POSIX-only until resolveCliSpawn
+// turned it into `node <script>` on Windows too, so the e2e half now runs
+// everywhere alongside the mention-resolution units.
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,6 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("mentionedBots", () => {
   const peers = [
@@ -44,9 +44,13 @@ describe("mentionedBots", () => {
     expect(mentionedBots("mail milind@milind.dev please", peers)).toEqual([]);
     expect(mentionedBots("@Ghost around?", peers)).toEqual([]);
   });
+  it("requires a word boundary at the end of the name", () => {
+    expect(mentionedBots("ask @New Bottle about it", peers)).toEqual([]);
+    expect(mentionedBots("@Milindo is someone else", peers)).toEqual([]);
+  });
 });
 
-posixOnly("comms e2e (fake ACP fleet)", () => {
+describe("comms e2e (fake ACP fleet)", () => {
   let child: ChildProcess;
   let home: string;
   let stderr = "";
@@ -81,6 +85,8 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
       cwd: join(SERVER_DIR, ".."),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        // without SystemRoot, winsock fails to initialize in the child
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
         OMB_PORT: String(PORT),

@@ -11,6 +11,7 @@ import { normalizeState } from "@/lib/mascot";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
 import { ReactionBar, ReactionChips } from "./Reactions";
+import { ApprovalCard } from "./ApprovalCard";
 import { cn } from "@/lib/cn";
 
 function dayLabel(at: number): string {
@@ -56,7 +57,16 @@ const Transcript = memo(function Transcript({
         const user = m.role === "user";
         const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || newDay;
         const row =
-          m.kind === "activity" && m.tool ? (
+          // a member can hit a permission ask mid-turn; without this the
+          // card never rendered here and the bot waited out its timeout.
+          // `tool` distinguishes a permission from a QUESTION — a question
+          // only accepts an "answer", so routing it here would offer an
+          // Allow the broker rejects
+          m.kind === "options" && m.card?.requestId && m.card.tool ? (
+            <div className="flex justify-start">
+              <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
+            </div>
+          ) : m.kind === "activity" && m.tool ? (
             <div className="flex justify-start">
               <div
                 className={cn(

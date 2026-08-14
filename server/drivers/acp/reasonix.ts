@@ -12,6 +12,37 @@ import { join } from "node:path";
 
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
+// Credentials live in <Reasonix home>/.env. REASONIX_HOME overrides;
+// REASONIX_STATE_HOME only relocates runtime state (sessions/archives/
+// memory), never provider credentials. Windows: %APPDATA%\reasonix.
+export function reasonixHome(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return (
+    env.REASONIX_HOME ||
+    (platform === "win32"
+      ? join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "reasonix")
+      : join(homedir(), ".reasonix"))
+  );
+}
+
+// One KEY=value assignment with a non-empty value; `export` prefix and quoted
+// values are accepted by Reasonix's own reader. Rejects empty, comment-only,
+// and quoted-empty (`KEY=""`/`KEY=''`) assignments.
+export function hasReasonixCredentials(content: string): boolean {
+  return /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\s*["']?[^\s"'=]/m.test(content);
+}
+
+// True when <Reasonix home>/.env holds a non-empty credential.
+export function isReasonixAuthenticated(env: Record<string, string | undefined>): boolean {
+  try {
+    return hasReasonixCredentials(readFileSync(join(reasonixHome(env), ".env"), "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 const support: AcpSupport = {
   driverKind: "reasonix",
   displayName: "Reasonix",
@@ -36,24 +67,7 @@ const support: AcpSupport = {
   // core.ts issue a useless terminal authenticate RPC.
   pickAuthMethod: () => null,
   authFailure: "continue",
-  isAuthenticated: (env) => {
-    // Credentials live in <Reasonix home>/.env. REASONIX_HOME overrides;
-    // REASONIX_STATE_HOME only relocates runtime state (sessions/archives/
-    // memory), never provider credentials. Windows: %APPDATA%\reasonix.
-    const home =
-      env.REASONIX_HOME ||
-      (process.platform === "win32"
-        ? join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "reasonix")
-        : join(homedir(), ".reasonix"));
-    try {
-      const content = readFileSync(join(home, ".env"), "utf8");
-      // one KEY=value assignment with a non-empty value; `export` prefix and
-      // quoted values are accepted by Reasonix's own reader
-      return /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=\s*\S/m.test(content);
-    } catch {
-      return false;
-    }
-  },
+  isAuthenticated: isReasonixAuthenticated,
 };
 
 export const ReasonixDriver = createAcpDriver(support);

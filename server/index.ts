@@ -22,6 +22,7 @@ import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
+import { normalizeSkill, skillPrompt, skillSnapshot } from "./skills.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -487,7 +488,7 @@ async function startTurn(
     bot.description && `About: ${bot.description}`,
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ") + skillPrompt(cfg.skills?.items, bot.skillIds);
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -794,6 +795,7 @@ function configStatus() {
     tts: tts.describeVoice(cfg),
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    skills: { items: (cfg.skills?.items ?? []).map(skillSnapshot) },
   };
 }
 
@@ -1135,6 +1137,10 @@ const server = createServer(async (req, res) => {
         }
         patch.alwaysAllow = [...new Set(body.alwaysAllow as string[])].slice(0, 200);
       }
+      if (Array.isArray(body.skillIds)) {
+        const known = new Set((cfg.skills?.items ?? []).map((skill) => skill.id));
+        patch.skillIds = [...new Set(body.skillIds.filter((id: unknown): id is string => typeof id === "string" && known.has(id)))].slice(0, 50);
+      }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       broadcast({ kind: "bot", bot });
@@ -1355,7 +1361,7 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "tts", "profile"] as const) {
+      for (const key of ["xai", "composio", "box", "tts", "profile", "skills"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
@@ -1427,6 +1433,38 @@ const server = createServer(async (req, res) => {
         if (e instanceof tts.NoVoiceConfigured) return json(res, 409, { error: e.message });
         return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
       }
+    }
+
+    // ── skills ────────────────────────────────────────────────────────
+    if (method === "GET" && path === "/api/skills") return json(res, 200, { items: (cfg.skills?.items ?? []).map(skillSnapshot) });
+    if (method === "POST" && path === "/api/skills") {
+      try {
+        const item = normalizeSkill(await readBody(req));
+        const items = cfg.skills?.items ?? [];
+        if (items.some((skill) => skill.id === item.id)) return json(res, 409, { error: "skill id already exists" });
+        saveConfig({ skills: { items: [...items, item] } }); Object.assign(cfg, loadConfig());
+        const status = configStatus(); broadcast({ kind: "config", ...status });
+        return json(res, 201, { item: skillSnapshot(item) });
+      } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "Invalid skill" }); }
+    }
+    m = path.match(/^\/api\/skills\/([\w-]+)$/);
+    if (m && (method === "PATCH" || method === "PUT")) {
+      const items = cfg.skills?.items ?? []; const current = items.find((skill) => skill.id === m![1]);
+      if (!current) return json(res, 404, { error: "no such skill" });
+      try {
+        const item = normalizeSkill({ ...current, ...(await readBody(req)) }, current.id);
+        saveConfig({ skills: { items: items.map((skill) => skill.id === item.id ? item : skill) } }); Object.assign(cfg, loadConfig());
+        const status = configStatus(); broadcast({ kind: "config", ...status });
+        return json(res, 200, { item: skillSnapshot(item) });
+      } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "Invalid skill" }); }
+    }
+    if (m && method === "DELETE") {
+      const items = cfg.skills?.items ?? [];
+      if (!items.some((skill) => skill.id === m![1])) return json(res, 404, { error: "no such skill" });
+      saveConfig({ skills: { items: items.filter((skill) => skill.id !== m![1]) } }); Object.assign(cfg, loadConfig());
+      for (const bot of store.bots.filter((bot) => bot.skillIds?.includes(m![1]))) store.patchBot(bot.id, { skillIds: bot.skillIds!.filter((id) => id !== m![1]) });
+      const status = configStatus(); broadcast({ kind: "config", ...status });
+      return json(res, 200, { ok: true });
     }
 
     // ── connectors (Composio) ──

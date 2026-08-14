@@ -155,6 +155,7 @@ export interface BotRecord {
   rewound?: boolean;
   pinned?: boolean;
   hidden?: boolean;
+  skillIds?: string[];
   busy?: boolean;
   createdAt: number;
 }

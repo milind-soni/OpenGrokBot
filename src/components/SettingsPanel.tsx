@@ -47,6 +47,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "autoApprove"
         | "speakReplies"
         | "voice"
+        | "skillIds"
       >
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
@@ -210,6 +211,21 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                   {mode}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Skills</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">Only enabled skills selected here are added to this bot's context.</div>
+            <div className="mt-3 flex flex-col gap-2">
+              {(state.config?.skills?.items ?? []).filter((skill) => skill.enabled).map((skill) => {
+                const selected = bot.skillIds?.includes(skill.id) ?? false;
+                return <label key={skill.id} className="flex cursor-pointer items-start gap-2 rounded-lg bg-inset px-3 py-2 text-[13px] text-ink">
+                  <input type="checkbox" checked={selected} onChange={() => patch({ skillIds: selected ? (bot.skillIds ?? []).filter((id) => id !== skill.id) : [...(bot.skillIds ?? []), skill.id] })} className="mt-0.5" />
+                  <span><span className="font-medium">{skill.name}</span>{skill.description && <span className="block text-[11px] text-ink-secondary">{skill.description}</span>}</span>
+                </label>;
+              })}
+              {!(state.config?.skills?.items ?? []).some((skill) => skill.enabled) && <div className="rounded-lg bg-inset px-3 py-2 text-[13px] text-ink-secondary">No enabled skills yet. Add one in App Settings.</div>}
             </div>
           </div>
 

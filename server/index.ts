@@ -973,16 +973,17 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const template = typeof body.templateId === "string" ? (cfg.templates?.items ?? []).find((item) => item.id === body.templateId) : undefined;
       if (body.templateId && !template) return json(res, 404, { error: "no such template" });
-      const bot = store.createBot();
+      const bot = store.createBot(
+        template
+          ? {
+              name: template.name,
+              title: template.title ?? "",
+              description: template.instructions,
+              computer: template.computer,
+            }
+          : undefined,
+      );
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
-      if (template) {
-        store.patchBot(bot.id, {
-          name: template.name,
-          title: template.title ?? "",
-          description: template.instructions,
-          computer: template.computer,
-        });
-      }
       return json(res, 201, {
         bot: {
           ...store.bot(bot.id)!,

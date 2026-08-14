@@ -143,10 +143,20 @@ describe("harness HTTP API", () => {
       description: "Find primary sources and state uncertainty.",
       computer: "off",
     });
+    expect(fromTemplate.body.bot.messages[0].text).toContain("I'm Source research");
+
+    const sameClientId = await api("POST", "/api/templates", {
+      id: created.body.item.id,
+      name: "Separate template",
+      instructions: "This must get its own server ID.",
+    });
+    expect(sameClientId.status).toBe(201);
+    expect(sameClientId.body.item.id).not.toBe(created.body.item.id);
 
     const missing = await api("POST", "/api/bots", { templateId: "gone" });
     expect(missing.status).toBe(404);
     expect((await api("DELETE", `/api/templates/${created.body.item.id}`)).status).toBe(200);
+    expect((await api("GET", "/api/templates")).body.items).toMatchObject([{ id: sameClientId.body.item.id }]);
   });
 
   it("persists an answered onboarding card", async () => {

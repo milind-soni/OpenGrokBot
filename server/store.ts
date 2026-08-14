@@ -385,20 +385,21 @@ export class Store {
     return this.bots.find((b) => b.threadId === threadId) ?? null;
   }
 
-  createBot(): BotRecord {
-    const name = pickBotName(this.bots.map((b) => b.name));
+  createBot(initial: Partial<Pick<BotRecord, "name" | "title" | "description" | "computer">> = {}): BotRecord {
+    const name = initial.name?.trim() || pickBotName(this.bots.map((b) => b.name));
     const bot: BotRecord = {
       id: newId(),
       threadId: newId(),
       name,
-      title: "",
-      description: "",
+      title: initial.title ?? "",
+      description: initial.description ?? "",
       notifications: true,
       color: COLORS[this.bots.length % COLORS.length],
       unread: false,
       modelSelection: this.defaultSelection(),
       resumeCursors: {},
       createdAt: Date.now(),
+      ...(initial.computer ? { computer: initial.computer } : {}),
     };
     this.bots.unshift(bot);
     this.saveBots();

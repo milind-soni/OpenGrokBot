@@ -7,7 +7,9 @@ export function normalizeTemplate(raw: unknown, existingId?: string): TaskTempla
   const instructions = typeof value.instructions === "string" ? value.instructions.trim().slice(0, 20_000) : "";
   if (!name || !instructions) throw new Error("A template needs a name and instructions");
   return {
-    id: existingId ?? (typeof value.id === "string" && value.id ? value.id.slice(0, 100) : crypto.randomUUID()),
+    // IDs are harness-owned: callers must not be able to create a template
+    // whose route cannot address it, or collide with an existing template.
+    id: existingId ?? crypto.randomUUID(),
     name,
     instructions,
     description: typeof value.description === "string" ? value.description.trim().slice(0, 500) : "",

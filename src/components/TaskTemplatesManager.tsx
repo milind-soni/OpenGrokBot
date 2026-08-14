@@ -72,9 +72,10 @@ export function TaskTemplatesManager() {
         Save a repeatable starting brief, then create a bot with those instructions and computer preference.
       </p>
       <div className="mt-4 flex flex-col gap-2">
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Template name" className={inputClass} />
-        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Bot title (optional)" className={inputClass} />
+        <input aria-label="Template name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Template name" className={inputClass} />
+        <input aria-label="Bot title (optional)" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Bot title (optional)" className={inputClass} />
         <textarea
+          aria-label="Reusable instructions"
           value={instructions}
           onChange={(event) => setInstructions(event.target.value)}
           placeholder="Reusable instructions, expected result, and checks"
@@ -83,7 +84,7 @@ export function TaskTemplatesManager() {
         />
         <label className="flex items-center justify-between gap-3 text-[13px] text-ink-secondary">
           Computer preference
-          <select value={computer} onChange={(event) => setComputer(event.target.value as typeof computer)} className="rounded-md bg-inset px-2 py-1 text-ink">
+          <select aria-label="Computer preference" value={computer} onChange={(event) => setComputer(event.target.value as typeof computer)} className="rounded-md bg-inset px-2 py-1 text-ink">
             <option value="off">Off</option>
             <option value="local">Local</option>
             <option value="cloud">Cloud</option>

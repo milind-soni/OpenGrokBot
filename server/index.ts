@@ -167,15 +167,22 @@ bus.subscribe((event: RuntimeEvent) => {
         pushMessage({ role: "bot", kind: "text", text: event.text });
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
+        let toolName = "tool";
         if (messageId) {
+          toolName = store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool?.name ?? "tool";
           const patched = store.patchMessage(event.threadId, messageId, {
-            tool: { name: store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool?.name ?? "tool", ok: event.ok },
+            tool: { name: toolName, ok: event.ok },
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
           toolMessageByItem.delete(event.itemId);
         }
-        // the bot just finished acting — refresh its screen preview now
-        if (bot) pokeScreenPoller(bot.id);
+        // the bot just acted ON ITS SCREEN — refresh the preview now. Only
+        // computer tools can change the screen, and each capture competes
+        // with the agent for the box's command endpoint, so a bot grinding
+        // through file edits must not trigger one per tool.
+        if (bot && /computer|screenshot|click|type_text|press_key|scroll|open_url/i.test(toolName)) {
+          pokeScreenPoller(bot.id);
+        }
       }
       break;
     case "item.started":
@@ -236,13 +243,21 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "turn.completed": {
       if (bot) {
-        // the last live frame becomes a settled inline screen message —
-        // the screenshot-in-chat moment
-        const frame = stopScreenPoller(bot.id);
-        if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
         store.patchBot(bot.id, { busy: false, unread: true });
         const settled = store.finishRun(bot.id, { ok: event.ok, stopReason: event.stopReason, providerCost: event.cost });
         broadcast({ kind: "bot", bot: settled ?? store.bot(bot.id) });
+        if (screenPollers.has(bot.id)) {
+          // the last live frame becomes a settled inline screen message —
+          // the screenshot-in-chat moment. One fresh capture first, so the
+          // frame shows the turn's END state (the final tool's poke may
+          // still be in flight).
+          void finalScreenFrame(bot.id).then((frame) => {
+            // the bot may have been deleted while the capture ran
+            if (frame && store.bot(bot.id)) {
+              pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+            }
+          });
+        }
       }
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
@@ -257,45 +272,76 @@ bus.subscribe((event: RuntimeEvent) => {
 type Frame = { png: string; mime: string };
 const screenPollers = new Map<
   string,
-  { timer: ReturnType<typeof setInterval>; capture: () => Promise<void>; last: Frame | null }
+  { timer: ReturnType<typeof setInterval> | null; capture: () => Promise<void>; last: Frame | null }
 >();
 
-function startScreenPoller(botId: string) {
+/** The preview shares the box's single command endpoint with the agent's
+ * own actions, so every frame we take is latency stolen from the work the
+ * user is waiting on. Hence: a slow interval, a floor between captures,
+ * and never two in flight. */
+const SCREEN_POLL_MS = 6000;
+const SCREEN_MIN_GAP_MS = 3000;
+
+function startScreenPoller(botId: string, boxId?: string) {
   if (screenPollers.has(botId) || !box.boxConfigured(cfg)) return;
-  let inFlight = false;
-  const capture = async () => {
-    if (inFlight) return;
-    inFlight = true;
-    try {
-      const { png, format } = await box.screenshotBox(cfg, botId);
-      const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png" };
-      entry.last = frame;
-      broadcast({ kind: "screen", botId, ...frame });
-    } catch {
-      /* box asleep or mid-command — try again next tick */
-    } finally {
-      inFlight = false;
-    }
-  };
+  // One capture at a time, shared by the interval, the pokes, and the
+  // turn-end grab: awaiting the in-flight promise (rather than dropping the
+  // call) is what lets the final frame be the settled one. The min-gap keeps
+  // a tool-heavy turn from spending the box's single command endpoint on
+  // previews the user isn't waiting for.
+  let current: Promise<void> | null = null;
+  let lastAt = 0;
   const entry = {
-    timer: setInterval(capture, 4000),
-    capture,
+    timer: null as ReturnType<typeof setInterval> | null,
+    capture: (): Promise<void> => {
+      if (!current && Date.now() - lastAt < SCREEN_MIN_GAP_MS) return Promise.resolve();
+      current ??= (async () => {
+        try {
+          // boxId is resolved once per turn — re-resolving per frame cost a
+          // full LIST of the account's boxes
+          const { png, format } = await box.screenshotBox(cfg, botId, boxId);
+          const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png" };
+          entry.last = frame;
+          broadcast({ kind: "screen", botId, ...frame });
+        } catch {
+          /* box asleep or mid-command — try again next tick */
+        } finally {
+          lastAt = Date.now();
+          current = null;
+        }
+      })();
+      return current;
+    },
     last: null as Frame | null,
   };
+  entry.timer = setInterval(() => void entry.capture(), SCREEN_POLL_MS);
   screenPollers.set(botId, entry);
 }
 
 /** Event-driven refresh: capture NOW (the bot just acted on its screen)
- * instead of waiting for the next interval tick. */
+ * instead of waiting for the next interval tick. Rate-limited inside
+ * capture() — a tool-heavy turn used to fire one full REST chain per
+ * completed tool, competing with the agent for the same endpoint. */
 function pokeScreenPoller(botId: string) {
   void screenPollers.get(botId)?.capture();
 }
 
-function stopScreenPoller(botId: string): Frame | null {
+function stopScreenPoller(botId: string) {
+  const entry = screenPollers.get(botId);
+  if (!entry) return;
+  if (entry.timer) clearInterval(entry.timer);
+  screenPollers.delete(botId);
+}
+
+/** Turn end: stop polling, then take ONE last fresh frame (awaiting any
+ * in-flight poke first) so the settled screenshot shows the screen's actual
+ * end state, not the previous action's. */
+async function finalScreenFrame(botId: string): Promise<Frame | null> {
   const entry = screenPollers.get(botId);
   if (!entry) return null;
-  clearInterval(entry.timer);
+  if (entry.timer) clearInterval(entry.timer);
   screenPollers.delete(botId);
+  await entry.capture();
   return entry.last;
 }
 
@@ -398,10 +444,6 @@ async function startTurn(
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   store.patchBot(bot.id, { busy: true, unread: false });
-  // Native sessions retain their own history; showing transcript savings for
-  // them would be misleading. A rewound native session does get the packed
-  // history inline, as does any explicitly transcript-replay driver.
-  store.beginRun(bot.id, instance.adapter.capabilities.transcriptReplay === true || rewound ? packedContext.stats : undefined);
   broadcast({ kind: "bot", bot: store.bot(bot.id) });
 
   void (async () => {
@@ -409,6 +451,12 @@ async function startTurn(
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
       const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
+      // only drivers that can mount the computer MCP server get the tools
+      // (and the prompt about them) — but every bot with a box still gets
+      // the live screen preview, which is a UI feature, not a tool
+      const mountsComputer =
+        instance.adapter.capabilities.computerMcp === true || instance.driverKind === "boxAgent";
+      let previewBoxId: string | null = null;
       if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
         let b = await box.findBox(cfg, bot.id).catch(() => null);
         // the Computer driver runs ON the box — provision it on first use
@@ -417,7 +465,18 @@ async function startTurn(
           await box.provisionBox(cfg, bot.id, bot.name);
           b = await box.findBox(cfg, bot.id).catch(() => null);
         }
-        if (b) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
+        // an archived box answers every action with an error until it
+        // resumes — wake it here, once, instead of letting the agent
+        // discover it one failed tool call at a time. Only worth the
+        // resume (~8s, and it un-pauses billing) when the bot can act.
+        if (b && mountsComputer && !["idle", "ready", "running"].includes(b.state)) {
+          broadcast({ kind: "computer", botId: bot.id, state: "waking" });
+          b = (await box.readyBox(cfg, bot.id).catch(() => null)) ?? b;
+        }
+        if (b) {
+          previewBoxId = b.id;
+          if (mountsComputer) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
+        }
       }
       // local computer (this Mac) via the Electron-hosted cua-driver: the
       // Electron main process owns the daemon (TCC attribution) and writes
@@ -460,7 +519,7 @@ async function startTurn(
         system:
           persona +
           (integrations.computer && instance.driverKind !== "boxAgent"
-            ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
+            ? " You have your own cloud computer — use the computer tools (screenshot, click, type_text, open_url, computer_exec) whenever browsing or acting on a desktop helps. Every action tool already returns the resulting screen, so don't follow one with a screenshot call, and batch predictable sequences with computer_batch."
             : integrations.localComputer
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
               : "") +
@@ -474,9 +533,18 @@ async function startTurn(
             : ""),
         integrations,
       });
+      // `sendTurn` has accepted the request. Count a model call only now:
+      // provisioning/auth failures must not look like completed model work.
+      // Native sessions retain their own history, so only replayed contexts
+      // expose deterministic compaction accounting.
+      store.beginRun(
+        bot.id,
+        instance.adapter.capabilities.transcriptReplay === true || rewound ? packedContext.stats : undefined,
+      );
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
-      if (integrations.computer) startScreenPoller(bot.id);
+      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
@@ -662,6 +730,20 @@ async function reloadProviders() {
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
   bus.attach(registry.instances());
+  // A killed turn's terminal events can die with the old fleet (dispose is
+  // async under the hood), stranding the bot busy — and its screen poller —
+  // forever. Settle anything still marked busy.
+  for (const b of store.bots.filter((b) => b.busy)) {
+    stopScreenPoller(b.id);
+    const note = store.appendMessage(b.threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: "error: turn interrupted — provider settings changed", ok: false },
+    });
+    broadcast({ kind: "message", threadId: b.threadId, message: note });
+    store.patchBot(b.id, { busy: false });
+    broadcast({ kind: "bot", bot: store.bot(b.id) });
+  }
 }
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────

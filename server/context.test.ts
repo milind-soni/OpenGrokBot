@@ -23,4 +23,16 @@ describe("packTranscript", () => {
     expect(packed.transcript[0].text).toContain("Build a release checklist");
     expect(packed.transcript.at(-1)?.text).toContain("include signing");
   });
+
+  it("keeps an oversized original goal verbatim instead of clipping it", () => {
+    const goal = `Keep this exact task definition. ${"important constraint ".repeat(900)}`;
+    const packed = packTranscript([
+      { role: "user", text: goal },
+      { role: "assistant", text: "Acknowledged" },
+      { role: "user", text: "And do not forget the release notes." },
+    ], 1_000);
+
+    expect(packed.transcript).toEqual([{ role: "user", text: goal }]);
+    expect(packed.stats).toMatchObject({ compacted: true, omittedMessages: 2, submittedChars: goal.length });
+  });
 });

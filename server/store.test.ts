@@ -103,6 +103,17 @@ describe("Store", () => {
     });
   });
 
+  it("persists restart cleanup of a stale live run", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.beginRun(bot.id);
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.activeRun).toBeUndefined();
+    const persisted = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
+    expect(persisted.find((record: BotRecord) => record.id === bot.id)).not.toHaveProperty("activeRun");
+  });
+
   it("seedIfEmpty creates exactly one starter bot, once", () => {
     const store = new Store(selection);
     store.seedIfEmpty();

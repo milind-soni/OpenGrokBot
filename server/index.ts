@@ -964,7 +964,10 @@ const server = createServer(async (req, res) => {
       for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
-      if (Array.isArray(body.skillIds)) patch.skillIds = body.skillIds.filter((id: unknown): id is string => typeof id === "string").slice(0, 50);
+      if (Array.isArray(body.skillIds)) {
+        const known = new Set((cfg.skills?.items ?? []).map((skill) => skill.id));
+        patch.skillIds = [...new Set(body.skillIds.filter((id: unknown): id is string => typeof id === "string" && known.has(id)))].slice(0, 50);
+      }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       broadcast({ kind: "bot", bot });

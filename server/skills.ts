@@ -8,8 +8,10 @@ export function normalizeSkill(raw: unknown, existingId?: string): SkillConfig {
   const name = typeof input.name === "string" ? input.name.trim().slice(0, 120) : "";
   const instructions = typeof input.instructions === "string" ? input.instructions.trim().slice(0, 20_000) : "";
   if (!name || !instructions) throw new Error("A skill needs a name and instructions");
-  const source = ["built-in", "imported", "custom", "taught"].includes(String(input.source)) ? input.source as SkillConfig["source"] : "custom";
-  return { id: typeof input.id === "string" && input.id ? input.id.slice(0, 100) : existingId ?? crypto.randomUUID(), name, instructions, description: typeof input.description === "string" ? input.description.trim().slice(0, 500) : "", version: typeof input.version === "string" ? input.version.trim().slice(0, 40) : "1", source, enabled: input.enabled !== false };
+  const source = typeof input.source === "string" && ["built-in", "imported", "custom", "taught"].includes(input.source) ? input.source as SkillConfig["source"] : "custom";
+  const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
+  if (!existingId && suppliedId && !/^[\w-]+$/.test(suppliedId)) throw new Error("Skill id must contain only letters, numbers, underscores, or hyphens");
+  return { id: existingId ?? (suppliedId || crypto.randomUUID()), name, instructions, description: typeof input.description === "string" ? input.description.trim().slice(0, 500) : "", version: typeof input.version === "string" ? input.version.trim().slice(0, 40) : "1", source, enabled: input.enabled !== false };
 }
 
 export function skillSnapshot(skill: SkillConfig): SkillSnapshot { return { id: skill.id, name: skill.name, description: skill.description ?? "", version: skill.version ?? "1", source: skill.source ?? "custom", enabled: skill.enabled !== false }; }

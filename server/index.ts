@@ -133,6 +133,8 @@ function broadcast(payload: unknown) {
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
 const taskBudgetGuards = new Map<string, TaskBudgetGuard>();
+const budgetToolTitles = new Map<string, string>(); // itemId -> tool title
+const lastTokenUsageByThread = new Map<string, { input?: number; output?: number }>();
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
@@ -141,9 +143,22 @@ const groupSpeakers = new Map<string, { botId: string; name: string; color: stri
 bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
   const budgetGuard = taskBudgetGuards.get(event.threadId);
-  if (event.type === "thread.token-usage.updated") budgetGuard?.noteTokenUsage(event.input, event.output);
-  if (event.type === "item.started" && event.itemType === "tool") budgetGuard?.noteToolStarted(event.title);
-  if (event.type === "item.completed" && event.itemType === "tool" && !event.ok) budgetGuard?.noteFailedTool();
+  if (event.type === "thread.token-usage.updated") {
+    const snapshot = lastTokenUsageByThread.get(event.threadId) ?? {};
+    if (Number.isFinite(event.input)) snapshot.input = event.input;
+    if (Number.isFinite(event.output)) snapshot.output = event.output;
+    lastTokenUsageByThread.set(event.threadId, snapshot);
+    budgetGuard?.noteTokenUsage(event.input, event.output);
+  }
+  if (event.type === "item.started" && event.itemType === "tool") {
+    if (event.itemId) budgetToolTitles.set(event.itemId, event.title ?? "tool");
+    budgetGuard?.noteToolStarted(event.title);
+  }
+  if (event.type === "item.completed" && event.itemType === "tool") {
+    const title = event.itemId ? budgetToolTitles.get(event.itemId) : undefined;
+    if (event.itemId) budgetToolTitles.delete(event.itemId);
+    budgetGuard?.noteToolCompleted(title, event.ok);
+  }
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
   if (!bot && !group) return;
@@ -453,7 +468,7 @@ async function startTurn(
           });
           broadcast({ kind: "message", threadId: bot.threadId, message });
           void instance.adapter.interruptTurn(bot.threadId).catch(() => {});
-        });
+        }, lastTokenUsageByThread.get(bot.threadId));
         taskBudgetGuards.set(bot.threadId, guard);
         guard.start();
       }
@@ -518,6 +533,14 @@ async function startTurn(
           )
         : [];
 
+      // Provisioning and wake-up can take long enough to consume a deadline.
+      // Do not dispatch a model request after its central guard has stopped
+      // the task; interrupting a not-yet-started provider turn cannot prevent
+      // sendTurn from doing work.
+      if (taskBudgetGuards.get(bot.threadId)?.isExhausted) {
+        throw Object.assign(new Error("task budget exhausted before dispatch"), { taskBudgetExhausted: true });
+      }
+
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text: turnText,
@@ -548,6 +571,11 @@ async function startTurn(
     } catch (e) {
       taskBudgetGuards.get(bot.threadId)?.dispose();
       taskBudgetGuards.delete(bot.threadId);
+      if (e && typeof e === "object" && "taskBudgetExhausted" in e) {
+        store.patchBot(bot.id, { busy: false });
+        broadcast({ kind: "bot", bot: store.bot(bot.id) });
+        return;
+      }
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",

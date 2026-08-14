@@ -9,12 +9,12 @@ describe("task budgets", () => {
     expect(normalizeTaskBudget({})).toBeNull();
   });
 
-  it("uses reported token snapshots without inventing absent dimensions", () => {
+  it("uses task-local token deltas from cumulative snapshots without inventing absent dimensions", () => {
     const statuses: string[] = [];
-    const guard = new TaskBudgetGuard({ maxInputTokens: 10, maxTotalTokens: 15 }, (s) => statuses.push(s.limit));
-    guard.noteTokenUsage(8, undefined);
+    const guard = new TaskBudgetGuard({ maxInputTokens: 10, maxTotalTokens: 15 }, (s) => statuses.push(s.limit), { input: 100, output: 40 });
+    guard.noteTokenUsage(108, undefined);
     expect(guard.usage).toEqual({ inputTokens: 8, toolCalls: 0, computerActions: 0, retries: 0, delegations: 0 });
-    guard.noteTokenUsage(7, 7); // snapshots cannot reduce input usage
+    guard.noteTokenUsage(107, 47); // snapshots cannot reduce task-local input usage
     expect(statuses).toEqual(["input_tokens", "total_tokens"]);
   });
 
@@ -29,11 +29,15 @@ describe("task budgets", () => {
     expect(guard.usage).toMatchObject({ toolCalls: 4, computerActions: 2 });
   });
 
-  it("counts failed tools as observed retry attempts and delegates separately", () => {
+  it("counts a retry only when a failed tool is repeated and delegates separately", () => {
     const statuses: string[] = [];
     const guard = new TaskBudgetGuard({ maxRetries: 2, maxDelegations: 1 }, (s) => statuses.push(s.limit));
-    guard.noteFailedTool();
-    guard.noteFailedTool();
+    guard.noteToolStarted("mcp__computer__click");
+    guard.noteToolCompleted("mcp__computer__click", false);
+    expect(guard.usage.retries).toBe(0);
+    guard.noteToolStarted("mcp__computer__click");
+    guard.noteToolCompleted("mcp__computer__click", false);
+    guard.noteToolStarted("mcp__computer__click");
     guard.noteToolStarted("mcp__agents__ask_bot");
     expect(statuses).toContain("retries");
     expect(statuses).not.toContain("delegations"); // a task already stopped cannot emit another exhaustion
@@ -58,6 +62,18 @@ describe("task budgets", () => {
     guard.dispose();
     vi.advanceTimersByTime(5_000);
     expect(exceeded).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("exhausts a provisioning-time deadline exactly once before dispatch", () => {
+    vi.useFakeTimers();
+    const statuses: Array<{ kind: string; limit: string }> = [];
+    const guard = new TaskBudgetGuard({ maxDurationMs: 1_000 }, (status) => statuses.push({ kind: status.kind, limit: status.limit }));
+    guard.start();
+    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_000);
+    expect(guard.isExhausted).toBe(true);
+    expect(statuses).toEqual([{ kind: "exhausted", limit: "duration" }]);
     vi.useRealTimers();
   });
 });

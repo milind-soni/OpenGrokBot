@@ -59,10 +59,13 @@ export class TaskBudgetGuard {
   private readonly warned = new Set<BudgetLimit>();
   private exhausted: BudgetLimit | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly tokenBaseline: { input?: number; output?: number };
+  private readonly failedToolTitles = new Set<string>();
 
-  constructor(budget: TaskBudget, onStatus: (status: BudgetStatus) => void) {
+  constructor(budget: TaskBudget, onStatus: (status: BudgetStatus) => void, tokenBaseline?: { input?: number; output?: number }) {
     this.budget = budget;
     this.onStatus = onStatus;
+    this.tokenBaseline = tokenBaseline ?? {};
   }
 
   start() {
@@ -75,23 +78,36 @@ export class TaskBudgetGuard {
     this.timer = null;
   }
 
+  get isExhausted() { return this.exhausted !== null; }
+
   noteTokenUsage(input: number | undefined, output: number | undefined) {
-    // Providers may omit either dimension. Usage events are snapshots, so a
-    // later smaller value must not lower observed consumption or fabricate it.
-    if (Number.isFinite(input)) this.usageValue.inputTokens = Math.max(this.usageValue.inputTokens ?? 0, Math.max(0, input!));
-    if (Number.isFinite(output)) this.usageValue.outputTokens = Math.max(this.usageValue.outputTokens ?? 0, Math.max(0, output!));
+    // Canonical events may be provider/session cumulative snapshots. Subtract
+    // the snapshot observed before this task started so a resumed thread never
+    // spends a new task's budget on an earlier task's usage.
+    if (Number.isFinite(input)) {
+      const current = Math.max(0, input! - (this.tokenBaseline.input ?? 0));
+      this.usageValue.inputTokens = Math.max(this.usageValue.inputTokens ?? 0, current);
+    }
+    if (Number.isFinite(output)) {
+      const current = Math.max(0, output! - (this.tokenBaseline.output ?? 0));
+      this.usageValue.outputTokens = Math.max(this.usageValue.outputTokens ?? 0, current);
+    }
     this.check();
   }
 
   noteToolStarted(title?: string) {
+    const key = title ?? "tool";
+    // A failure becomes a retry only when the same tool is invoked again.
+    // A single failed tool may instead be an intentional fallback path.
+    if (this.failedToolTitles.delete(key)) this.usageValue.retries += 1;
     this.usageValue.toolCalls += 1;
     if (isComputerAction(title)) this.usageValue.computerActions += 1;
     if (isDelegation(title)) this.usageValue.delegations += 1;
     this.check();
   }
 
-  noteFailedTool() {
-    this.usageValue.retries += 1;
+  noteToolCompleted(title?: string, ok?: boolean) {
+    if (ok === false) this.failedToolTitles.add(title ?? "tool");
     this.check();
   }
 

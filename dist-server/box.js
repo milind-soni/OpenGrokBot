@@ -1,4 +1,5 @@
-const BOX_API = "https://ascii.dev/api/box/v1";
+// overridable so tests can point at a stub instead of the live provider
+const BOX_API = process.env.OMB_BOX_API || "https://ascii.dev/api/box/v1";
 const READY = new Set(["idle", "ready", "running"]);
 function boxFetch(cfg, path, opts = {}) {
     return fetch(`${BOX_API}${path}`, {
@@ -107,6 +108,52 @@ export async function readyBox(cfg, botId, budgetMs = 60_000) {
 export function boxConfigured(cfg) {
     return Boolean(cfg.box?.token);
 }
+/** Ask the provider whether a token is real, before we let someone save
+ * it. Without this the paste "succeeds", and the first sign of trouble is
+ * a 401 in a different panel minutes later, with nothing to act on. */
+export async function verifyToken(token) {
+    try {
+        const res = await fetch(`${BOX_API}/boxes`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(20_000),
+        });
+        if (res.ok)
+            return { ok: true };
+        if (res.status === 401 || res.status === 403) {
+            // the common mistake is pasting some other credential entirely —
+            // box API keys are prefixed, so say which thing is wrong
+            return {
+                ok: false,
+                message: token.startsWith("box_")
+                    ? "ascii.dev rejected that token — it may have been revoked or expired. Copy a fresh one from your ascii.dev account."
+                    : "That doesn't look like a box API key: they start with box_. Copy the API key from your ascii.dev account (an account or session token won't work here).",
+            };
+        }
+        return { ok: false, message: `ascii.dev returned ${res.status} for that token — try again in a moment.` };
+    }
+    catch {
+        return { ok: false, message: "Couldn't reach ascii.dev to check that token — check your connection and retry." };
+    }
+}
+/** Turn a provider refusal into something a person can act on. The
+ * provider's own message is better than anything we can invent — it knows
+ * the plan, the limit and the link — so prefer it and only fall back to
+ * our own wording when it says nothing useful. */
+export function boxErrorMessage(status, what, body) {
+    const theirs = typeof body?.message === "string" ? body.message.trim() : "";
+    const link = typeof body?.error?.details?.billingUrl === "string" ? body.error.details.billingUrl : "";
+    if (status === 402) {
+        // e.g. "Start the $20/month Box plan to create sandboxes."
+        return [theirs || "ascii.dev needs a paid Box plan before it will create a computer.", link].filter(Boolean).join(" ");
+    }
+    if (status === 401 || status === 403) {
+        return "your box token was rejected by ascii.dev — open App Settings and paste a current token (it starts with box_)";
+    }
+    if (status === 429) {
+        return theirs || "ascii.dev is rate-limiting this account — wait a minute and try again";
+    }
+    return theirs ? `${what} failed: ${theirs}` : `${what} failed (${status})`;
+}
 /** Box state for the Computer panel. */
 export async function boxStatus(cfg, botId) {
     if (!boxConfigured(cfg))
@@ -136,8 +183,9 @@ export async function provisionBox(cfg, botId, botName) {
             // survives) if every stop path dies
             body: JSON.stringify({ ttlSeconds: 8 * 60 * 60 }),
         });
-        if (!createRes.ok || !createRes.body?.box?.id)
-            throw new Error(`box create failed (${createRes.status})`);
+        if (!createRes.ok || !createRes.body?.box?.id) {
+            throw new Error(boxErrorMessage(createRes.status, "box create", createRes.body));
+        }
         box = createRes.body.box;
         created = true;
         await boxJson(cfg, `/boxes/${box.id}`, { method: "PATCH", body: JSON.stringify({ name: vmName }) });

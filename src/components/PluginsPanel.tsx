@@ -49,12 +49,16 @@ export function PluginsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
-  const refreshStatus = useCallback((slugs: string[]) => {
-    if (!slugs.length) return Promise.resolve();
+  const refreshStatus = useCallback((slugs: string[]): Promise<Record<string, { connected: boolean }>> => {
+    if (!slugs.length) return Promise.resolve({});
     setRefreshing(true);
     return api(`/api/connectors?services=${slugs.join(",")}`)
-      .then((r) => setStatus(r.services ?? {}))
-      .catch(() => {})
+      .then((r) => {
+        const services: Record<string, { connected: boolean }> = r.services ?? {};
+        setStatus(services);
+        return services;
+      })
+      .catch(() => ({}))
       .finally(() => setRefreshing(false));
   }, []);
 
@@ -80,11 +84,14 @@ export function PluginsPanel() {
     api(`/api/connectors/${slug}/authorize`, { method: "POST" })
       .then(({ url }) => {
         window.open(url);
-        // the user finishes OAuth in the browser; poll a few times to catch it
+        // the user finishes OAuth in the browser; poll a few times to catch it.
+        // check the freshly-fetched result, not the `status` captured in this
+        // closure — that snapshot never updates, so it would always poll 6×
         let tries = 0;
         const timer = setInterval(() => {
-          void refreshStatus([slug]);
-          if (++tries >= 6 || status[slug]?.connected) clearInterval(timer);
+          void refreshStatus([slug]).then((s) => {
+            if (++tries >= 6 || s[slug]?.connected) clearInterval(timer);
+          });
         }, 5000);
       })
       .catch((e) => setError(e.message))

@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# least privilege: CI only reads the checkout, it never writes back
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -15,25 +19,56 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # the harness must stay portable Node — the windows leg is the
-        # guardrail for the in-progress Windows port (POSIX-only tests
-        # self-skip there)
+        # The harness and pure desktop capabilities stay portable across all
+        # supported host platforms. POSIX-only process tests self-skip.
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    env:
-      # tests never launch Electron; skip the binary download
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm check:electron
       - name: production UI build
         if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vite build
+
+  package-linux:
+    name: package + smoke (Ubuntu 24.04 x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install package validation tools
+        run: sudo apt-get update && sudo apt-get install -y desktop-file-utils xvfb dbus-x11
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:linux
+      - run: node scripts/verify-linux-package.mjs
+      - name: Configure Chromium sandbox for the unpacked app
+        run: |
+          sudo chown root:root release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 release/linux-unpacked/chrome-sandbox
+          test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
+      - name: Launch packaged app and verify lifecycle
+        run: dbus-run-session -- xvfb-run -a node scripts/smoke-linux-package.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openmausbot-ubuntu-x64
+          path: |
+            release/*.deb
+            release/*.AppImage
+          if-no-files-found: error

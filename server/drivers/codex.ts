@@ -193,6 +193,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       const handleNotification = (msg: any) => {
+        // ACP can flush queued notifications after a cancellation or an
+        // already-settled completion. They belong to the old turn and must
+        // not recreate harness state (including per-turn evidence).
+        if (state.settled) return;
         const p = msg.params ?? {};
         switch (msg.method) {
           // token-level chat text; the item/completed frame follows with the

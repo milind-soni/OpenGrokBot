@@ -6,8 +6,11 @@ export interface TurnEvidence { started: number; succeeded: number; failed: numb
 export function emptyEvidence(): TurnEvidence { return { started: 0, succeeded: 0, failed: 0 }; }
 
 export function completionEvidence(evidence: TurnEvidence, turnOk: boolean): { name: string; ok: boolean } | null {
-  if (!turnOk) return evidence.failed ? { name: `Evidence: ${evidence.failed} tool action${evidence.failed === 1 ? "" : "s"} failed`, ok: false } : null;
-  if (evidence.failed) return { name: `Evidence: ${evidence.succeeded} tool action${evidence.succeeded === 1 ? "" : "s"} succeeded, ${evidence.failed} failed`, ok: false };
-  if (evidence.succeeded) return { name: `Evidence: ${evidence.succeeded} tool action${evidence.succeeded === 1 ? "" : "s"} succeeded; task result is agent-reported`, ok: true };
+  if (!evidence.succeeded && !evidence.failed) return null;
+  const succeeded = `${evidence.succeeded} tool action${evidence.succeeded === 1 ? "" : "s"} succeeded`;
+  const failed = `${evidence.failed} failed`;
+  if (evidence.succeeded && evidence.failed) return { name: `Evidence: ${succeeded}, ${failed}`, ok: turnOk && evidence.failed === 0 };
+  if (evidence.succeeded) return { name: `Evidence: ${succeeded}; task result is agent-reported`, ok: turnOk };
+  if (evidence.failed) return { name: `Evidence: ${evidence.failed} tool action${evidence.failed === 1 ? "" : "s"} failed`, ok: false };
   return null;
 }

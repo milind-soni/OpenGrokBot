@@ -76,6 +76,18 @@ export type RuntimeEvent = RuntimeEventBase &
       }
     | { type: "request.resolved"; behavior: string; source: string }
     | { type: "thread.token-usage.updated"; input: number; output: number }
+    | {
+        type: "task.budget.updated";
+        budget: Record<string, number>;
+        usage: Record<string, number | undefined>;
+        limit: string;
+      }
+    | {
+        type: "task.budget.exhausted";
+        budget: Record<string, number>;
+        usage: Record<string, number | undefined>;
+        limit: string;
+      }
     | { type: "runtime.error"; message: string }
   );
 

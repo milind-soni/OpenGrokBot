@@ -22,6 +22,7 @@ import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
+import { normalizeTaskBudget, TaskBudgetGuard, type TaskBudget } from "./task-budget.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -146,6 +147,9 @@ function broadcast(payload: unknown) {
 // once can collide on a bare id and patch each other's messages.
 const toolMessageByItem = new Map<string, string>(); // threadId:itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
+const taskBudgetGuards = new Map<string, TaskBudgetGuard>();
+const budgetToolTitles = new Map<string, string>(); // threadId:itemId -> tool title
+const lastTokenUsageByThread = new Map<string, { input?: number; output?: number }>();
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
@@ -154,6 +158,23 @@ let routines: RoutineManager | null = null;
 
 bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
+  const budgetGuard = taskBudgetGuards.get(event.threadId);
+  if (event.type === "thread.token-usage.updated") {
+    const snapshot = lastTokenUsageByThread.get(event.threadId) ?? {};
+    if (Number.isFinite(event.input)) snapshot.input = event.input;
+    if (Number.isFinite(event.output)) snapshot.output = event.output;
+    lastTokenUsageByThread.set(event.threadId, snapshot);
+    budgetGuard?.noteTokenUsage(event.input, event.output);
+  }
+  if (event.type === "item.started" && event.itemType === "tool") {
+    if (event.itemId) budgetToolTitles.set(`${event.threadId}:${event.itemId}`, event.title ?? "tool");
+    budgetGuard?.noteToolStarted(event.title);
+  }
+  if (event.type === "item.completed" && event.itemType === "tool") {
+    const title = event.itemId ? budgetToolTitles.get(`${event.threadId}:${event.itemId}`) : undefined;
+    if (event.itemId) budgetToolTitles.delete(`${event.threadId}:${event.itemId}`);
+    budgetGuard?.noteToolCompleted(title, event.ok);
+  }
   routines?.handleRuntimeEvent(event);
   const bot = store.botByThread(event.threadId);
   const group = bot ? undefined : store.groupByThread(event.threadId);
@@ -303,6 +324,8 @@ bus.subscribe((event: RuntimeEvent) => {
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       break;
     case "turn.completed": {
+      taskBudgetGuards.get(event.threadId)?.dispose();
+      taskBudgetGuards.delete(event.threadId);
       if (bot) {
         store.patchBot(bot.id, { busy: false, unread: true });
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
@@ -418,6 +441,7 @@ async function startTurn(
      * of merely mounting that VM's computer tools on the MAUS's provider. */
     runOn?: RoutineRunOn;
     onDispatchError?: (message: string) => void;
+    budget?: TaskBudget;
   },
 ) {
   const bot = store.bot(botId);
@@ -497,6 +521,17 @@ async function startTurn(
 
   void (async () => {
     try {
+      if (opts?.budget) {
+        const guard = new TaskBudgetGuard(opts.budget, (status) => {
+          bus.publish({ eventId: `budget-${Date.now().toString(36)}`, provider: instance.driverKind, providerInstanceId: instance.instanceId, threadId, createdAt: new Date().toISOString(), type: status.kind === "exhausted" ? "task.budget.exhausted" : "task.budget.updated", budget: status.budget as Record<string, number>, usage: { ...status.usage }, limit: status.limit });
+          if (status.kind !== "exhausted") return;
+          const message = store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: `task budget reached: ${status.limit.replace(/_/g, " ")}`, ok: false } });
+          broadcast({ kind: "message", threadId, message });
+          void instance.adapter.interruptTurn(threadId).catch(() => {});
+        }, lastTokenUsageByThread.get(threadId));
+        taskBudgetGuards.set(threadId, guard);
+        guard.start();
+      }
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
@@ -534,6 +569,7 @@ async function startTurn(
         const cua = readCuaConnection();
         if (cua) integrations.localComputer = cua;
       }
+      if (taskBudgetGuards.get(threadId)?.isExhausted) throw Object.assign(new Error("task budget exhausted before dispatch"), { taskBudgetExhausted: true });
       // peer-agent comms: give a user-initiated turn the list_bots/ask_bot
       // tools. A comms-invoked turn (depth ≥ cap) gets none — hard recursion
       // stop, so the user's tokens can't be burned by a bot-to-bot loop.
@@ -588,6 +624,11 @@ async function startTurn(
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
     } catch (e) {
+      taskBudgetGuards.get(threadId)?.dispose();
+      taskBudgetGuards.delete(threadId);
+      if (e && typeof e === "object" && "taskBudgetExhausted" in e) {
+        store.patchBot(bot.id, { busy: false }); broadcast({ kind: "bot", bot: store.bot(bot.id) }); return;
+      }
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(threadId, {
         role: "bot",
@@ -1181,8 +1222,10 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
-      return json(res, 202, { ok: true });
+      const budget = body.budget === undefined ? undefined : normalizeTaskBudget(body.budget);
+      if (body.budget !== undefined && !budget) return json(res, 400, { error: "budget needs one or more supported positive limits within documented bounds" });
+      await startTurn(m[1], text, { budget: budget ?? undefined });
+      return json(res, 202, { ok: true, ...(budget ? { budget } : {}) });
     }
 
     // edit a user message → fork the conversation there and rerun the turn.
@@ -1274,6 +1317,8 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       const instance = registry.get(bot.modelSelection.instanceId);
+      taskBudgetGuards.get(bot.threadId)?.dispose();
+      taskBudgetGuards.delete(bot.threadId);
       await instance?.adapter.interruptTurn(bot.threadId);
       return json(res, 200, { ok: true });
     }

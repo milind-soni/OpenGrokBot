@@ -24,6 +24,7 @@
     "dev": "vite",
     "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
+    "gateway:telegram": "node server/gateway/telegram.ts",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "vitest run",

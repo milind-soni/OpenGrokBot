@@ -182,7 +182,8 @@ function BubbleEditor({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // isComposing: an IME confirm-Enter must not submit the edit
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             submit();
           }
@@ -736,11 +737,13 @@ export function ChatView({ bot }: { bot: Bot }) {
 
       {/* keyed by bot: a draft belongs to the conversation it was typed in,
           so switching bots starts from an empty composer instead of carrying
-          the previous bot's half-written message over */}
+          the previous bot's half-written message over. ArrowUp-to-edit is
+          gated on busy like the pencil button — editing rewinds the thread,
+          which a live turn forbids (the server 409s it). */}
       <Composer
         key={bot.id}
         bot={bot}
-        onEditLast={lastUserMessage ? () => setEditingId(lastUserMessage.id) : undefined}
+        onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
       />
 
     </main>

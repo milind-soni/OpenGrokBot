@@ -35,8 +35,15 @@ describe("MCP registry", () => {
     expect(validRemoteUrl("https://mcp.example.test/stream")).toBe(true);
     expect(validRemoteUrl("http://localhost:3000/mcp")).toBe(true);
     expect(validRemoteUrl("http://127.0.0.1:3000/mcp")).toBe(true);
+    expect(validRemoteUrl("http://[::1]:3000/mcp")).toBe(true);
     expect(validRemoteUrl("http://example.test/mcp")).toBe(false);
+    expect(validRemoteUrl("https://user:secret@mcp.example.test/mcp")).toBe(false);
     expect(() => normalizeMcpServer({ name: "Bad", transport: "http", url: "http://example.test/mcp" })).toThrow(/HTTPS/);
+  });
+
+  it("keeps update IDs immutable and rejects route-incompatible create IDs", () => {
+    expect(() => normalizeMcpServer({ id: "server.one", name: "Bad", transport: "stdio", command: "node" })).toThrow(/unsupported/);
+    expect(normalizeMcpServer({ id: "other", name: "Updated", transport: "stdio", command: "node" }, "stable").id).toBe("stable");
   });
 
   it("reports invalid and unavailable servers without exposing process output", async () => {

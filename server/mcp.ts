@@ -33,6 +33,7 @@ export function validRemoteUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
+    if (url.username || url.password) return false;
     if (url.protocol === "https:") return true;
     return url.protocol === "http:" && ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
   } catch {
@@ -45,7 +46,11 @@ export function normalizeMcpServer(raw: unknown, existingId?: string): McpServer
   const input = raw as Record<string, unknown>;
   const transport = input.transport === "http" ? "http" : input.transport === "stdio" ? "stdio" : null;
   if (!transport) throw new Error("MCP transport must be stdio or http");
-  const id = safeText(input.id, 100) || existingId || crypto.randomUUID();
+  const requestedId = safeText(input.id, 100);
+  if (!existingId && requestedId && !/^[\w-]+$/.test(requestedId)) {
+    throw new Error("MCP server id contains unsupported characters");
+  }
+  const id = existingId || requestedId || crypto.randomUUID();
   const name = safeText(input.name, MAX_NAME);
   if (!name) throw new Error("MCP server name is required");
   const botIds = Array.isArray(input.botIds) ? input.botIds.filter((id) => typeof id === "string" && id.length <= 100) : [];

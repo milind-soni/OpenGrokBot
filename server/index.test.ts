@@ -170,6 +170,12 @@ describe("harness HTTP API", () => {
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("exposes a focused generations index without unrelated transcript messages", async () => {
+    const { status, body } = await api("GET", "/api/generations");
+    expect(status).toBe(200);
+    expect(body).toEqual({ sources: [] });
+  });
+
   it("describes the configured fleet, shadows included", async () => {
     const { status, body } = await api("GET", "/api/instances");
     expect(status).toBe(200);

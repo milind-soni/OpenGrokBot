@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
   Puzzle,
   Trash2,
   Users,
@@ -589,6 +590,16 @@ export function Sidebar() {
           {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
             <span className="size-2 rounded-full bg-danger" />
           )}
+        </button>
+        <button
+          onClick={() => dispatch({ type: "showGenerations" })}
+          className={cn(
+            "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+            state.activeView === "generations" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
+          )}
+        >
+          <Sparkles size={20} className={state.activeView === "generations" ? "text-accent" : "text-ink-secondary"} />
+          <span className="text-[14px]">Generations</span>
         </button>
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}

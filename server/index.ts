@@ -140,6 +140,38 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   tasks: store.tasks(bot.id).map(({ resumeCursors, ...task }) => task),
 });
 
+const HTML_FENCE = /^\s{0,3}(?:`{3,}|~{3,})\s*(?:html|htm|html_preview)\b/im;
+const generationMessages = (threadId: string) =>
+  store.messagesFor(threadId).filter((message) =>
+    message.kind === "media" ||
+    (message.role === "bot" && message.kind === "text" && Boolean(message.text && HTML_FENCE.test(message.text))),
+  );
+
+function generationSources() {
+  return [
+    ...store.bots.flatMap((bot) => store.tasks(bot.id).flatMap((task) => {
+      const messages = generationMessages(task.threadId);
+      return messages.length ? [{
+        ownerId: bot.id,
+        ownerName: bot.name,
+        contextTitle: task.title,
+        threadId: task.threadId,
+        messages,
+      }] : [];
+    })),
+    ...store.groups.flatMap((group) => {
+      const messages = generationMessages(group.threadId);
+      return messages.length ? [{
+        ownerId: group.id,
+        ownerName: group.name,
+        contextTitle: group.name,
+        threadId: group.threadId,
+        messages,
+      }] : [];
+    }),
+  ];
+}
+
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 const sseClients = new Set<ServerResponse>();
 function broadcast(payload: unknown) {
@@ -1151,6 +1183,9 @@ const server = createServer(async (req, res) => {
         bots: store.bots.map(publicBot),
         groups: store.groups.map((g) => ({ ...g, messages: store.messagesFor(g.threadId) })),
       });
+    }
+    if (method === "GET" && path === "/api/generations") {
+      return json(res, 200, { sources: generationSources() });
     }
 
     // ── rooms (group chats) ─────────────────────────────────────────────

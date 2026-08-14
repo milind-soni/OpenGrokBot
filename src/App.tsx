@@ -13,6 +13,7 @@ import { SettingsModal } from "@/components/SettingsModal";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
+import { GenerationsPage } from "@/components/GenerationsPage";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -56,6 +57,8 @@ function Shell() {
       <Sidebar />
       {state.activeView === "routines" ? (
         <RoutinesPage />
+      ) : state.activeView === "generations" ? (
+        <GenerationsPage />
       ) : group ? (
         <GroupView key={group.id} group={group} />
       ) : bot ? (

@@ -126,7 +126,9 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     await instance.adapter.sendTurn({ threadId: "t-late", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(recorder.events.filter((e: any) => e.type === "item.started")).toHaveLength(1);
+    const started = recorder.events.filter((e: any) => e.type === "item.started");
+    expect(started.some((e: any) => e.title === "ls -la")).toBe(true);
+    expect(started.some((e: any) => e.title === "late command")).toBe(false);
   });
 
   it("tries thread/resume with a cursor and reuses the thread id", async () => {

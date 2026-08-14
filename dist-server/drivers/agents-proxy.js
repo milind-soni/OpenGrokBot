@@ -57,7 +57,11 @@ async function callTool(name, args) {
         const bots = r.bots ?? [];
         if (!bots.length)
             return { text: "No other bots in this workspace yet." };
-        const lines = bots.map((b) => `- ${b.name} (id: ${b.id}, model: ${b.model}${b.busy ? ", busy" : ""})`);
+        const lines = bots.map((b) => {
+            const role = b.title ? ` — ${b.title}` : "";
+            const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
+            return `- ${b.name}${role}${about} [id: ${b.id}, model: ${b.model}${b.busy ? ", busy" : ""}]`;
+        });
         return { text: `Other bots you can message with ask_bot:\n${lines.join("\n")}` };
     }
     if (name === "ask_bot") {

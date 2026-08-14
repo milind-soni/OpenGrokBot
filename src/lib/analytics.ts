@@ -1,8 +1,10 @@
 // PostHog usage analytics + the email → person identity link.
 // The phc_ token is a write-only public key (safe to ship in the client).
-// Autocapture gives clicks/inputs for free; the named events below are the
-// product funnel. Email submissions call identify(), so PostHog's Persons
-// tab doubles as the collected-email list.
+// Only the named events below are sent — autocapture is OFF on purpose:
+// it would ship the $el_text of clicked elements, and the sidebar/option
+// cards render model output and message previews, so it would leak fragments
+// of private conversations to a third party. Email submissions call
+// identify(), so PostHog's Persons tab doubles as the collected-email list.
 import posthog from "posthog-js";
 
 const TOKEN = "phc_m2hP39w8y2gLPvHgDvSXAu6xcZ3agjf4ruL56rGcMZEe";
@@ -13,7 +15,7 @@ export function initAnalytics() {
   if (ready) return;
   posthog.init(TOKEN, {
     api_host: "https://us.i.posthog.com",
-    autocapture: true,
+    autocapture: false, // never capture clicked-element text (conversation leak)
     capture_pageview: false, // single-window desktop app — no page routes
     person_profiles: "identified_only",
     persistence: "localStorage",

@@ -4,7 +4,7 @@
 
   <defs>
     <clipPath id="mac-tile">
-      <rect width="1024" height="1024" rx="224" />
+      <rect width="1024" height="1024" rx="230.4" />
     </clipPath>
 
     <radialGradient id="tile" cx="68%" cy="36%" r="92%">
@@ -22,6 +22,12 @@
     </linearGradient>
   </defs>
 
+  <!-- macOS icon grid: the tile is 824x824 inside a 1024 canvas (corner
+       radius 185.4), not the full canvas — a full-bleed tile renders
+       noticeably larger than every other icon in the Dock. The tile is
+       drawn at 1024 and scaled into the grid, so the artwork inside keeps
+       its own coordinates. -->
+  <g transform="translate(100 100) scale(0.8046875)">
   <g clip-path="url(#mac-tile)">
     <rect width="1024" height="1024" fill="url(#tile)" />
 
@@ -39,6 +45,7 @@
       </g>
     </svg>
 
-    <rect x="8" y="8" width="1008" height="1008" rx="216" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="16" />
+    <rect x="8" y="8" width="1008" height="1008" rx="222.4" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="16" />
+  </g>
   </g>
 </svg>

@@ -4,6 +4,7 @@ import {
   ArrowDownToLine,
   BellDot,
   Bot as BotIcon,
+  CalendarDays,
   Check,
   ClipboardCopy,
   Copy,
@@ -26,8 +27,7 @@ import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
-
-const isElectron = navigator.userAgent.includes("Electron");
+import { useDesktopCapabilities } from "./DesktopCapabilities";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -163,7 +163,7 @@ function StackedMauses({ members }: { members: Bot[] }) {
 
 function GroupListItem({ group, onMenu }: { group: Group; onMenu: (menu: { groupId: string; x: number; y: number }) => void }) {
   const { state, dispatch } = useStore();
-  const selected = state.selectedId === group.id;
+  const selected = state.activeView === "chat" && state.selectedId === group.id;
   const members = group.memberIds
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => Boolean(b));
@@ -414,7 +414,7 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
 
 function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => void }) {
   const { state, dispatch } = useStore();
-  const selected = state.selectedId === bot.id;
+  const selected = state.activeView === "chat" && state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
@@ -465,11 +465,14 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
 
 export function Sidebar() {
   const { state, dispatch } = useStore();
+  const { capabilities } = useDesktopCapabilities();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
   const [query, setQuery] = useState("");
+  const macInset = capabilities.windowChrome === "mac-inset";
+  const browser = capabilities.host.label === "Browser";
 
   const q = query.trim().toLowerCase();
   const visibleBots = state.bots
@@ -486,24 +489,24 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-hairline/40 bg-panel">
-      {/* Titlebar: real traffic lights in Electron, faux ones in the browser */}
+      {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
         className="flex items-center justify-between px-4 pt-3.5 pb-1"
-        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+        style={macInset ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined}
       >
-        {isElectron ? (
-          // Reserves room for the macOS traffic lights. Windows has nothing on
-          // the left — its caption buttons overlay the chat header top-right —
-          // so reserving 56px there is just a blank gap.
-          <div className={window.ogb?.platform === "win32" ? "" : "w-14"} />
-        ) : (
+        {macInset ? (
+          <div className="w-14" />
+        ) : browser ? (
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full bg-[#ff5f57]" />
             <span className="size-3 rounded-full bg-[#febc2e]" />
             <span className="size-3 rounded-full bg-[#28c840]" />
           </div>
-        )}
-        <div className="relative" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        ) : <div />}
+        <div
+          className="relative"
+          style={macInset ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined}
+        >
           <button
             onClick={() => setPlusOpen((o) => !o)}
             className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -574,6 +577,19 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="px-3 pb-3 pt-2">
+        <button
+          onClick={() => dispatch({ type: "showRoutines" })}
+          className={cn(
+            "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+            state.activeView === "routines" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
+          )}
+        >
+          <CalendarDays size={20} className={state.activeView === "routines" ? "text-accent" : "text-ink-secondary"} />
+          <span className="flex-1 text-[14px]">Routines</span>
+          {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
+            <span className="size-2 rounded-full bg-danger" />
+          )}
+        </button>
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"

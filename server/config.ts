@@ -1,22 +1,14 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 
-/** A reusable starting configuration for a new bot. Instructions remain in
- * the local config and are only read by the harness when instantiated. */
-export interface TaskTemplateConfig {
-  id: string;
-  name: string;
-  description?: string;
-  title?: string;
-  instructions: string;
-  computer?: "cloud" | "local" | "off";
-}
+export interface TaskTemplateConfig { id: string; name: string; instructions: string; description?: string; title?: string; computer?: "cloud" | "local" | "off"; }
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
@@ -25,6 +17,9 @@ export interface AppConfig {
    * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
+  /** Voice (ElevenLabs). `key` is the credential and is never echoed back;
+   * `voice` is the chosen voice id, which is a setting, not a secret. */
+  tts?: { key?: string; voice?: string };
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
@@ -61,6 +56,7 @@ export function loadConfig(): AppConfig {
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+  cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
   return cfg;
 }
 
@@ -74,13 +70,13 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "profile", "templates"] as const) {
+  for (const key of ["xai", "composio", "box", "tts", "profile", "templates"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(p, JSON.stringify(disk, null, 2));
+  writeFileAtomic(p, JSON.stringify(disk, null, 2));
 }
 
 // Default fleet: one instance per built-in driver (upstream

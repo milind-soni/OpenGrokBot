@@ -21,7 +21,11 @@
  *  which is noisy but never a lie. */
 export function parseModels(stdout: string): Array<{ id: string; label: string }> {
   const models: Array<{ id: string; label: string }> = [];
-  for (const line of stdout.split("\n")) {
+  // Split on \r?\n rather than \n: a CRLF stream would otherwise leave a \r
+  // glued to every line, which `\S+$` cannot consume, and the whole catalog
+  // would parse to nothing — silently, on the one platform we cannot exercise
+  // from here.
+  for (const line of stdout.split(/\r?\n/)) {
     if (!/^[\w.-]+\/\S+$/.test(line)) continue;
     models.push({ id: line, label: line.slice(line.indexOf("/") + 1) });
   }

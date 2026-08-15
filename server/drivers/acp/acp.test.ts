@@ -710,4 +710,13 @@ describe("opencode catalog parsing", () => {
       { id: "ollama/hf.co/unsloth/Qwen3-32B-GGUF:Q4_K_M", label: "hf.co/unsloth/Qwen3-32B-GGUF:Q4_K_M" },
     ]);
   });
+
+  it("parses a CRLF stream exactly like an LF one", () => {
+    // Measured on Linux the CLI emits LF, but nothing guarantees that on
+    // Windows, and a surviving \r drops every entry without an error.
+    expect(parseModels("anthropic/claude-opus-5\r\nollama/qwen3-coder:latest\r\n")).toEqual([
+      { id: "anthropic/claude-opus-5", label: "claude-opus-5" },
+      { id: "ollama/qwen3-coder:latest", label: "qwen3-coder:latest" },
+    ]);
+  });
 });

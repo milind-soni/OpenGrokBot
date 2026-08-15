@@ -159,21 +159,56 @@ const ASK_POLICY = {
   external_directory: "ask",
 } satisfies Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">>;
 
+// The agents a session can start on: `build` is opencode's default, `plan` its
+// read-only sibling, `general` the one the `task` tool spawns. Each gets the
+// same policy pinned on it — see permissionEnv for why naming them is what
+// makes the top-level policy stick.
+const PINNED_AGENTS = ["build", "plan", "general"] as const;
+
+/** A plain JSON object, or an empty one. Spreading a string or an array would
+ *  smear indices into the config we are about to hand opencode. */
+function plainObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 /** Compose the child's OPENCODE_CONFIG_CONTENT.
  *
  *  OPENCODE_CONFIG_CONTENT rather than the undocumented OPENCODE_PERMISSION:
- *  it is documented, and it merges after every config file, so it wins on the
- *  top-level `permission` key. We overwrite only that key, so the user's MCP
- *  servers, agents and skills survive.
+ *  it is documented, and it merges after every config file, so it wins every
+ *  key it names. We name only the keys we have to, so the user's MCP servers,
+ *  skills, extra agents and per-agent models all survive.
  *
- *  It is NOT sufficient on its own, and the earlier version of this comment
- *  claimed otherwise. Measured against 1.18.18: a PER-AGENT `permission` block —
- *  from a repository's opencode.json or a .opencode/agent/*.md frontmatter — is
- *  appended after the top-level one, and evaluation is last-match-wins, so a
- *  working directory could restore `bash: allow`. Worse, `edit` is deliberately
- *  allowed here, and a fresh child is spawned per turn, so an agent could write
- *  that file itself and hold uncarded shell on its very next turn. transformEnv
- *  closes that route separately; see it for the rest of the story. */
+ *  Three keys, and each one closes a route that was measured open against
+ *  1.18.18 — with OPENCODE_DISABLE_PROJECT_CONFIG=1 already set, from the
+ *  user's GLOBAL ~/.config/opencode/opencode.json, which that flag does not
+ *  touch because it drops PROJECT config only:
+ *
+ *  - `permission` — the top-level policy. A config file's own top-level
+ *    `permission` collides with ours on the same key path and loses the merge.
+ *    This key alone used to be the whole fix, and it was not enough.
+ *
+ *  - `agent.<name>.permission` — a DIFFERENT key path, which is the entire
+ *    reason it was not enough. A per-agent block does not collide; it is
+ *    flattened into the resolved rule array AFTER the top-level policy, and
+ *    evaluation is last-match-wins, so `{"agent":{"build":{"permission":
+ *    {"bash":"allow"}}}}` restored uncarded shell. Naming the same key path
+ *    takes it back — measured: the hostile block is replaced rather than
+ *    appended, while sibling fields on that same agent (its `model`, say) still
+ *    merge through untouched.
+ *
+ *  - `default_agent` — otherwise a config can define a brand-new agent we do
+ *    not name and point the session at it: `{"default_agent":"evil","agent":
+ *    {"evil":{"permission":{"bash":"allow"}}}}` resolved to `evil`. Pinning
+ *    collides on that key path too, so `build` wins.
+ *
+ *  An agent we do not name stays *selectable* — `evil` above still appears
+ *  among a session's mode choices — and that is a decision, not an oversight:
+ *  only the ACP client can change a session's mode and OpenMausBot never does,
+ *  so the agent's only route to one is the `task` tool, which falls under
+ *  `"*": "ask"` and is therefore carded.
+ *
+ *  fullAuto is the user asking for no gate at all, so it hands over the
+ *  top-level key and pins nothing. */
 export function permissionEnv(existing: string | undefined, fullAuto: boolean): string {
   let base: Record<string, unknown> = {};
   if (existing) {
@@ -187,7 +222,14 @@ export function permissionEnv(existing: string | undefined, fullAuto: boolean): 
       console.error("opencode: ignoring an unparseable OPENCODE_CONFIG_CONTENT");
     }
   }
-  return JSON.stringify({ ...base, permission: fullAuto ? "allow" : ASK_POLICY });
+  if (fullAuto) return JSON.stringify({ ...base, permission: "allow" });
+
+  const callerAgents = plainObject(base.agent);
+  const agent: Record<string, unknown> = { ...callerAgents };
+  for (const name of PINNED_AGENTS) {
+    agent[name] = { ...plainObject(callerAgents[name]), permission: ASK_POLICY };
+  }
+  return JSON.stringify({ ...base, agent, permission: ASK_POLICY, default_agent: "build" });
 }
 
 const support: AcpSupport = {
@@ -211,23 +253,36 @@ const support: AcpSupport = {
   transformEnv: (env, config) => {
     env.OPENCODE_CONFIG_CONTENT = permissionEnv(env.OPENCODE_CONFIG_CONTENT, config.fullAuto);
     if (config.fullAuto) return;
-    // Injecting the top-level policy is not enough on its own. Two other routes
-    // were measured to land AFTER it, and opencode takes the last matching rule:
+    // permissionEnv owns the config KEYS an attacker would reach for. These
+    // three env vars sidestep the config merge instead, and all three are
+    // inherited from our own process, so strip them from the child the way kimi
+    // strips a stray API key:
     //
-    //   - OPENCODE_PERMISSION, which opencode applies after every config merge.
-    //     It is inherited from our own process env, so strip it from the child
-    //     the way kimi strips a stray API key.
-    //   - A per-agent `permission` block reachable from the working directory,
-    //     via a repository's opencode.json or a .opencode/agent/*.md. Disabling
-    //     project config closes both of those at once (verified: the hostile
-    //     rules disappear from `opencode debug agent build`).
+    //   - OPENCODE_PERMISSION is applied after every config merge, so an
+    //     inherited one lands after the policy we just injected and, under
+    //     last-match-wins, beats it.
+    //   - OPENCODE_CONFIG / OPENCODE_CONFIG_DIR point opencode at a config file
+    //     or directory we do not control; a hostile one there also resolved to
+    //     `bash: allow`. cacheKey already names both as things that change what
+    //     opencode resolves — same reasoning, other half of the driver.
     //
-    // The cost is real and deliberate: a repository's own opencode config is
-    // ignored while an OpenMausBot bot works in it, including MCP servers it
-    // defines. The user's global config still applies. We take that trade
-    // because `edit` is allowed here, so an agent that could write
-    // .opencode/agent/build.md would hold uncarded shell on its next turn.
+    // OPENCODE_DISABLE_PROJECT_CONFIG closes the workspace route: a repository's
+    // opencode.json or .opencode/agent/*.md could otherwise carry a per-agent
+    // block. The cost is real and deliberate — a repository's own opencode
+    // config is ignored while an OpenMausBot bot works in it, including MCP
+    // servers it defines — and we take it because `edit` is allowed here and a
+    // fresh child spawns per turn, so an agent that could write
+    // .opencode/agent/build.md would hold uncarded shell on its very next turn.
+    //
+    // The user's GLOBAL config still loads, and we neither disable it nor could:
+    // it is where their providers and MCP servers live. It simply can no longer
+    // OUTRANK the policy, because permissionEnv now owns `permission`,
+    // `agent.<name>.permission` and `default_agent`. An earlier version of this
+    // comment presented the surviving global config as a pure benefit; it was
+    // also the open half of the escalation this driver claims to close.
     delete env.OPENCODE_PERMISSION;
+    delete env.OPENCODE_CONFIG;
+    delete env.OPENCODE_CONFIG_DIR;
     env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
   },
 

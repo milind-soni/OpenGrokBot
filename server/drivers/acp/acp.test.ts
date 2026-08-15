@@ -1039,6 +1039,19 @@ describe("opencode catalog discovery", () => {
     expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
   });
 
+  it("probes in the working directory it is given, not the server's", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    // control: an existing directory probes normally
+    expect((await discoverCatalog(FAKE_CLI, process.env, tmpdir())).options).toHaveLength(2);
+
+    // A directory that does not exist makes the spawn itself fail, which is
+    // observable only if the cwd reached execCli at all — and the distinct key
+    // means this is a fresh probe rather than the control's cache entry.
+    const gone = join(tmpdir(), "omb-opencode-no-such-dir");
+    expect((await discoverCatalog(FAKE_CLI, process.env, gone)).options).toEqual([]);
+  });
+
   it("does not serve one instance's catalog to another config content", async () => {
     let clock = 1_000;
     __catalogTestHooks.setClock(() => clock);

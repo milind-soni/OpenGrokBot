@@ -14,10 +14,12 @@
 //    shell commands with no approval card at all — a real gap against the
 //    claude and codex drivers. See ASK_POLICY below.
 
+import { homedir } from "node:os";
+
 import type { ModelCatalog } from "../../contracts.ts";
 import { execCli } from "../../procs.ts";
 
-import { createAcpDriver, type AcpSupport } from "./core.ts";
+import { createAcpDriver, type AcpConfig, type AcpSupport } from "./core.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -68,13 +70,22 @@ export const __catalogTestHooks = {
  *  effect at all". One consequence worth knowing before writing a test: the
  *  FIRST probe on a fresh HOME returned 8 models and the second 7, so the free
  *  OpenCode Zen list is not an invariant and must not be asserted as one. */
-function run(cli: string, args: string[], env: Env): Promise<string | null> {
+function run(cli: string, args: string[], env: Env, cwd: string | undefined): Promise<string | null> {
   return new Promise((resolve) => {
-    execCli(cli, args, { timeout: CLI_TIMEOUT_MS, env, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) =>
+    execCli(cli, args, { timeout: CLI_TIMEOUT_MS, env, cwd, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) =>
       resolve(err ? null : stdout),
     );
   });
 }
+
+/** Where a probe runs. core.ts computes a turn's cwd as
+ *  `turn.cwd ?? config.workspace ?? homedir()`; a catalog probe has no turn, so
+ *  it matches the other two terms. Left to itself, execCli inherits the
+ *  SERVER's cwd — wherever the app happened to be launched from, which is both
+ *  non-deterministic and the wrong directory: in fullAuto, where project config
+ *  stays enabled, a project-defined provider is runnable by the turn and
+ *  invisible to the catalog. */
+const probeCwd = (config: AcpConfig): string => config.workspace ?? homedir();
 
 /** The model opencode itself would use. `debug config` is a debug command with
  *  no stability promise, so its failure is absorbed: the default falls back to
@@ -89,8 +100,8 @@ function run(cli: string, args: string[], env: Env): Promise<string | null> {
  *  command line on a spawn failure). Keep it that way — a `console.error(raw)`
  *  added while debugging this function would put the user's tokens in a log
  *  file. CONTRIBUTING.md:113-117 is the standing rule. */
-async function defaultModel(cli: string, env: Env): Promise<string | null> {
-  const raw = await run(cli, ["debug", "config"], env);
+async function defaultModel(cli: string, env: Env, cwd: string | undefined): Promise<string | null> {
+  const raw = await run(cli, ["debug", "config"], env, cwd);
   if (!raw) return null;
   try {
     const model = JSON.parse(raw)?.model;
@@ -124,9 +135,12 @@ async function defaultModel(cli: string, env: Env): Promise<string | null> {
  *  characters (HOME "a b" + XDG "c" against HOME "a" + XDG "b c"), and Windows
  *  paths routinely contain spaces. JSON also keeps an unset variable distinct
  *  from one explicitly set to empty. */
-function cacheKey(cli: string, env: Env): string {
+function cacheKey(cli: string, env: Env, cwd: string | undefined): string {
   return JSON.stringify([
     cli,
+    // in fullAuto the project's own config still loads, so the directory the
+    // probe runs in changes the list — same reasoning as the config keys below
+    cwd,
     env.HOME,
     env.XDG_CONFIG_HOME,
     env.XDG_DATA_HOME,
@@ -142,12 +156,15 @@ function cacheKey(cli: string, env: Env): string {
   ]);
 }
 
-export async function discoverCatalog(cli: string, env: Env): Promise<ModelCatalog> {
-  const key = cacheKey(cli, env);
+export async function discoverCatalog(cli: string, env: Env, cwd?: string): Promise<ModelCatalog> {
+  const key = cacheKey(cli, env, cwd);
   const hit = cache.get(key);
   if (hit && now() - hit.at < CATALOG_TTL_MS) return hit.value;
 
-  const [listing, configured] = await Promise.all([run(cli, ["models"], env), defaultModel(cli, env)]);
+  const [listing, configured] = await Promise.all([
+    run(cli, ["models"], env, cwd),
+    defaultModel(cli, env, cwd),
+  ]);
   // A CLI that could not run at all is not a CLI reporting no models. Caching
   // that would keep the engine dark for the whole TTL after the problem
   // cleared, and re-opening the picker would not help. Serve the last good
@@ -296,7 +313,9 @@ const support: AcpSupport = {
   models: { default: "", options: [] },
   // The list is per-machine, so it is read from the CLI on demand rather than
   // compiled in; discoverCatalog bounds its own latency, as the contract asks.
-  catalog: (config, env) => discoverCatalog(config.cli, env),
+  // It runs where a turn would run, not where the server was launched — see
+  // probeCwd.
+  catalog: (config, env) => discoverCatalog(config.cli, env, probeCwd(config)),
   // `opencode acp` accepts no -m, so the model has to be set through the
   // session's config option before the prompt goes out.
   selectModel: { configId: "model" },
@@ -349,7 +368,7 @@ const support: AcpSupport = {
   // OpenCode Zen models, and they answer. So readiness is "is there anything
   // left to run", not "is there a credential file".
   isAuthenticated: async (env, config) =>
-    ((await discoverCatalog(config.cli, env).catch(() => null))?.options.length ?? 0) > 0,
+    ((await discoverCatalog(config.cli, env, probeCwd(config)).catch(() => null))?.options.length ?? 0) > 0,
 
   loginNote: "OpenCode has no usable model — run `opencode auth login` to connect a provider",
 

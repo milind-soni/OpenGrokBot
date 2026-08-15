@@ -206,14 +206,24 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                       <span>Back</span>
                     </button>
                   )}
-                  {/* an empty pane and an empty search are different dead ends,
-                      and only one of them is the user's typing */}
-                  {matches.length === 0 && needle && (
-                    <div className="px-2 py-3 text-[13px] text-ink-secondary">No model matches “{query}”.</div>
-                  )}
-                  {matches.length === 0 && !needle && pane === "custom" && (
+                  {matches.length === 0 && (
                     <div className="px-2 py-3 text-[13px] text-ink-secondary">
-                      Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here
+                      {/* An empty list is not a failed search. Every shadow
+                          instance gets {default:"",options:[]} from the
+                          registry, and so does opencode when discovery fails —
+                          telling someone who never typed anything that nothing
+                          matches their empty query is a non-sequitur, and it
+                          points them at the search box instead of at the
+                          EngineSetup card right above that can actually fix
+                          it. An empty Custom pane is a third case: nothing is
+                          broken, there is just no local runtime up yet. */}
+                      {needle ? (
+                        <>No model matches “{query}”.</>
+                      ) : pane === "custom" ? (
+                        "Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here"
+                      ) : (
+                        "No models available."
+                      )}
                     </div>
                   )}
                   {matches.map((option, i) => {

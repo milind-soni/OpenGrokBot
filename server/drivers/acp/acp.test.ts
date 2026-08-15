@@ -20,7 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
-import { __catalogTestHooks, discoverCatalog, parseModels } from "./opencode.ts";
+import { __catalogTestHooks, discoverCatalog, OpenCodeAgentDriver, parseModels } from "./opencode.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -127,6 +127,19 @@ describe("ACP decodeConfig", () => {
       win32: expect.stringContaining("factory.ai/cli"),
     });
     expect(DroidAgentDriver.install?.signInCommand).toBe("droid");
+  });
+  it("opencode defaults to the opencode binary and declares cross-platform setup", () => {
+    expect(OpenCodeAgentDriver.decodeConfig(undefined)).toEqual({
+      cli: "opencode",
+      fullAuto: false,
+      workspace: undefined,
+    });
+    expect(OpenCodeAgentDriver.install?.command).toMatchObject({
+      darwin: expect.stringContaining("opencode.ai/install"),
+      linux: expect.stringContaining("opencode.ai/install"),
+      win32: expect.stringContaining("opencode-ai"),
+    });
+    expect(OpenCodeAgentDriver.install?.signInCommand).toBe("opencode auth login");
   });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
@@ -487,6 +500,63 @@ describe("ACP turns (fake CLI)", () => {
 
     expect(JSON.parse(readFileSync(without, "utf8")).argv).not.toContain("--reasoning-effort");
   });
+
+  it("opencode forces an ask policy into the child, and only the permission key", async () => {
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const dump = join(scratch, "opencode-env.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    instance = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-ask",
+      displayName: undefined,
+      environment: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { keepme: {} }, permission: "allow" }) },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({ threadId: "t-oc-ask", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const injected = JSON.parse(JSON.parse(readFileSync(dump, "utf8")).env.OPENCODE_CONFIG_CONTENT);
+    expect(injected.permission.bash).toBe("ask");
+    expect(injected.permission["*"]).toBe("ask");
+    expect(injected.permission.edit).toBe("allow");
+    // the user's other settings survive: we replace one key, not the file
+    expect(injected.mcp).toEqual({ keepme: {} });
+  });
+
+  it("opencode hands everything to the agent in fullAuto", async () => {
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const dump = join(scratch, "opencode-auto.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    instance = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-auto",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: true },
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({ threadId: "t-oc-auto", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const injected = JSON.parse(JSON.parse(readFileSync(dump, "utf8")).env.OPENCODE_CONFIG_CONTENT);
+    expect(injected.permission).toBe("allow");
+  });
+
+  it("opencode spawns the acp subcommand and passes no -m", async () => {
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const dump = join(scratch, "opencode-argv.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await create(OpenCodeAgentDriver);
+
+    await instance.adapter.sendTurn({ threadId: "t-oc-argv", text: "go", model: "opencode/hy3-free" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv).toEqual(["acp"]);
+  });
 });
 
 describe("ACP snapshot", () => {
@@ -682,6 +752,43 @@ describe("ACP snapshot", () => {
       expect((await instance.snapshot()).authenticated).toBe(true);
     } finally {
       await instance.dispose();
+    }
+  });
+
+  it("opencode is unauthenticated when its catalog is empty, authenticated when it is not", async () => {
+    __catalogTestHooks.reset();
+    process.env.FAKE_ACP_MODELS = "";
+    const empty = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-empty",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await empty.snapshot()).authenticated).toBe(false);
+    } finally {
+      await empty.dispose();
+    }
+
+    __catalogTestHooks.reset();
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const ready = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-ready",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      const snap = await ready.snapshot();
+      expect(snap.state).toBe("available");
+      expect(snap.authenticated).toBe(true);
+      expect((await ready.catalog!()).options).toEqual([{ id: "opencode/hy3-free", label: "hy3-free" }]);
+    } finally {
+      __catalogTestHooks.reset();
+      delete process.env.FAKE_ACP_MODELS;
+      await ready.dispose();
     }
   });
 });

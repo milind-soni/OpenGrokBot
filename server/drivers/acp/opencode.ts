@@ -17,6 +17,8 @@
 import type { ModelCatalog } from "../../contracts.ts";
 import { execCli } from "../../procs.ts";
 
+import { createAcpDriver, type AcpSupport } from "./core.ts";
+
 type Env = Record<string, string | undefined>;
 
 const CATALOG_TTL_MS = 60_000;
@@ -129,3 +131,92 @@ export function parseModels(stdout: string): Array<{ id: string; label: string }
   }
   return models;
 }
+
+// Mirrors the claude driver's default --permission-mode acceptEdits: reads and
+// edits go through, anything that leaves the sandbox asks. `*: ask` is the
+// conservative half — it also catches tools claude has no equivalent for.
+const ASK_POLICY = {
+  "*": "ask",
+  read: "allow",
+  glob: "allow",
+  grep: "allow",
+  lsp: "allow",
+  edit: "allow",
+  bash: "ask",
+  webfetch: "ask",
+  websearch: "ask",
+  external_directory: "ask",
+};
+
+/** Compose the child's OPENCODE_CONFIG_CONTENT.
+ *
+ *  OPENCODE_CONFIG_CONTENT rather than the undocumented OPENCODE_PERMISSION:
+ *  it is documented, and it merges AFTER the project's own opencode.json, so a
+ *  repository cannot lower the policy we set. We overwrite only `permission`,
+ *  so the user's MCP servers, agents and skills survive — but we always win on
+ *  that one key, which is the whole point. */
+function permissionEnv(existing: string | undefined, fullAuto: boolean): string {
+  let base: Record<string, unknown> = {};
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed;
+    } catch {
+      /* not our JSON to repair — replace it rather than ship a broken config */
+    }
+  }
+  return JSON.stringify({ ...base, permission: fullAuto ? "allow" : ASK_POLICY });
+}
+
+const support: AcpSupport = {
+  driverKind: "opencodeAgent",
+  displayName: "OpenCode",
+  defaultCli: "opencode",
+  nativeSource: "opencode.acp",
+  // The real catalog is per-machine and comes from catalog(); this is only the
+  // honest fallback if discovery fails. An empty list makes the engine report
+  // itself unusable, which beats advertising models the user cannot run.
+  models: { default: "", options: [] },
+  catalog: (config, env) => discoverCatalog(config.cli, env),
+  selectModel: { configId: "model" },
+
+  // `opencode acp` takes no -m: the model rides session/set_config_option.
+  spawnArgs: () => ["acp"],
+
+  transformEnv: (env, config) => {
+    env.OPENCODE_CONFIG_CONTENT = permissionEnv(env.OPENCODE_CONFIG_CONTENT, config.fullAuto);
+  },
+
+  // The only advertised method is {id:"opencode-login"}, whose own description
+  // says to run a terminal command — it cannot be driven over ACP. Ride the
+  // ambient login instead, exactly like kimi.
+  pickAuthMethod: () => null,
+  authFailure: "continue",
+
+  // OpenCode runs with no login at all: a virgin HOME still lists the free
+  // OpenCode Zen models, and they answer. So readiness is "is there anything
+  // left to run", not "is there a credential file".
+  isAuthenticated: async (env, config) =>
+    ((await discoverCatalog(config.cli, env).catch(() => null))?.options.length ?? 0) > 0,
+
+  loginNote: "OpenCode has no usable model — run `opencode auth login` to connect a provider",
+
+  install: {
+    // The vendor's primary installer, and it needs no Node. There is no
+    // PowerShell one-liner (opencode.ai/install.ps1 is a 404), so Windows gets
+    // npm, the only documented route that does not need another package
+    // manager first. needsNode is deliberately unset: it is a whole-descriptor
+    // flag and would show a false "Needs Node.js" under the curl commands.
+    command: {
+      darwin: "curl -fsSL https://opencode.ai/install | bash",
+      linux: "curl -fsSL https://opencode.ai/install | bash",
+      win32: "npm install -g opencode-ai",
+    },
+    docsUrl: "https://opencode.ai/docs/",
+    signInCommand: "opencode auth login",
+  },
+
+  buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
+};
+
+export const OpenCodeAgentDriver = createAcpDriver(support);

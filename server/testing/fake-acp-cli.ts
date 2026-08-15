@@ -65,6 +65,13 @@ if (process.env.FAKE_ACP_DUMP) {
       "FAKE_ACP_RPC_DUMP",
       "TEST_POLICY",
       "OPENCODE_API_KEY",
+      // the four config key paths the opencode driver owns, plus the two env
+      // routes it strips: its permission tests assert on every one of them
+      "OPENCODE_CONFIG_CONTENT",
+      "OPENCODE_DISABLE_PROJECT_CONFIG",
+      "OPENCODE_PERMISSION",
+      "OPENCODE_CONFIG",
+      "OPENCODE_CONFIG_DIR",
       "OPENAI_API_KEY",
       "ANTHROPIC_API_KEY",
       "XAI_API_KEY",

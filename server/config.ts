@@ -159,6 +159,10 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // CLI"), so a default `gemini` instance could only ever show unavailable.
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
+  //
+  // `opencode` needs no credential from us either: unlike the others it runs
+  // with no login at all (the free OpenCode Zen models), and its model list is
+  // discovered from whatever providers the user has configured.
   const map: InstanceConfigMap =
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances
@@ -166,6 +170,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           grok: { driver: "grokAgent" },
           kimi: { driver: "kimiAgent" },
           droid: { driver: "droidAgent" },
+          opencode: { driver: "opencodeAgent" },
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
           antigravity: { driver: "antigravityAgent" },

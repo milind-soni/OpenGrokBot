@@ -9,7 +9,7 @@
 //    runtime instead of compiled in. And `opencode acp` takes no -m, so the
 //    model is set with session/set_config_option (support.selectModel).
 //
-// 2. It ships no approval gate. Measured on 1.18.18 with nothing injected: the
+// 2. It cards none of the tools that matter. Measured on 1.18.18 with nothing injected: the
 //    stock `build` agent's only catch-all rule is {permission:"*",
 //    action:"allow", pattern:"*"}, and bash, edit and webfetch have no rule of
 //    their own to override it, so all three resolve to `allow`. A bot would run
@@ -233,9 +233,12 @@ const ASK_POLICY = {
   external_directory: "ask",
 } satisfies Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">>;
 
-// The agents a stock 1.18.18 session can select: `build` is opencode's default,
-// `plan` the one its plan mode selects, `general` the one the `task` tool
-// spawns. Each gets the same policy pinned on it — see permissionEnv for why
+// The agents a stock 1.18.18 session runs: `build` is opencode's default
+// and `plan` the one its plan mode selects — those two are the whole
+// selectable list, measured. `general` and `explore` are subagents the
+// `task` tool spawns; `general` is pinned here, `explore` is left to the
+// top-level key.
+// Each gets the same policy pinned on it — see permissionEnv for why
 // naming them is what makes the top-level policy stick.
 //
 // `plan` is NOT a read-only sibling, and an earlier version of this comment
@@ -244,8 +247,10 @@ const ASK_POLICY = {
 // stock `edit: "*" deny` however we pin per agent — measured, plan's edit rules
 // with our policy injected: [deny *, allow .opencode/plans/*.md, allow <plans
 // dir>, allow *]. Same for general's stock `question`/`todowrite` denies.
-// OpenMausBot only ever runs `build` (default_agent, below), so nothing rides on
-// plan being read-only — but a reader would have acted on the claim.
+// OpenMausBot never selects an agent itself — it pins `default_agent:
+// "build"` and never sends a mode change — so plan's rules only decide
+// anything if a global config evicts `build` (see permissionEnv). Nothing
+// rides on plan being read-only — but a reader would have acted on the claim.
 const PINNED_AGENTS = ["build", "plan", "general"] as const;
 
 // The legacy `mode` key path, pinned for `build` and for nothing else. 1.18.18
@@ -310,8 +315,10 @@ function plainObject(value: unknown): Record<string, unknown> {
  *
  *  Measured and NOT covered, deliberately: a config that EVICTS `build` instead
  *  of editing it. `agent.build.disable`, `agent.build.hidden`, or disabling all
- *  three pinned agents and declaring a new primary, all land the session on an
- *  agent we do not own — the resolver deletes a disabled agent before
+ *  three pinned agents and declaring a new primary, all land the session
+ *  somewhere else — measured: on `plan` (whose `agent.plan.permission` we do
+ *  pin, but whose `mode.plan.permission` we do not) or on a brand-new primary
+ *  we pin nothing on — the resolver deletes a disabled agent before
  *  `default_agent` is read, then falls back to the first visible primary.
  *  Pinning `disable: false`/`hidden: false` closes exactly those and was
  *  rejected: it re-enables `build` for a user who deliberately turned it off,
@@ -373,7 +380,7 @@ const support: AcpSupport = {
   transformEnv: (env, config) => {
     env.OPENCODE_CONFIG_CONTENT = permissionEnv(env.OPENCODE_CONFIG_CONTENT, config.fullAuto);
     if (config.fullAuto) return;
-    // permissionEnv owns the config KEYS an attacker would reach for. These
+    // permissionEnv owns the four config key paths below. These
     // three env vars sidestep the config merge instead, and all three are
     // inherited from our own process, so strip them from the child the way kimi
     // strips a stray API key:

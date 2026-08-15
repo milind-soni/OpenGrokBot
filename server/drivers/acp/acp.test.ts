@@ -864,7 +864,7 @@ describe("opencode permission policy", () => {
     expect(merged.default_agent).toBeUndefined();
   });
 
-  it("pins the same policy on every agent a session can select", () => {
+  it("pins the same policy on every agent it names", () => {
     // A per-agent block is a different key path from the top-level policy: it
     // is appended after it and evaluation is last-match-wins, so a global
     // config could otherwise restore `bash: allow`. Naming the key path is what

@@ -9,12 +9,14 @@ import { GrokDriver } from "./grok.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { GeminiAgentDriver } from "./acp/gemini.ts";
 import { KimiAgentDriver } from "./acp/kimi.ts";
+import { DeepSeekDriver } from "./acp/deepseek.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   GrokDriver,
   GrokAgentDriver,
   GeminiAgentDriver,
   KimiAgentDriver,
+  DeepSeekDriver,
   ClaudeDriver,
   CodexDriver,
   AntigravityDriver,

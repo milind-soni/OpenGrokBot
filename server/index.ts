@@ -493,7 +493,7 @@ async function startTurn(
   // would cost the next attempt its history if this dispatch fails.
   const rewound = threadId === bot.threadId && Boolean(bot.rewound);
   const turnText =
-    rewound && instance.driverKind !== "grok" && transcript.length
+    rewound && instance.driverKind !== "grok" && instance.driverKind !== "deepseek" && transcript.length
       ? [
           "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
           "",

@@ -76,6 +76,11 @@ export interface AcpSupport {
   isAuthenticated(env: Record<string, string | undefined>): boolean;
   /** Compose the session/prompt text. Default prepends the persona. */
   buildPromptText?(turn: SendTurnInput): string;
+  /** Adapter capabilities override. The generic default advertises
+   * agentsMcp/computerMcp; a harness whose ACP server rejects non-empty
+   * mcpServers (DSH) must turn both off so the UI never promises tooling the
+   * agent cannot actually mount. */
+  capabilities?: { agentsMcp?: boolean; computerMcp?: boolean };
 }
 
 const INIT_TIMEOUT = 20_000;
@@ -522,7 +527,11 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, computerMcp: true },
+          capabilities: {
+            sessionModelSwitch: "unsupported",
+            agentsMcp: support.capabilities?.agentsMcp ?? true,
+            computerMcp: support.capabilities?.computerMcp ?? true,
+          },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

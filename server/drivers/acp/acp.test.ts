@@ -504,7 +504,10 @@ describe("ACP turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(without, "utf8")).argv).not.toContain("--reasoning-effort");
   });
 
-  it("opencode forces an ask policy into the child, and only the permission key", async () => {
+  // The name used to end "and only the permission key". It names four key paths
+  // now, so that was a lie about the driver's scope; what the test actually pins
+  // is that the caller's unrelated settings survive.
+  it("opencode forces an ask policy into the child and leaves the caller's other settings alone", async () => {
     process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
     const dump = join(scratch, "opencode-env.json");
     process.env.FAKE_ACP_DUMP = dump;
@@ -857,6 +860,7 @@ describe("opencode permission policy", () => {
     expect(merged.permission).toBe("allow");
     // fullAuto is the user asking for no gate at all, so nothing is pinned
     expect(merged.agent).toBeUndefined();
+    expect(merged.mode).toBeUndefined();
     expect(merged.default_agent).toBeUndefined();
   });
 
@@ -891,9 +895,44 @@ describe("opencode permission policy", () => {
     expect(merged.agent.reviewer).toEqual({ prompt: "review it" });
   });
 
-  it("still pins when the caller's agent key is not a plain object", () => {
+  it("pins the legacy mode key path, for build and for no other agent", () => {
+    // opencode folds `mode.<name>` into `agent.<name>` AFTER every config file
+    // has merged, with the mode entry winning, so a global
+    // `mode.build.permission` outranks the agent pin above. Naming the key path
+    // is what takes it back. `build` only: the fold hardcodes `mode: "primary"`
+    // on whatever it copies, so naming `mode.general` would promote the `task`
+    // tool's subagent to a selectable primary agent the user does not have.
+    const merged = JSON.parse(permissionEnv(undefined, false));
+    expect(merged.mode.build.permission).toEqual(merged.permission);
+    expect(merged.mode.build.permission.bash).toBe("ask");
+    expect(Object.keys(merged.mode)).toEqual(["build"]);
+  });
+
+  it("overrides a mode block the caller already set, keeping its other fields and modes", () => {
+    const merged = JSON.parse(
+      permissionEnv(
+        JSON.stringify({
+          mode: {
+            build: { model: "anthropic/claude-opus-5", permission: { bash: "allow" } },
+            scribe: { prompt: "write it up" },
+          },
+        }),
+        false,
+      ),
+    );
+    // without this the caller's mode block would ride through the spread
+    // untouched and hand back exactly what the agent pin took
+    expect(merged.mode.build.permission.bash).toBe("ask");
+    expect(merged.mode.build.model).toBe("anthropic/claude-opus-5");
+    expect(merged.mode.scribe).toEqual({ prompt: "write it up" });
+  });
+
+  it("still pins when the caller's agent or mode key is not a plain object", () => {
     for (const junk of ['{"agent":"nope"}', '{"agent":[1,2]}', '{"agent":{"build":"nope"}}']) {
       expect(JSON.parse(permissionEnv(junk, false)).agent.build.permission.bash).toBe("ask");
+    }
+    for (const junk of ['{"mode":"nope"}', '{"mode":[1,2]}', '{"mode":{"build":"nope"}}']) {
+      expect(JSON.parse(permissionEnv(junk, false)).mode.build.permission.bash).toBe("ask");
     }
   });
 });

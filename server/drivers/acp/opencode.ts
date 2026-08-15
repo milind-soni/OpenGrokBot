@@ -9,10 +9,14 @@
 //    runtime instead of compiled in. And `opencode acp` takes no -m, so the
 //    model is set with session/set_config_option (support.selectModel).
 //
-// 2. Its default permission policy allows everything: the `build` agent
-//    carries {permission:"*", action:"allow", pattern:"*"}, so a bot would run
-//    shell commands with no approval card at all — a real gap against the
-//    claude and codex drivers. See ASK_POLICY below.
+// 2. It ships no approval gate. Measured on 1.18.18 with nothing injected: the
+//    stock `build` agent's only catch-all rule is {permission:"*",
+//    action:"allow", pattern:"*"}, and bash, edit and webfetch have no rule of
+//    their own to override it, so all three resolve to `allow`. A bot would run
+//    shell commands, write files and fetch URLs with no approval card at any
+//    point. Injecting ASK_POLICY below is what makes OpenMausBot's cards work
+//    for this engine, and it is the main thing this driver does beyond speaking
+//    ACP.
 
 import { homedir } from "node:os";
 
@@ -229,11 +233,33 @@ const ASK_POLICY = {
   external_directory: "ask",
 } satisfies Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">>;
 
-// The agents a session can start on: `build` is opencode's default, `plan` its
-// read-only sibling, `general` the one the `task` tool spawns. Each gets the
-// same policy pinned on it — see permissionEnv for why naming them is what
-// makes the top-level policy stick.
+// The agents a stock 1.18.18 session can select: `build` is opencode's default,
+// `plan` the one its plan mode selects, `general` the one the `task` tool
+// spawns. Each gets the same policy pinned on it — see permissionEnv for why
+// naming them is what makes the top-level policy stick.
+//
+// `plan` is NOT a read-only sibling, and an earlier version of this comment
+// called it one. The top-level `permission` key is merged into every stock agent
+// LAST, after that agent's own defaults, so our `edit: "allow"` overrides plan's
+// stock `edit: "*" deny` however we pin per agent — measured, plan's edit rules
+// with our policy injected: [deny *, allow .opencode/plans/*.md, allow <plans
+// dir>, allow *]. Same for general's stock `question`/`todowrite` denies.
+// OpenMausBot only ever runs `build` (default_agent, below), so nothing rides on
+// plan being read-only — but a reader would have acted on the claim.
 const PINNED_AGENTS = ["build", "plan", "general"] as const;
+
+// The legacy `mode` key path, pinned for `build` and for nothing else. 1.18.18
+// still folds `mode.<name>` into `agent.<name>` AFTER every config file has
+// merged, with the `mode` entry winning the merge, so a global
+// `mode.build.permission` outranked the `agent.build.permission` pin above until
+// this key was named too.
+//
+// `build` only, and this is load-bearing: the fold hardcodes `mode: "primary"`
+// onto whatever it copies. Naming `mode.general` would turn the `task` tool's
+// subagent into a selectable primary agent — measured, it added `general` to a
+// session's mode choices with no config on the machine at all. Widening this
+// list would invent an agent the user does not have.
+const PINNED_MODE_AGENT = "build";
 
 /** A plain JSON object, or an empty one. Spreading a string or an array would
  *  smear indices into the config we are about to hand opencode. */
@@ -248,10 +274,15 @@ function plainObject(value: unknown): Record<string, unknown> {
  *  key it names. We name only the keys we have to, so the user's MCP servers,
  *  skills, extra agents and per-agent models all survive.
  *
- *  Three keys, and each one closes a route that was measured open against
- *  1.18.18 — with OPENCODE_DISABLE_PROJECT_CONFIG=1 already set, from the
- *  user's GLOBAL ~/.config/opencode/opencode.json, which that flag does not
- *  touch because it drops PROJECT config only:
+ *  What the pinning below is and is not. It stops a global config that was
+ *  already hostile or misconfigured BEFORE the bot ran from outranking the
+ *  policy through these key paths. It is NOT a boundary against the agent —
+ *  transformEnv says why, and no comment here should claim otherwise.
+ *
+ *  Four key paths, each measured open against 1.18.18 with
+ *  OPENCODE_DISABLE_PROJECT_CONFIG=1 already set, from the user's GLOBAL
+ *  ~/.config/opencode/opencode.json, which that flag does not touch because it
+ *  drops PROJECT config only:
  *
  *  - `permission` — the top-level policy. A config file's own top-level
  *    `permission` collides with ours on the same key path and loses the merge.
@@ -266,16 +297,27 @@ function plainObject(value: unknown): Record<string, unknown> {
  *    appended, while sibling fields on that same agent (its `model`, say) still
  *    merge through untouched.
  *
+ *  - `mode.<name>.permission` — the legacy spelling of the one above, and it
+ *    outranks it, because `mode` is folded into `agent` after every config file
+ *    has merged. `{"mode":{"build":{"permission":{"bash":"allow"}}}}` beat the
+ *    `agent` pin on its own until this key was named. `build` only — see
+ *    PINNED_MODE_AGENT.
+ *
  *  - `default_agent` — otherwise a config can define a brand-new agent we do
  *    not name and point the session at it: `{"default_agent":"evil","agent":
  *    {"evil":{"permission":{"bash":"allow"}}}}` resolved to `evil`. Pinning
  *    collides on that key path too, so `build` wins.
  *
- *  An agent we do not name stays *selectable* — `evil` above still appears
- *  among a session's mode choices — and that is a decision, not an oversight:
- *  only the ACP client can change a session's mode and OpenMausBot never does,
- *  so the agent's only route to one is the `task` tool, which falls under
- *  `"*": "ask"` and is therefore carded.
+ *  Measured and NOT covered, deliberately: a config that EVICTS `build` instead
+ *  of editing it. `agent.build.disable`, `agent.build.hidden`, or disabling all
+ *  three pinned agents and declaring a new primary, all land the session on an
+ *  agent we do not own — the resolver deletes a disabled agent before
+ *  `default_agent` is read, then falls back to the first visible primary.
+ *  Pinning `disable: false`/`hidden: false` closes exactly those and was
+ *  rejected: it re-enables `build` for a user who deliberately turned it off,
+ *  and it does not close the class, because opencode accepts unknown top-level
+ *  keys silently so the aliases cannot be enumerated. Do not add it without
+ *  reading transformEnv first — the cheaper attack is not through these keys.
  *
  *  fullAuto is the user asking for no gate at all, so it hands over the
  *  top-level key and pins nothing. */
@@ -299,7 +341,13 @@ export function permissionEnv(existing: string | undefined, fullAuto: boolean): 
   for (const name of PINNED_AGENTS) {
     agent[name] = { ...plainObject(callerAgents[name]), permission: ASK_POLICY };
   }
-  return JSON.stringify({ ...base, agent, permission: ASK_POLICY, default_agent: "build" });
+  // `mode` gets the same treatment rather than riding through the `...base`
+  // spread untouched: it is the key path that outranks `agent`, so leaving a
+  // caller's copy of it in place would hand back what the agent pin just took.
+  const callerModes = plainObject(base.mode);
+  const mode: Record<string, unknown> = { ...callerModes };
+  mode[PINNED_MODE_AGENT] = { ...plainObject(callerModes[PINNED_MODE_AGENT]), permission: ASK_POLICY };
+  return JSON.stringify({ ...base, agent, mode, permission: ASK_POLICY, default_agent: "build" });
 }
 
 const support: AcpSupport = {
@@ -338,20 +386,35 @@ const support: AcpSupport = {
     //     `bash: allow`. cacheKey already names both as things that change what
     //     opencode resolves — same reasoning, other half of the driver.
     //
-    // OPENCODE_DISABLE_PROJECT_CONFIG closes the workspace route: a repository's
-    // opencode.json or .opencode/agent/*.md could otherwise carry a per-agent
-    // block. The cost is real and deliberate — a repository's own opencode
-    // config is ignored while an OpenMausBot bot works in it, including MCP
-    // servers it defines — and we take it because `edit` is allowed here and a
-    // fresh child spawns per turn, so an agent that could write
-    // .opencode/agent/build.md would hold uncarded shell on its very next turn.
+    // OPENCODE_DISABLE_PROJECT_CONFIG closes the workspace route, and that one
+    // is a real boundary: a repository OpenMausBot clones cannot lower the
+    // policy, because its opencode.json and .opencode/agent/*.md are not read at
+    // all. The cost is real and deliberate — that repository's own opencode
+    // config is ignored while a bot works in it, MCP servers it defines
+    // included — and we take it because `edit` is allowed here and a fresh child
+    // spawns per turn, so an agent that could write .opencode/agent/build.md
+    // would hold uncarded shell on its very next turn.
     //
     // The user's GLOBAL config still loads, and we neither disable it nor could:
-    // it is where their providers and MCP servers live. It simply can no longer
-    // OUTRANK the policy, because permissionEnv now owns `permission`,
-    // `agent.<name>.permission` and `default_agent`. An earlier version of this
-    // comment presented the surviving global config as a pure benefit; it was
-    // also the open half of the escalation this driver claims to close.
+    // it is where their providers and MCP servers live. permissionEnv pins four
+    // of its key paths, which stops a config that was ALREADY hostile or
+    // misconfigured from outranking the policy through them.
+    //
+    // That is not a boundary against the agent, and nothing here should be
+    // written as if it were. core.ts runs a turn in
+    // `turn.cwd ?? config.workspace ?? homedir()` and this policy allows `edit`,
+    // so an agent working in the default cwd can write
+    // ~/.config/opencode/opencode.json itself — either a `permission` block on
+    // some key path we have not pinned, or an `mcp` block, which 1.18.18 runs as
+    // an arbitrary command at the next session/new with no card at all. Pinning
+    // more key paths does not reach this: `mcp` cannot be pinned away without
+    // deleting the user's own MCP servers, and unknown top-level keys are
+    // accepted silently, so the list cannot be closed by enumeration. The claude
+    // driver carries the identical exposure (claude.ts:339
+    // `cwd: turn.cwd ?? homedir()`, claude.ts:254 `--permission-mode
+    // acceptEdits`), so this is a property of the application's
+    // working-directory default rather than of this engine, and the fix is to
+    // give a turn a real workspace — not to add another key here.
     delete env.OPENCODE_PERMISSION;
     delete env.OPENCODE_CONFIG;
     delete env.OPENCODE_CONFIG_DIR;

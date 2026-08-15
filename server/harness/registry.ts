@@ -163,8 +163,16 @@ export class ProviderRegistry {
         // failed discovery falls back to the compiled-in list rather than
         // emptying the picker, same as a failed snapshot downgrades instead
         // of throwing.
+        //
+        // Only when the snapshot says the engine is there, though. Discovery
+        // spawns the CLI, the picker re-probes /api/instances on every window
+        // focus, and a driver is free not to cache a failed probe — so an
+        // engine the user never installs would otherwise cost a doomed spawn
+        // per focus event, forever, and on Windows each one is a full
+        // PATH x PATHEXT scan. The snapshot already answered "is the binary
+        // there"; there is nothing to ask a binary that is not.
         let models = inst.models;
-        if (inst.catalog) {
+        if (inst.catalog && snapshot.state === "available") {
           try {
             models = await inst.catalog();
           } catch {

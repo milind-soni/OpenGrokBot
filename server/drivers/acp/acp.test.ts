@@ -20,7 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
-import { parseModels } from "./opencode.ts";
+import { __catalogTestHooks, discoverCatalog, parseModels } from "./opencode.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -718,5 +718,69 @@ describe("opencode catalog parsing", () => {
       { id: "anthropic/claude-opus-5", label: "claude-opus-5" },
       { id: "ollama/qwen3-coder:latest", label: "qwen3-coder:latest" },
     ]);
+  });
+});
+
+describe("opencode catalog discovery", () => {
+  beforeEach(() => {
+    __catalogTestHooks.reset();
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free,anthropic/claude-opus-5";
+  });
+  afterEach(() => {
+    __catalogTestHooks.reset();
+    delete process.env.FAKE_ACP_MODELS;
+    delete process.env.FAKE_ACP_DEFAULT_MODEL;
+    delete process.env.FAKE_ACP_CONFIG_FAILS;
+  });
+
+  it("uses the CLI's own resolved default when it is in the catalog", async () => {
+    process.env.FAKE_ACP_DEFAULT_MODEL = "anthropic/claude-opus-5";
+    const catalog = await discoverCatalog(FAKE_CLI, process.env);
+    expect(catalog.default).toBe("anthropic/claude-opus-5");
+    expect(catalog.options).toHaveLength(2);
+  });
+
+  it("falls back to the first entry when debug config fails", async () => {
+    process.env.FAKE_ACP_CONFIG_FAILS = "1";
+    const catalog = await discoverCatalog(FAKE_CLI, process.env);
+    expect(catalog.default).toBe("opencode/hy3-free");
+  });
+
+  it("falls back to the first entry when the reported default is not in the catalog", async () => {
+    process.env.FAKE_ACP_DEFAULT_MODEL = "gone/removed-model";
+    const catalog = await discoverCatalog(FAKE_CLI, process.env);
+    expect(catalog.default).toBe("opencode/hy3-free");
+  });
+
+  it("reports an empty catalog rather than inventing one", async () => {
+    process.env.FAKE_ACP_MODELS = "";
+    const catalog = await discoverCatalog(FAKE_CLI, process.env);
+    expect(catalog).toEqual({ default: "", options: [] });
+  });
+
+  it("serves the cache until the TTL expires, on an injected clock", async () => {
+    let now = 1_000;
+    __catalogTestHooks.setClock(() => now);
+    const first = await discoverCatalog(FAKE_CLI, process.env);
+    expect(first.options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS = "only/one";
+    now += 59_000;
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
+
+    now += 2_000;
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toEqual([{ id: "only/one", label: "one" }]);
+  });
+
+  it("does not serve one instance's catalog to another home", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    const a = await discoverCatalog(FAKE_CLI, { ...process.env, HOME: "/tmp/home-a" });
+    expect(a.options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS = "only/one";
+    // same binary, same instant, different home: must not hit A's entry
+    const b = await discoverCatalog(FAKE_CLI, { ...process.env, HOME: "/tmp/home-b" });
+    expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
   });
 });

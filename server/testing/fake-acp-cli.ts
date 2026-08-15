@@ -24,6 +24,8 @@
 //                        core.ts has something to catch
 //   FAKE_ACP_USAGE_ROOT  put the prompt result's usage at the root instead of
 //                        under _meta (what opencode 1.18.18 actually does)
+//   FAKE_ACP_DEFAULT_MODEL  what `debug config` reports as the resolved default
+//   FAKE_ACP_CONFIG_FAILS   make `debug config` exit non-zero
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
@@ -70,6 +72,16 @@ if (process.env.FAKE_ACP_DUMP) {
 }
 if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
+  process.exit(0);
+}
+// catalog surface, for the opencode driver's discovery path
+if (argv[0] === "models") {
+  process.stdout.write((process.env.FAKE_ACP_MODELS ?? "").split(",").filter(Boolean).join("\n") + "\n");
+  process.exit(0);
+}
+if (argv[0] === "debug" && argv[1] === "config") {
+  if (process.env.FAKE_ACP_CONFIG_FAILS) process.exit(1);
+  process.stdout.write(JSON.stringify({ model: process.env.FAKE_ACP_DEFAULT_MODEL ?? null }) + "\n");
   process.exit(0);
 }
 

@@ -776,9 +776,29 @@ describe("opencode catalog discovery", () => {
     __catalogTestHooks.setClock(() => clock);
     expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
 
+    // Change what a SUCCESSFUL probe would return as well, so a fresh probe
+    // that wrongly ignored the failure would visibly diverge from the stale
+    // value instead of coincidentally matching it.
+    process.env.FAKE_ACP_MODELS = "only/one";
     process.env.FAKE_ACP_MODELS_FAILS = "1";
-    clock += 61_000; // past the TTL, so the cache is consulted as a fallback only
-    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
+    clock += 61_000; // past the TTL, so the cache is a fallback and not a hit
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toEqual([
+      { id: "opencode/hy3-free", label: "hy3-free" },
+      { id: "anthropic/claude-opus-5", label: "claude-opus-5" },
+    ]);
+  });
+
+  it("does not collide two homes whose paths contain the key separator", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    // "a b" + "c" and "a" + "b c" join to the same string under a naive
+    // space-joined key, and Windows paths routinely contain spaces
+    const first = await discoverCatalog(FAKE_CLI, { ...process.env, HOME: "a b", XDG_CONFIG_HOME: "c" });
+    expect(first.options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS = "only/one";
+    const second = await discoverCatalog(FAKE_CLI, { ...process.env, HOME: "a", XDG_CONFIG_HOME: "b c" });
+    expect(second.options).toEqual([{ id: "only/one", label: "one" }]);
   });
 
   it("serves the cache until the TTL expires, on an injected clock", async () => {

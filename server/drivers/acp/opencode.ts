@@ -65,11 +65,22 @@ async function defaultModel(cli: string, env: Env): Promise<string | null> {
 
 /** Two instances can point at the same binary through different homes or
  *  config paths and legitimately see different catalogs, so the key carries
- *  everything that changes what opencode resolves. */
+ *  everything that changes what opencode resolves.
+ *
+ *  JSON rather than a joined string: joining on a separator lets a value that
+ *  contains that separator collide with a different split of the same
+ *  characters (HOME "a b" + XDG "c" against HOME "a" + XDG "b c"), and Windows
+ *  paths routinely contain spaces. JSON also keeps an unset variable distinct
+ *  from one explicitly set to empty. */
 function cacheKey(cli: string, env: Env): string {
-  return [cli, env.HOME, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_DIR].join(
-    " ",
-  );
+  return JSON.stringify([
+    cli,
+    env.HOME,
+    env.XDG_CONFIG_HOME,
+    env.XDG_DATA_HOME,
+    env.OPENCODE_CONFIG,
+    env.OPENCODE_CONFIG_DIR,
+  ]);
 }
 
 export async function discoverCatalog(cli: string, env: Env): Promise<ModelCatalog> {

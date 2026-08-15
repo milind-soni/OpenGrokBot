@@ -159,12 +159,24 @@ export class ProviderRegistry {
         } catch (e) {
           snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };
         }
+        // A discovered catalog is the truth for engines that have one; a
+        // failed discovery falls back to the compiled-in list rather than
+        // emptying the picker, same as a failed snapshot downgrades instead
+        // of throwing.
+        let models = inst.models;
+        if (inst.catalog) {
+          try {
+            models = await inst.catalog();
+          } catch {
+            /* discovery failed — keep the static catalog */
+          }
+        }
         return {
           instanceId: inst.instanceId,
           driverKind: inst.driverKind,
           displayName: inst.displayName ?? inst.driverKind,
           snapshot,
-          models: inst.models,
+          models,
           capabilities: {
             computerMcp: inst.adapter.capabilities.computerMcp === true,
             agentsMcp: inst.adapter.capabilities.agentsMcp === true,

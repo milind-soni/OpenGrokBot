@@ -123,4 +123,51 @@ describe("ProviderRegistry", () => {
     expect(registry.entries()).toHaveLength(0);
     expect(registry.get("a")).toBeNull();
   });
+
+  it("describe() prefers a discovered catalog and falls back when it rejects", async () => {
+    const base = {
+      instanceId: "dyn",
+      driverKind: "dynamic",
+      displayName: "Dynamic",
+      enabled: true,
+      models: { default: "static-a", options: [{ id: "static-a", label: "Static A" }] },
+      snapshot: async () => ({ state: "available" as const }),
+      adapter: { capabilities: {} } as any,
+      dispose: async () => {},
+    };
+
+    const ok = new ProviderRegistry([
+      {
+        driverKind: "dynamic",
+        metadata: { displayName: "Dynamic" },
+        decodeConfig: () => ({}),
+        defaultConfig: () => ({}),
+        models: base.models,
+        create: async () => ({
+          ...base,
+          catalog: async () => ({ default: "live-a", options: [{ id: "live-a", label: "Live A" }] }),
+        }),
+      } as any,
+    ]);
+    await ok.load({ dyn: { driver: "dynamic" } });
+    expect((await ok.describe())[0].models.default).toBe("live-a");
+
+    const broken = new ProviderRegistry([
+      {
+        driverKind: "dynamic",
+        metadata: { displayName: "Dynamic" },
+        decodeConfig: () => ({}),
+        defaultConfig: () => ({}),
+        models: base.models,
+        create: async () => ({
+          ...base,
+          catalog: async () => {
+            throw new Error("cli exploded");
+          },
+        }),
+      } as any,
+    ]);
+    await broken.load({ dyn: { driver: "dynamic" } });
+    expect((await broken.describe())[0].models.default).toBe("static-a");
+  });
 });

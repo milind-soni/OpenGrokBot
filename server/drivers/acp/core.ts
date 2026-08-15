@@ -28,7 +28,6 @@ import type {
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
-  ModelCatalog,
   RuntimeEvent,
   RuntimeEventListener,
   SendTurnInput,
@@ -65,13 +64,14 @@ export interface AcpSupport {
   effortLevels?: readonly EffortLevel[];
   /** Discover the model catalog by ASKING THE CLI, for harnesses whose list
    *  depends on what the user has configured locally. Omitted → `models` is it.
+   *  Must bound its own latency (see ProviderInstance.catalog).
    *
    *  Distinct from resolveModels below, and the difference is cost, not intent.
    *  resolveModels reads a file: instant, so create() can await it and hand
    *  every consumer a resolved `models`. This spawns a process — ~1.1s for
    *  `opencode models` — which is too slow to sit in create() and too variable
-   *  to leave unbounded, so it is called on demand and must bound its own
-   *  latency (see ProviderInstance.catalog). Pick by what discovery costs. */
+   *  to leave unbounded, so it is called on demand. Pick by what discovery
+   *  costs. */
   catalog?(config: AcpConfig, env: Record<string, string | undefined>): Promise<ModelCatalog>;
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;

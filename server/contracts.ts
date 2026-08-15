@@ -246,9 +246,10 @@ export interface ProviderInstance {
    *  `models` is the whole catalog.
    *
    *  This one asks the CLI, so it is NOT free the way refreshModels is, and it
-   *  MUST bound its own latency: describe() awaits every instance together, so
-   *  one call that never settles stalls the whole /api/instances response — and
-   *  server startup, which builds the default bot selection from it. */
+   *  MUST bound its own latency, the way snapshot() does with its CLI timeout:
+   *  describe() awaits every instance together, so one call that never settles
+   *  stalls the whole /api/instances response — and server startup, which
+   *  builds the default bot selection from it. */
   catalog?(): Promise<ModelCatalog>;
   readonly adapter: ProviderAdapter;
   snapshot(): Promise<ProviderSnapshot>;

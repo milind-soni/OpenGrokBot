@@ -20,7 +20,17 @@ import { execCli } from "../../procs.ts";
 type Env = Record<string, string | undefined>;
 
 const CATALOG_TTL_MS = 60_000;
-const CLI_TIMEOUT_MS = 20_000;
+// Bounds every execCli call in this file (`opencode models` and `debug
+// config`). ProviderInstance.catalog's contract requires discovery to bound
+// its own latency: describe() awaits every instance together, so a call
+// that never settles stalls the whole /api/instances response, and server
+// startup with it, not just this row. Measured at ~1.1s against 1.18.18;
+// 10s leaves generous slack for a slower machine while landing close to
+// core.ts's 8s snapshot() version-probe ceiling — describe() awaits that
+// and this back to back for the same instance, so the two bounds stack,
+// and the previous 20s let this half alone run two and a half times as
+// long as the other.
+const CLI_TIMEOUT_MS = 10_000;
 
 // Injectable so the TTL can be tested by moving time rather than waiting for
 // it — a test that needs a sleep to pass is wrong.

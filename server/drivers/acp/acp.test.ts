@@ -20,6 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
+import { parseModels } from "./opencode.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -682,5 +683,31 @@ describe("ACP snapshot", () => {
     } finally {
       await instance.dispose();
     }
+  });
+});
+
+describe("opencode catalog parsing", () => {
+  it("keeps one qualified id per line and labels it with the model part", () => {
+    expect(parseModels("anthropic/claude-opus-5\nollama/qwen3-coder:latest\n")).toEqual([
+      { id: "anthropic/claude-opus-5", label: "claude-opus-5" },
+      { id: "ollama/qwen3-coder:latest", label: "qwen3-coder:latest" },
+    ]);
+  });
+
+  it("drops anything that is not a qualified id rather than guessing", () => {
+    expect(parseModels("Available models:\n\nanthropic/claude-opus-5\nnot-qualified\n  indented/thing\n")).toEqual([
+      { id: "anthropic/claude-opus-5", label: "claude-opus-5" },
+    ]);
+  });
+
+  it("returns nothing for empty output", () => {
+    expect(parseModels("")).toEqual([]);
+    expect(parseModels("\n\n")).toEqual([]);
+  });
+
+  it("keeps only the first slash as the provider boundary", () => {
+    expect(parseModels("ollama/hf.co/unsloth/Qwen3-32B-GGUF:Q4_K_M\n")).toEqual([
+      { id: "ollama/hf.co/unsloth/Qwen3-32B-GGUF:Q4_K_M", label: "hf.co/unsloth/Qwen3-32B-GGUF:Q4_K_M" },
+    ]);
   });
 });

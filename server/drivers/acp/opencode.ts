@@ -49,9 +49,25 @@ export const __catalogTestHooks = {
   },
 };
 
-/** Run a read-only opencode subcommand, resolving to null on any failure.
+/** Run an opencode subcommand, resolving to null on any failure.
  *  `opencode models` is ~15 KB; the buffer is generous so a machine with many
- *  providers cannot silently truncate its own catalog. */
+ *  providers cannot silently truncate its own catalog.
+ *
+ *  These are NOT read-only, and an earlier version of this comment said they
+ *  were — a maintainer can disprove it in one command, so say it here instead.
+ *  Measured on 1.18.18, one `opencode models` against a genuinely empty HOME:
+ *
+ *      ~/.cache/opencode/models.json                3.8 MB, created
+ *      ~/.config/opencode/opencode.jsonc            seeded (with a .gitignore)
+ *      ~/.local/share/opencode/opencode.db{,-wal,-shm}  created
+ *      ~/.local/state/opencode/locks/<hash>.lock/   created
+ *
+ *  The working directory is untouched. Choosing these over an ACP probe still
+ *  stands — a stray model cache is not a stray session, and no turn, no
+ *  session and no prompt is created — but it is a smaller claim than "no side
+ *  effect at all". One consequence worth knowing before writing a test: the
+ *  FIRST probe on a fresh HOME returned 8 models and the second 7, so the free
+ *  OpenCode Zen list is not an invariant and must not be asserted as one. */
 function run(cli: string, args: string[], env: Env): Promise<string | null> {
   return new Promise((resolve) => {
     execCli(cli, args, { timeout: CLI_TIMEOUT_MS, env, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) =>
@@ -63,7 +79,16 @@ function run(cli: string, args: string[], env: Env): Promise<string | null> {
 /** The model opencode itself would use. `debug config` is a debug command with
  *  no stability promise, so its failure is absorbed: the default falls back to
  *  the first catalog entry, which on a machine with no credentials is a free
- *  OpenCode Zen model. */
+ *  OpenCode Zen model.
+ *
+ *  `raw` IS A SECRET. `debug config` echoes the whole resolved config, which on
+ *  a real machine carries MCP server credentials — measured: a token in an
+ *  `mcp.*.environment` entry and a token inside an argv array both came back
+ *  verbatim. So it is read for `.model` and dropped: never logged, never
+ *  cached, and run() swallows the error object too (which would quote the
+ *  command line on a spawn failure). Keep it that way — a `console.error(raw)`
+ *  added while debugging this function would put the user's tokens in a log
+ *  file. CONTRIBUTING.md:113-117 is the standing rule. */
 async function defaultModel(cli: string, env: Env): Promise<string | null> {
   const raw = await run(cli, ["debug", "config"], env);
   if (!raw) return null;
@@ -158,13 +183,19 @@ export function parseModels(stdout: string): Array<{ id: string; label: string }
 // edits go through, anything that leaves the sandbox asks. `*: ask` is the
 // conservative half — it also catches tools claude has no equivalent for.
 //
-// Two details are not decoration. `read` keeps opencode's own `.env` guard: the
-// stock CLI ships `read *.env → ask`, and a blanket `read: "allow"` appends
-// after it, so under opencode's last-match-wins evaluation the agent would read
-// secrets with no card where the stock CLI would have asked. And the
-// bookkeeping tools are allowed on purpose: with a bare `*: ask` the user gets
-// an approval card for every directory listing and every to-do update, which
-// trains them to click through cards — the opposite of what this policy is for.
+// Two details are not decoration. The `read` sub-map exists to carry opencode's
+// own `.env` guard THROUGH our policy rather than to invent it: measured on
+// 1.18.18, the stock CLI already resolves `read *` allow / `*.env` ask /
+// `*.env.*` ask / `*.env.example` allow with nothing injected at all. But our
+// `"*": "ask"` is appended after those built-ins, and a bare `read: "allow"`
+// after that would be the last match for every read — so omitting the sub-map
+// makes every read a card, and flattening it to `"allow"` reads secrets with no
+// card where the stock CLI would have asked. This is defence-in-depth over
+// opencode's defaults, not the only thing standing between a bot and a `.env`.
+// And the bookkeeping tools are allowed on purpose: with a bare `*: ask` the
+// user gets an approval card for every directory listing and every to-do
+// update, which trains them to click through cards — the opposite of what this
+// policy is for.
 const ASK_POLICY = {
   "*": "ask",
   read: { "*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow" },

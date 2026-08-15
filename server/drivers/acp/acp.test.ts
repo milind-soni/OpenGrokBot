@@ -1038,4 +1038,32 @@ describe("opencode catalog discovery", () => {
     const b = await discoverCatalog(FAKE_CLI, { ...process.env, HOME: "/tmp/home-b" });
     expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
   });
+
+  it("does not serve one instance's catalog to another config content", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    // OPENCODE_CONFIG_CONTENT can declare a whole provider, so two instances
+    // differing only by a per-instance `environment` entry legitimately see
+    // different catalogs. Measured on 1.18.18: 473 -> 474 lines.
+    const a = await discoverCatalog(FAKE_CLI, { ...process.env, OPENCODE_CONFIG_CONTENT: '{"x":1}' });
+    expect(a.options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS = "only/one";
+    const b = await discoverCatalog(FAKE_CLI, { ...process.env, OPENCODE_CONFIG_CONTENT: '{"x":2}' });
+    expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
+  });
+
+  it("does not serve one instance's catalog to another Windows home", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    // On Windows HOME and the XDG_* vars are all undefined, so keying only on
+    // them collapses every opencode instance onto one entry — a silent failure
+    // on a platform we cannot exercise from here.
+    const a = await discoverCatalog(FAKE_CLI, { ...process.env, USERPROFILE: "C:\\Users\\a" });
+    expect(a.options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS = "only/one";
+    const b = await discoverCatalog(FAKE_CLI, { ...process.env, USERPROFILE: "C:\\Users\\b" });
+    expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
+  });
 });

@@ -76,8 +76,23 @@ async function defaultModel(cli: string, env: Env): Promise<string | null> {
 }
 
 /** Two instances can point at the same binary through different homes or
- *  config paths and legitimately see different catalogs, so the key carries
- *  everything that changes what opencode resolves.
+ *  configs and legitimately see different catalogs, so the key carries where
+ *  opencode reads its config from AND what that config says.
+ *
+ *  It does NOT carry ambient provider credentials. Measured against 1.18.18,
+ *  each of these alone changes what `opencode models` lists — the keys are not
+ *  validated, so a bogus value is enough: ANTHROPIC_API_KEY (7 -> 22 lines),
+ *  OPENAI_API_KEY (7 -> 55), OPENROUTER_API_KEY (7 -> 358). Enumerating every
+ *  provider variable opencode auto-detects would be a list that goes stale
+ *  upstream, so the honest statement of the bound is: two instances differing
+ *  ONLY by an API key share one catalog for up to CATALOG_TTL_MS. Keying on the
+ *  whole env is not the alternative — three tests mutate FAKE_ACP_MODELS as
+ *  their "did it re-probe" signal, and a whole-env key would make every such
+ *  mutation a cache miss.
+ *
+ *  The Windows half is not decoration either: HOME and the XDG_* variables are
+ *  all undefined there, so a key naming only those collapses every opencode
+ *  instance onto one entry — the silent-failure shape CONTRIBUTING.md forbids.
  *
  *  JSON rather than a joined string: joining on a separator lets a value that
  *  contains that separator collide with a different split of the same
@@ -90,8 +105,15 @@ function cacheKey(cli: string, env: Env): string {
     env.HOME,
     env.XDG_CONFIG_HOME,
     env.XDG_DATA_HOME,
+    // the Windows equivalents of the three above
+    env.USERPROFILE,
+    env.APPDATA,
+    env.LOCALAPPDATA,
     env.OPENCODE_CONFIG,
     env.OPENCODE_CONFIG_DIR,
+    // can declare a whole provider, so it changes the list and not just where
+    // the list is read from — and transformEnv writes it per instance
+    env.OPENCODE_CONFIG_CONTENT,
   ]);
 }
 

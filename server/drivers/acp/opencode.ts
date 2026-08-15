@@ -135,34 +135,56 @@ export function parseModels(stdout: string): Array<{ id: string; label: string }
 // Mirrors the claude driver's default --permission-mode acceptEdits: reads and
 // edits go through, anything that leaves the sandbox asks. `*: ask` is the
 // conservative half — it also catches tools claude has no equivalent for.
+//
+// Two details are not decoration. `read` keeps opencode's own `.env` guard: the
+// stock CLI ships `read *.env → ask`, and a blanket `read: "allow"` appends
+// after it, so under opencode's last-match-wins evaluation the agent would read
+// secrets with no card where the stock CLI would have asked. And the
+// bookkeeping tools are allowed on purpose: with a bare `*: ask` the user gets
+// an approval card for every directory listing and every to-do update, which
+// trains them to click through cards — the opposite of what this policy is for.
 const ASK_POLICY = {
   "*": "ask",
-  read: "allow",
+  read: { "*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow" },
   glob: "allow",
   grep: "allow",
   lsp: "allow",
+  list: "allow",
+  todowrite: "allow",
+  question: "allow",
   edit: "allow",
   bash: "ask",
   webfetch: "ask",
   websearch: "ask",
   external_directory: "ask",
-};
+} satisfies Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">>;
 
 /** Compose the child's OPENCODE_CONFIG_CONTENT.
  *
  *  OPENCODE_CONFIG_CONTENT rather than the undocumented OPENCODE_PERMISSION:
- *  it is documented, and it merges AFTER the project's own opencode.json, so a
- *  repository cannot lower the policy we set. We overwrite only `permission`,
- *  so the user's MCP servers, agents and skills survive — but we always win on
- *  that one key, which is the whole point. */
-function permissionEnv(existing: string | undefined, fullAuto: boolean): string {
+ *  it is documented, and it merges after every config file, so it wins on the
+ *  top-level `permission` key. We overwrite only that key, so the user's MCP
+ *  servers, agents and skills survive.
+ *
+ *  It is NOT sufficient on its own, and the earlier version of this comment
+ *  claimed otherwise. Measured against 1.18.18: a PER-AGENT `permission` block —
+ *  from a repository's opencode.json or a .opencode/agent/*.md frontmatter — is
+ *  appended after the top-level one, and evaluation is last-match-wins, so a
+ *  working directory could restore `bash: allow`. Worse, `edit` is deliberately
+ *  allowed here, and a fresh child is spawned per turn, so an agent could write
+ *  that file itself and hold uncarded shell on its very next turn. transformEnv
+ *  closes that route separately; see it for the rest of the story. */
+export function permissionEnv(existing: string | undefined, fullAuto: boolean): string {
   let base: Record<string, unknown> = {};
   if (existing) {
     try {
       const parsed = JSON.parse(existing);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed;
+      else console.error("opencode: ignoring a non-object OPENCODE_CONFIG_CONTENT");
     } catch {
-      /* not our JSON to repair — replace it rather than ship a broken config */
+      // Not our JSON to repair. Say so: silently dropping it would make the
+      // user's MCP servers vanish with nothing to grep for.
+      console.error("opencode: ignoring an unparseable OPENCODE_CONFIG_CONTENT");
     }
   }
   return JSON.stringify({ ...base, permission: fullAuto ? "allow" : ASK_POLICY });
@@ -177,14 +199,36 @@ const support: AcpSupport = {
   // honest fallback if discovery fails. An empty list makes the engine report
   // itself unusable, which beats advertising models the user cannot run.
   models: { default: "", options: [] },
+  // The list is per-machine, so it is read from the CLI on demand rather than
+  // compiled in; discoverCatalog bounds its own latency, as the contract asks.
   catalog: (config, env) => discoverCatalog(config.cli, env),
+  // `opencode acp` accepts no -m, so the model has to be set through the
+  // session's config option before the prompt goes out.
   selectModel: { configId: "model" },
 
-  // `opencode acp` takes no -m: the model rides session/set_config_option.
   spawnArgs: () => ["acp"],
 
   transformEnv: (env, config) => {
     env.OPENCODE_CONFIG_CONTENT = permissionEnv(env.OPENCODE_CONFIG_CONTENT, config.fullAuto);
+    if (config.fullAuto) return;
+    // Injecting the top-level policy is not enough on its own. Two other routes
+    // were measured to land AFTER it, and opencode takes the last matching rule:
+    //
+    //   - OPENCODE_PERMISSION, which opencode applies after every config merge.
+    //     It is inherited from our own process env, so strip it from the child
+    //     the way kimi strips a stray API key.
+    //   - A per-agent `permission` block reachable from the working directory,
+    //     via a repository's opencode.json or a .opencode/agent/*.md. Disabling
+    //     project config closes both of those at once (verified: the hostile
+    //     rules disappear from `opencode debug agent build`).
+    //
+    // The cost is real and deliberate: a repository's own opencode config is
+    // ignored while an OpenMausBot bot works in it, including MCP servers it
+    // defines. The user's global config still applies. We take that trade
+    // because `edit` is allowed here, so an agent that could write
+    // .opencode/agent/build.md would hold uncarded shell on its next turn.
+    delete env.OPENCODE_PERMISSION;
+    env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
   },
 
   // The only advertised method is {id:"opencode-login"}, whose own description

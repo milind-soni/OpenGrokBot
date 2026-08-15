@@ -20,7 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
-import { __catalogTestHooks, discoverCatalog, OpenCodeAgentDriver, parseModels } from "./opencode.ts";
+import { __catalogTestHooks, discoverCatalog, OpenCodeAgentDriver, parseModels, permissionEnv } from "./opencode.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -178,6 +178,7 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
+    delete process.env.OPENCODE_PERMISSION;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -521,8 +522,36 @@ describe("ACP turns (fake CLI)", () => {
     expect(injected.permission.bash).toBe("ask");
     expect(injected.permission["*"]).toBe("ask");
     expect(injected.permission.edit).toBe("allow");
+    // opencode's own `.env` guard survives our blanket read allowance
+    expect(injected.permission.read).toMatchObject({ "*": "allow", "*.env": "ask" });
     // the user's other settings survive: we replace one key, not the file
     expect(injected.mcp).toEqual({ keepme: {} });
+  });
+
+  it("opencode shuts the two routes that outrank the injected policy", async () => {
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const dump = join(scratch, "opencode-routes.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    instance = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-routes",
+      displayName: undefined,
+      environment: {},
+      // OPENCODE_PERMISSION is applied by opencode after every config merge, so
+      // an inherited one would beat the policy we just injected
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    recorder = recordEvents(instance.adapter);
+    process.env.OPENCODE_PERMISSION = JSON.stringify({ bash: "allow" });
+
+    await instance.adapter.sendTurn({ threadId: "t-oc-routes", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const { env } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(env.OPENCODE_PERMISSION).toBeUndefined();
+    // a per-agent permission block in the working directory outranks ours too;
+    // disabling project config is what removes that route
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
   });
 
   it("opencode hands everything to the agent in fullAuto", async () => {
@@ -541,8 +570,11 @@ describe("ACP turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-oc-auto", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
 
-    const injected = JSON.parse(JSON.parse(readFileSync(dump, "utf8")).env.OPENCODE_CONFIG_CONTENT);
-    expect(injected.permission).toBe("allow");
+    const { env } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission).toBe("allow");
+    // fullAuto means the user asked for no gate at all, so the project's own
+    // config is left alone rather than suppressed
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
   });
 
   it("opencode spawns the acp subcommand and passes no -m", async () => {
@@ -790,6 +822,29 @@ describe("ACP snapshot", () => {
       delete process.env.FAKE_ACP_MODELS;
       await ready.dispose();
     }
+  });
+});
+
+describe("opencode permission policy", () => {
+  const perm = (existing?: string) => JSON.parse(permissionEnv(existing, false)).permission;
+
+  it("wins over a permission key the caller already set", () => {
+    expect(perm(JSON.stringify({ permission: "allow" })).bash).toBe("ask");
+  });
+
+  it("keeps the caller's other settings", () => {
+    const merged = JSON.parse(permissionEnv(JSON.stringify({ mcp: { keepme: {} } }), false));
+    expect(merged.mcp).toEqual({ keepme: {} });
+  });
+
+  it("falls back to a bare policy on any shape that is not a plain object", () => {
+    for (const junk of ["{not json", "[1,2]", '"a string"', "42", "null"]) {
+      expect(perm(junk).bash).toBe("ask");
+    }
+  });
+
+  it("hands everything over in fullAuto", () => {
+    expect(JSON.parse(permissionEnv(undefined, true)).permission).toBe("allow");
   });
 });
 

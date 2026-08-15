@@ -78,7 +78,13 @@ export async function discoverCatalog(cli: string, env: Env): Promise<ModelCatal
   if (hit && now() - hit.at < CATALOG_TTL_MS) return hit.value;
 
   const [listing, configured] = await Promise.all([run(cli, ["models"], env), defaultModel(cli, env)]);
-  const options = listing ? parseModels(listing) : [];
+  // A CLI that could not run at all is not a CLI reporting no models. Caching
+  // that would keep the engine dark for the whole TTL after the problem
+  // cleared, and re-opening the picker would not help. Serve the last good
+  // catalog if we have one, store nothing, and let the next call retry.
+  if (listing === null) return hit?.value ?? { default: "", options: [] };
+
+  const options = parseModels(listing);
   const chosen = configured && options.some((o) => o.id === configured) ? configured : (options[0]?.id ?? "");
   const value: ModelCatalog = { default: chosen, options };
   cache.set(key, { at: now(), value });

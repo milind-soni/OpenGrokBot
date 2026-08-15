@@ -26,6 +26,8 @@
 //                        under _meta (what opencode 1.18.18 actually does)
 //   FAKE_ACP_DEFAULT_MODEL  what `debug config` reports as the resolved default
 //   FAKE_ACP_CONFIG_FAILS   make `debug config` exit non-zero
+//   FAKE_ACP_MODELS_FAILS   make `models` exit non-zero (a CLI that cannot run,
+//                           as opposed to one reporting an empty catalog)
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
@@ -76,6 +78,7 @@ if (argv.includes("--version")) {
 }
 // catalog surface, for the opencode driver's discovery path
 if (argv[0] === "models") {
+  if (process.env.FAKE_ACP_MODELS_FAILS) process.exit(1);
   process.stdout.write((process.env.FAKE_ACP_MODELS ?? "").split(",").filter(Boolean).join("\n") + "\n");
   process.exit(0);
 }

@@ -731,6 +731,7 @@ describe("opencode catalog discovery", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_DEFAULT_MODEL;
     delete process.env.FAKE_ACP_CONFIG_FAILS;
+    delete process.env.FAKE_ACP_MODELS_FAILS;
   });
 
   it("uses the CLI's own resolved default when it is in the catalog", async () => {
@@ -756,6 +757,28 @@ describe("opencode catalog discovery", () => {
     process.env.FAKE_ACP_MODELS = "";
     const catalog = await discoverCatalog(FAKE_CLI, process.env);
     expect(catalog).toEqual({ default: "", options: [] });
+  });
+
+  it("does not cache a CLI that could not run, so the next call retries", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    process.env.FAKE_ACP_MODELS_FAILS = "1";
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toEqual([]);
+
+    delete process.env.FAKE_ACP_MODELS_FAILS;
+    // Same instant, so the clock cannot be what lets this through: only an
+    // uncached failure allows the second call to reach the CLI at all.
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
+  });
+
+  it("serves the last good catalog when a later probe cannot run", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
+
+    process.env.FAKE_ACP_MODELS_FAILS = "1";
+    clock += 61_000; // past the TTL, so the cache is consulted as a fallback only
+    expect((await discoverCatalog(FAKE_CLI, process.env)).options).toHaveLength(2);
   });
 
   it("serves the cache until the TTL expires, on an injected clock", async () => {

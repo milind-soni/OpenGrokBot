@@ -1017,6 +1017,20 @@ describe("opencode catalog discovery", () => {
     expect(catalog.options).toHaveLength(2);
   });
 
+  // A provider prefix is the CLI's to spell, never ours to build. Getting this
+  // wrong is silent at every layer we control and only fails at the last one:
+  // `session/set_config_option` answers "model not found: <id>" and core.ts
+  // turns that into a failed turn, so a whole picker can look healthy while
+  // none of its entries can run.
+  it("serves model ids exactly as the CLI spells them, adding no prefix", async () => {
+    process.env.FAKE_ACP_MODELS = "openai/gpt-5.6-sol,opencode/claude-opus-4-5";
+    const catalog = await discoverCatalog(FAKE_CLI, process.env);
+    expect(catalog.options.map((o) => o.id)).toEqual([
+      "openai/gpt-5.6-sol",
+      "opencode/claude-opus-4-5",
+    ]);
+  });
+
   it("falls back to the first entry when debug config fails", async () => {
     process.env.FAKE_ACP_CONFIG_FAILS = "1";
     const catalog = await discoverCatalog(FAKE_CLI, process.env);

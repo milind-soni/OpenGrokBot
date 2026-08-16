@@ -1144,6 +1144,47 @@ describe("opencode catalog discovery", () => {
     expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
   });
 
+  // The tests above call discoverCatalog directly, so they prove the cwd
+  // reaches execCli — not that the support computes it from the instance
+  // config. Drop `probeCwd(config)` from opencode.ts's `catalog` and every one
+  // of them still passes while the probe silently moves to the server's own
+  // directory. This one goes through instance.catalog() to close that gap.
+  it("probes a configured workspace, not wherever the server was launched", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    const gone = join(tmpdir(), "omb-opencode-workspace-gone");
+
+    const instance = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-workspace",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false, workspace: gone },
+    });
+    try {
+      // A workspace that does not exist makes the spawn itself fail, which is
+      // observable only if config.workspace reached execCli.
+      expect((await instance.catalog!()).options).toEqual([]);
+    } finally {
+      await instance.dispose();
+    }
+
+    // control: the same driver with a workspace that exists probes normally,
+    // so the empty result above is the cwd and not a broken fake CLI
+    const ok = await OpenCodeAgentDriver.create({
+      instanceId: "opencode-workspace-ok",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false, workspace: tmpdir() },
+    });
+    try {
+      expect((await ok.catalog!()).options).toHaveLength(2);
+    } finally {
+      await ok.dispose();
+    }
+  });
+
   it("does not serve one instance's catalog to another Windows home", async () => {
     let clock = 1_000;
     __catalogTestHooks.setClock(() => clock);

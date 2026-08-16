@@ -389,8 +389,15 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await request("turn/start", {
             threadId: codexThreadId,
             input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
-            // spread, not `effort: turn.effort ?? null` — an absent key leaves
-            // the thread's current effort alone, while null would clear it
+            // Spread, not `effort: turn.effort ?? null`. Probed against
+            // codex-cli 0.146.0: null is indistinguishable from an absent key
+            // — both leave the thread's current effort alone, emitting no
+            // thread/settings/updated, and thread/resume reads the old value
+            // back. The app-server offers no way to clear a level either:
+            // "" is rejected outright and thread/start takes no effort at
+            // all. So a thread keeps the last level it was sent until it is
+            // sent another, and choosing Default lands on the bot's next new
+            // thread rather than the current one.
             ...(turn.effort ? { effort: turn.effort } : {}),
           });
         } catch (e) {

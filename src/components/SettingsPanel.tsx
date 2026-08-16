@@ -279,8 +279,13 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           {!!engine?.capabilities?.effortLevels?.length && (
             <div className="rounded-xl bg-card p-4">
               <div className="text-[15px] font-medium text-ink">Effort</div>
+              {/* Says what the app does, not what the engine ends up at:
+                  Codex applies a level to the whole thread and has no way to
+                  take one back, so "currently: engine default" was a promise
+                  we could not keep for a thread that had already been sent
+                  one. Sending nothing is true on every engine. */}
               <div className="mt-0.5 text-[13px] text-ink-secondary">
-                How hard this bot thinks{bot.modelSelection.effort ? "" : " (currently: engine default)"}
+                How hard this bot thinks{bot.modelSelection.effort ? "" : " (Default: no level is sent)"}
               </div>
               <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
                 {([undefined, ...engine.capabilities.effortLevels] as const).map((level, i) => (

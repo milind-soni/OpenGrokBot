@@ -51,6 +51,9 @@ const support: AcpSupport = {
     "--permission-mode",
     config.fullAuto ? "bypassPermissions" : "default",
     ...(turn.model ? ["-m", turn.model] : []),
+    // long form on purpose: `--effort` is documented as an alias, and an
+    // alias is the part a CLI is free to rename
+    ...(turn.effort ? ["--reasoning-effort", turn.effort] : []),
     "agent",
     "stdio",
   ],

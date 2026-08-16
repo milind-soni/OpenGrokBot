@@ -466,6 +466,26 @@ describe("ACP turns (fake CLI)", () => {
     await create(KimiAgentDriver);
     expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
   });
+
+  it("passes effort to Grok, and omits the flag when unset", async () => {
+    const withEffort = join(scratch, "grok-effort.json");
+    await create(GrokAgentDriver);
+    process.env.FAKE_ACP_DUMP = withEffort;
+    await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "high" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(withEffort, "utf8"));
+    expect(seen.argv).toContain("--reasoning-effort");
+    expect(seen.argv[seen.argv.indexOf("--reasoning-effort") + 1]).toBe("high");
+
+    const without = join(scratch, "grok-no-effort.json");
+    await create(GrokAgentDriver);
+    process.env.FAKE_ACP_DUMP = without;
+    await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(without, "utf8")).argv).not.toContain("--reasoning-effort");
+  });
 });
 
 describe("ACP snapshot", () => {

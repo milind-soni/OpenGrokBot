@@ -392,7 +392,6 @@ describe("harness HTTP API", () => {
       prompt: "Review the incoming build event",
       botId: bots.body.bots[0].id,
       runOn: "maus",
-      durationMinutes: 30,
     });
     expect(created.status).toBe(201);
     expect(created.body.ingress).toMatchObject({ available: true, baseUrl: WEBHOOK_BASE });

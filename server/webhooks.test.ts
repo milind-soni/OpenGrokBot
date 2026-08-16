@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,7 +47,6 @@ function create(manager: WebhookManager) {
     prompt: "Qualify the incoming lead and prepare a response",
     botId: "maus-sales",
     runOn: "cloud",
-    durationMinutes: 45,
   });
 }
 
@@ -62,10 +61,22 @@ describe("WebhookManager", () => {
 
     expect(created.secret).toMatch(/^whsec_/);
     expect(created.webhook).toMatchObject({ name: "New lead", runOn: "cloud", deliveryCount: 0 });
+    expect(created.webhook).not.toHaveProperty("durationMinutes");
     expect(JSON.stringify(created.webhook)).not.toContain(created.secret);
     expect(JSON.stringify(h.manager.list())).not.toContain("secretHash");
     expect(readFileSync(h.file, "utf8")).not.toContain(created.secret);
     if (process.platform !== "win32") expect(statSync(h.file).mode & 0o777).toBe(0o600);
+  });
+
+  it("removes duration metadata saved by an earlier webhook build", () => {
+    const h = harness();
+    create(h.manager);
+    const disk = JSON.parse(readFileSync(h.file, "utf8")) as { webhooks: Array<Record<string, unknown>> };
+    disk.webhooks[0].durationMinutes = 120;
+    writeFileSync(h.file, JSON.stringify(disk));
+
+    const reloaded = new WebhookManager(h.options);
+    expect(reloaded.list()[0]).not.toHaveProperty("durationMinutes");
   });
 
   it("turns an authenticated delivery into a queued, untrusted-data task", () => {
@@ -85,9 +96,9 @@ describe("WebhookManager", () => {
       webhookName: "New lead",
       botId: "maus-sales",
       runOn: "cloud",
-      durationMinutes: 45,
       deliveryId: "evt-123",
     });
+    expect(h.queued[0]).not.toHaveProperty("durationMinutes");
     expect(h.queued[0]?.prompt).toContain("[USER-CONFIGURED WEBHOOK INSTRUCTIONS]");
     expect(h.queued[0]?.prompt).toContain("[UNTRUSTED WEBHOOK EVENT DATA]");
     expect(h.queued[0]?.prompt).toContain('"lead": "Ada"');

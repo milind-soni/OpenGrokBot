@@ -14,7 +14,6 @@ export interface WebhookTrigger {
   botId: string;
   runOn: RoutineRunOn;
   enabled: boolean;
-  durationMinutes: number;
   createdAt: number;
   updatedAt: number;
   lastReceivedAt?: number;
@@ -28,7 +27,6 @@ export interface WebhookTriggerInput {
   botId: string;
   runOn?: RoutineRunOn;
   enabled?: boolean;
-  durationMinutes?: number;
 }
 
 interface StoredWebhookTrigger extends WebhookTrigger {
@@ -72,7 +70,6 @@ export interface WebhookManagerOptions {
     prompt: string;
     botId: string;
     runOn: RoutineRunOn;
-    durationMinutes: number;
     deliveryId: string;
     receivedAt: number;
   }) => { id: string };
@@ -122,8 +119,12 @@ function cleanInput(input: WebhookTriggerInput): Omit<WebhookTrigger, "id" | "en
     botId,
     runOn,
     enabled: input.enabled !== false,
-    durationMinutes: Math.min(240, Math.max(15, Math.round(Number(input.durationMinutes) || 30))),
   };
+}
+
+function withoutLegacyDuration(trigger: StoredWebhookTrigger & { durationMinutes?: unknown }): StoredWebhookTrigger {
+  const { durationMinutes: _durationMinutes, ...current } = trigger;
+  return current;
 }
 
 function publicTrigger(trigger: StoredWebhookTrigger): WebhookTrigger {
@@ -180,7 +181,7 @@ export class WebhookManager {
     this.now = options.now ?? Date.now;
     try {
       const disk = JSON.parse(readFileSync(this.file, "utf8")) as Partial<WebhookFile>;
-      this.webhooks = Array.isArray(disk.webhooks) ? disk.webhooks : [];
+      this.webhooks = Array.isArray(disk.webhooks) ? disk.webhooks.map(withoutLegacyDuration) : [];
       this.deliveries = Array.isArray(disk.deliveries) ? disk.deliveries.slice(-MAX_DELIVERIES) : [];
     } catch {
       this.webhooks = [];
@@ -221,7 +222,6 @@ export class WebhookManager {
       botId: patch.botId ?? trigger.botId,
       runOn: patch.runOn ?? trigger.runOn,
       enabled: patch.enabled ?? trigger.enabled,
-      durationMinutes: patch.durationMinutes ?? trigger.durationMinutes,
     });
     if (this.options.botState(clean.botId) === "missing") fail(400, "That MAUS no longer exists");
     Object.assign(trigger, clean, { updatedAt: this.now() });
@@ -316,7 +316,6 @@ export class WebhookManager {
       prompt: eventPrompt(trigger, event, now, deliveryId),
       botId: trigger.botId,
       runOn: trigger.runOn,
-      durationMinutes: trigger.durationMinutes,
       deliveryId,
       receivedAt: now,
     });

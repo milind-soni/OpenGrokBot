@@ -203,7 +203,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
     <div className="min-h-0 flex-1 overflow-y-auto border-t border-hairline/40 p-5 md:p-6">
       <div className="mx-auto max-w-[1100px] space-y-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div><div className="flex items-center gap-2"><h2 className="text-[16px] font-semibold text-ink">Webhook triggers</h2><span title={ingress?.baseUrl} className={cn("flex items-center gap-1.5 rounded-full px-2 py-1 text-[10.5px]", ingress?.available ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}><span className={cn("size-1.5 rounded-full", ingress?.available ? "bg-success" : "bg-warning")} />{ingress?.available ? "Ready on this Mac" : "Receiver unavailable"}</span></div><p className="mt-1 text-[12px] text-ink-secondary">Start a MAUS when another app sends an event.</p></div>
+          <div><h2 className="text-[16px] font-semibold text-ink">Webhook triggers</h2><p className="mt-1 text-[12px] text-ink-secondary">Start a MAUS when another app sends an event.</p></div>
           <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />New webhook</button>
         </div>
         {!ingress?.available && ingress?.error && <div role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3.5 py-3 text-[12px] text-warning">{ingress.error}</div>}

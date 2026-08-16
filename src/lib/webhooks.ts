@@ -8,7 +8,6 @@ export interface WebhookTrigger {
   botId: string;
   runOn: RoutineRunOn;
   enabled: boolean;
-  durationMinutes: number;
   createdAt: number;
   updatedAt: number;
   lastReceivedAt?: number;
@@ -22,7 +21,6 @@ export interface WebhookTriggerInput {
   botId: string;
   runOn?: RoutineRunOn;
   enabled?: boolean;
-  durationMinutes?: number;
 }
 
 export interface WebhookIngressStatus {

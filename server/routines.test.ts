@@ -184,7 +184,6 @@ describe("RoutineManager", () => {
       prompt: "Handle ticket 42",
       botId: "maus-webhook",
       runOn: "cloud",
-      durationMinutes: 30,
       deliveryId: "delivery-42",
       receivedAt,
     });
@@ -197,6 +196,7 @@ describe("RoutineManager", () => {
       triggerSource: "webhook",
       scheduledFor: receivedAt,
     });
+    expect(queued).not.toHaveProperty("durationMinutes");
     expect(h.started).toEqual([{ botId: "maus-webhook", threadId: "thread-1", prompt: "Handle ticket 42" }]);
     expect(h.runOns).toEqual(["cloud"]);
     expect(h.triggerSources).toEqual(["webhook"]);

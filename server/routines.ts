@@ -327,7 +327,6 @@ export class RoutineManager {
     prompt: string;
     botId: string;
     runOn: RoutineRunOn;
-    durationMinutes: number;
     deliveryId: string;
     receivedAt: number;
   }): RoutineRun {
@@ -339,7 +338,6 @@ export class RoutineManager {
       routineId: input.webhookId,
       routineName: input.webhookName,
       prompt: input.prompt,
-      durationMinutes: input.durationMinutes,
       botId: input.botId,
       runOn: input.runOn,
       scheduledFor: input.receivedAt,

@@ -291,6 +291,28 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("rejects an effort level the bot's engine does not declare", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+
+    const bad = await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { ...bot.modelSelection, effort: "banana" },
+    });
+    expect(bad.status).toBe(400);
+
+    const after = await api("GET", "/api/bots");
+    const reread = after.body.bots.find((b: { id: string }) => b.id === bot.id);
+    expect(reread.modelSelection.effort).toBeUndefined();
+  });
+
+  it("leaves a bot with no effort level untouched", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    expect(bot.modelSelection.effort).toBeUndefined();
+
+    const renamed = await api("PATCH", `/api/bots/${bot.id}`, { name: "Plain" });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.bot.modelSelection.effort).toBeUndefined();
+  });
+
   it("persists an answered onboarding card", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];

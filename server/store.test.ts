@@ -101,6 +101,17 @@ describe("Store", () => {
     );
   });
 
+  it("persists a bot's effort level across a restart, defaulting to none", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(bot.modelSelection.effort).toBeUndefined();
+
+    store.patchBot(bot.id, { modelSelection: { ...bot.modelSelection, effort: "high" } });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.modelSelection.effort).toBe("high");
+  });
+
   it("keeps exactly one persisted Chief of Staff and supports handoff", () => {
     const store = new Store(selection);
     const first = store.createBot();

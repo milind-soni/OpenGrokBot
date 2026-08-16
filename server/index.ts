@@ -23,7 +23,7 @@ import {
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import type { RuntimeEvent } from "./contracts.ts";
+import type { EffortLevel, RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -691,6 +691,9 @@ async function startTurn(
   }
   const instanceId = instance.instanceId;
   const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  // a cloud routine borrows the instance default model, so it borrows no
+  // per-bot effort either
+  const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
 
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
@@ -865,6 +868,7 @@ async function startTurn(
         threadId,
         text: turnText,
         model,
+        effort,
         // a rewound thread never resumes the abandoned branch's session
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
@@ -1779,6 +1783,24 @@ const server = createServer(async (req, res) => {
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
+      const existing = store.bot(m[1]);
+      // Neither Codex (free-form string field) nor Grok (lazy, logs-only)
+      // rejects an unknown effort level at their own boundary — this is the
+      // only real gate. An unavailable target instance (registry.get finds
+      // nothing) offers an empty list, so any effort is rejected: an engine
+      // that isn't there cannot promise to honour a level.
+      const nextSelection = (body as Record<string, unknown>).modelSelection as
+        | { instanceId?: string; effort?: string }
+        | undefined;
+      if (nextSelection?.effort !== undefined) {
+        const target = registry.get(nextSelection.instanceId ?? existing?.modelSelection.instanceId ?? "");
+        const allowed = target?.adapter.capabilities.effortLevels ?? [];
+        if (!allowed.includes(nextSelection.effort as EffortLevel)) {
+          return json(res, 400, {
+            error: `effort "${nextSelection.effort}" is not offered by this bot's engine`,
+          });
+        }
+      }
       const patch: Record<string, unknown> = {};
       for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden", "speakReplies", "voice"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
@@ -1792,7 +1814,6 @@ const server = createServer(async (req, res) => {
       if (body.chiefOfStaff !== undefined && typeof body.chiefOfStaff !== "boolean") {
         return json(res, 400, { error: "chiefOfStaff must be true or false" });
       }
-      const existing = store.bot(m[1]);
       if (body.hidden === true && existing?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });
       }

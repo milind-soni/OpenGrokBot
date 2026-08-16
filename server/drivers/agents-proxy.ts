@@ -1,10 +1,15 @@
 // Agent-to-agent comms MCP proxy — spawned as an MCP server inside a bot's
-// agent process (via the "agents" integration). Exposes two tools that let
-// one bot talk to another, routed back through the harness so the harness
-// stays the single owner of turns, permissions, and recursion limits:
+// agent process (via the "agents" integration). Exposes three tools that
+// let one bot talk to another, routed back through the harness so the
+// harness stays the single owner of turns, permissions, and recursion
+// limits:
 //
-//   list_bots()            → the other bots in this workspace + their status
-//   ask_bot(bot_id, msg)   → send msg to that bot, wait, return its reply
+//   list_bots()                          → the other bots in this workspace + their status
+//   ask_bot(bot_id, msg)                 → send msg to that bot, wait, return its reply
+//   delegate_bot(bot_id, msg, reason?)   → hand the task to a peer ASYNC: returns
+//                                          immediately, the peer runs after your
+//                                          current turn finishes, the user sees
+//                                          the peer's reply as its own turn
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -36,6 +41,20 @@ const TOOLS = [
       properties: {
         bot_id: { type: "string", description: "The target bot's id (from list_bots)." },
         message: { type: "string", description: "What to say / ask the bot." },
+      },
+      required: ["bot_id", "message"],
+    },
+  },
+  {
+    name: "delegate_bot",
+    description:
+      "Hand a task to another bot ASYNCHRONOUSLY: returns immediately and the peer runs after your current turn finishes. Use this when you want to keep working or hand off a long-running subtask without waiting. The user sees the peer's reply as its own turn; you do NOT receive the reply inline.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "The target bot's id (from list_bots)." },
+        message: { type: "string", description: "What the peer should do / answer." },
+        reason: { type: "string", description: "Optional one-line reason for the delegation (shown to the user as a chip)." },
       },
       required: ["bot_id", "message"],
     },
@@ -82,6 +101,19 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (r.busy) return { text: `That bot is busy right now — try again after it finishes.` };
     if (r.error) return { text: `Couldn't reach that bot: ${r.error}`, isError: true };
     return { text: `${r.botName ?? "Bot"} replied:\n${r.text ?? "(no reply)"}` };
+  }
+  if (name === "delegate_bot") {
+    const toBotId = String(args.bot_id ?? "").trim();
+    const message = String(args.message ?? "").trim();
+    const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+    if (!toBotId || !message) return { text: "delegate_bot needs bot_id and message.", isError: true };
+    const body: Record<string, unknown> = { fromBotId: BOT_ID, toBotId, message, depth: DEPTH };
+    if (reason) body.reason = reason;
+    const r = await api(`/api/internal/delegate-bot`, { method: "POST", body: JSON.stringify(body) });
+    if (r.error) return { text: `Couldn't queue the delegation: ${r.error}`, isError: true };
+    // Fire-and-forget by contract: the harness returns immediately, the
+    // peer turn runs after our current turn finishes.
+    return { text: typeof r.message === "string" ? r.message : "Delegation queued." };
   }
   return { text: `Unknown tool: ${name}`, isError: true };
 }

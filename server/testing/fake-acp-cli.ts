@@ -11,6 +11,8 @@
 //                   | ask-peer (spawn the injected "agents" MCP server from
 //                     session/new's mcpServers, call list_bots + ask_bot on a
 //                     peer, and reply with what the peer said — the comms e2e)
+//                   | delegate-peer (same as ask-peer but uses delegate_bot —
+//                     returns immediately, the peer runs after our turn)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene
 //   FAKE_ACP_MODELS      comma-separated model ids. Enables the opencode-shaped
@@ -284,6 +286,32 @@ function handle(msg: any) {
           })
           .catch((e) => {
             out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `peer error: ${(e as Error).message}` } } } });
+            complete();
+          });
+        return;
+      }
+      if (mode === "delegate-peer" && agentsMcp) {
+        // async peer-handoff e2e: queue the delegation and return
+        // immediately; the harness fires the peer's depth-1 turn after our
+        // turn settles. We don't need the peer's reply in our text — the
+        // comms e2e verifies the channel mirroring on its own.
+        void driveMcp(agentsMcp, [
+          { name: "list_bots", args: () => ({}) },
+          {
+            name: "delegate_bot",
+            args: (list) => ({
+              bot_id: /id: ([\w-]+)/.exec(list)?.[1] ?? "",
+              message: "delegated task",
+              reason: "followup",
+            }),
+          },
+        ])
+          .then((reply) => {
+            out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `delegated: ${reply}` } } } });
+            complete();
+          })
+          .catch((e) => {
+            out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `delegate error: ${(e as Error).message}` } } } });
             complete();
           });
         return;

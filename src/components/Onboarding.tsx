@@ -137,7 +137,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const codex = byKind("codex");
   const grok = byKind("grokAgent");
   const antigravity = byKind("antigravityAgent");
-  const opencodeGo = byKind("opencodeGo");
+  const opencode = byKind("opencodeAgent");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
@@ -214,7 +214,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                     label="Antigravity"
                     readyNote="Installed — bots can run on Antigravity too."
                   />
-                  <EngineRow instance={opencodeGo} label="OpenCode Go" readyNote="Installed and configured." />
+                  <EngineRow instance={opencode} label="OpenCode" readyNote="Installed and configured." />
                 </>
               )}
             </div>

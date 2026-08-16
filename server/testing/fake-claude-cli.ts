@@ -7,13 +7,17 @@
 //   FAKE_CLAUDE_MODE   happy (default) | exit-early | hang | malformed
 //                      | stream (partial-message text deltas before the
 //                        whole-message frame, plus subagent noise to drop)
-//   FAKE_CLAUDE_DUMP   path to write {argv, env, prompt} as JSON, so the
-//                      test can assert on argv shape and env hygiene
+//   FAKE_CLAUDE_DUMP   path to write {argv, env, prompt, mcpConfig} as JSON,
+//                      so the test can assert on argv shape and env hygiene.
+//                      mcpConfig is read back from the --mcp-config file the
+//                      way the real CLI reads it — the driver writes it to a
+//                      private temp file and deletes it when the turn settles,
+//                      so a test cannot open it after the fact.
 //   FAKE_CLAUDE_AUTH   in (default) | out | unsupported | malformed |
 //                      inherited-api-key — what `auth status` reports
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_CLAUDE_MODE ?? "happy";
 
@@ -59,7 +63,16 @@ process.stdin.on("end", () => {
   }
 
   if (process.env.FAKE_CLAUDE_DUMP) {
-    writeFileSync(process.env.FAKE_CLAUDE_DUMP, JSON.stringify({ argv, env: process.env, prompt }, null, 2));
+    const configPath = argAfter("--mcp-config");
+    let mcpConfig: unknown = null;
+    if (configPath) {
+      try {
+        mcpConfig = JSON.parse(readFileSync(configPath, "utf8"));
+      } catch {
+        /* leave null — the test will see it */
+      }
+    }
+    writeFileSync(process.env.FAKE_CLAUDE_DUMP, JSON.stringify({ argv, env: process.env, prompt, mcpConfig }, null, 2));
   }
 
   const sessionId = argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session";

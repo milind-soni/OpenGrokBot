@@ -167,6 +167,10 @@ export interface BotRecord {
   /** The single workspace-wide coordinator. The store enforces that at
    * most one bot owns this role, even if an older/corrupt file says more. */
   chiefOfStaff?: boolean;
+  /** Pause for human approval before this bot talks to a peer (ask_bot,
+   * delegate_bot). Off by default: a chief-of-staff-style bot is most
+   * useful when it can coordinate without nagging. */
+  approvePeerComms?: boolean;
   busy?: boolean;
   createdAt: number;
 }

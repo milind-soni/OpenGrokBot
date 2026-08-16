@@ -124,6 +124,9 @@ export interface Bot {
   hidden?: boolean;
   /** The workspace's one primary coordinator. */
   chiefOfStaff?: boolean;
+  /** When this bot wants to talk to another bot (ask_bot/delegate_bot),
+   * pause and ask the user first. Off by default. */
+  approvePeerComms?: boolean;
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
@@ -312,6 +315,7 @@ type Action =
           | "pinned"
           | "hidden"
           | "chiefOfStaff"
+          | "approvePeerComms"
         >
       >;
     };

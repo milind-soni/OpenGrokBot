@@ -26,8 +26,11 @@ import { buildNotification, type Notification } from "./notify.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
+import { drainDelegations, queueDelegation } from "./delegations.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
+import { requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type Message } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
@@ -459,6 +462,17 @@ bus.subscribe((event: RuntimeEvent) => {
   }
 });
 
+// Drain queued delegations for a source thread after its turn settles.
+// Run as a separate subscriber so the drain logic stays out of the main
+// fold (which has its own switch/case noise) and its approval + startTurn
+// calls never have to share locals with the fold's state machine.
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed" || !event.ok) return;
+  drainDelegations(commsBus, approvalBus, event.threadId, (toBotId, text, commsDepth) => {
+    void startTurn(toBotId, text, { commsDepth });
+  });
+});
+
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
 // panel); the final frame is folded into the transcript on turn end.
@@ -852,6 +866,16 @@ function broadcastGroup(groupId: string) {
   if (group) broadcast({ kind: "group", group });
 }
 
+// comms bus: passed into the visibility helpers in comms-visibility.ts so
+// they can mirror messages + chips without re-deriving SSE plumbing. Same
+// shape every comms entry point uses (ask_bot, delegate_bot).
+const commsBus: CommsBus = { store, broadcast, broadcastGroup };
+
+// approval bus: peer-approval.ts only needs to push cards and broadcast
+// them — its pending map lives in the module so the two respond endpoints
+// can call resolvePeerComms without holding a reference back to here.
+const approvalBus: ApprovalBus = { store, broadcast };
+
 async function runGroupMemberTurn(
   groupId: string,
   botId: string,
@@ -1151,57 +1175,46 @@ const server = createServer(async (req, res) => {
 
         // the exchange is mirrored into a bot⇄bot channel: it shows up in
         // the sidebar like any room, keeps the pair's full history, and the
-        // user can open it and chip in
-        let channel = from ? store.dmGroup(from.id, target.id) : undefined;
-        if (from && !channel) {
-          channel = store.createGroup(`${from.name} ⇄ ${target.name}`, [from.id, target.id], true);
-        }
-        const mirror = (speaker: { id: string; name: string; color: string }, text: string) => {
-          if (!channel || !text.trim()) return;
-          const msg = store.appendMessage(channel.threadId, {
-            role: "bot",
-            kind: "text",
-            text,
-            from: { botId: speaker.id, name: speaker.name, color: speaker.color },
-          });
-          broadcast({ kind: "message", threadId: channel.threadId, message: msg });
-        };
-        // both 1:1 threads get a clickable chip that opens the channel, so
-        // bot-to-bot turns are never invisible (they cost the user tokens)
-        const chip = (
-          threadId: string,
-          label: string,
-          withBot: { id: string; name: string; color: string },
-        ) => {
-          const note = store.appendMessage(threadId, {
-            role: "bot",
-            kind: "activity",
-            tool: { name: label },
-            comm: channel
-              ? { groupId: channel.id, withBotId: withBot.id, withName: withBot.name, withColor: withBot.color }
-              : undefined,
-          });
-          broadcast({ kind: "message", threadId, message: note });
-        };
+        // user can open it and chip in. Both 1:1 threads get a clickable
+        // chip that opens the channel, so bot-to-bot turns are never
+        // invisible (they cost the user tokens). An unknown sender (the
+        // proxy lied about its bot id) skips mirroring — the call still
+        // runs the peer turn, exactly like the original.
+        const channel = from ? getOrCreateChannel(store, from, target) : undefined;
         if (from) {
-          mirror(from, message);
-          chip(from.threadId, `Messaged @${target.name}`, target);
-          chip(target.threadId, `Message from @${from.name}`, from);
-          if (channel) {
-            store.patchGroup(channel.id, { unread: true });
-            broadcastGroup(channel.id);
+          // per-bot approval gate: a chief-of-staff bot without this on is
+          // free to coordinate; one with it on must wait for a human card
+          // (15-min timeout → deny) before its peer turn starts.
+          if (from.approvePeerComms) {
+            const verdict = await requestPeerApproval(approvalBus, from, target, message, "ask_bot");
+            if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
           }
+          mirrorExchange(commsBus, from, target, message, channel);
         }
         const prefixed = `[Message from @${fromName}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth);
-        if (from) {
-          mirror(target, reply);
-          if (channel) {
-            store.patchGroup(channel.id, { unread: true });
-            broadcastGroup(channel.id);
-          }
-        }
+        if (from) mirrorReply(commsBus, target, reply, channel);
         return json(res, 200, { botName: target.name, text: reply });
+      }
+      // Async handoff: the source bot queues a task for a peer and goes
+      // back to the user; the peer turn runs after the source's
+      // turn.completed. Returns immediately (the caller does not wait).
+      if (method === "POST" && path === "/api/internal/delegate-bot") {
+        const body = await readBody(req);
+        const fromBotId = String(body.fromBotId ?? "");
+        const toBotId = String(body.toBotId ?? "");
+        const message = String(body.message ?? "").trim();
+        const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
+        const depth = Number(body.depth ?? 0) || 0;
+        if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
+        const from = store.bot(fromBotId);
+        if (!from) return json(res, 404, { error: "no such bot" });
+        const result = queueDelegation(commsBus, from, { toBotId, message, reason, depth }, MAX_COMMS_DEPTH);
+        if (result !== "ok") return json(res, 400, { error: result });
+        return json(res, 200, {
+          queued: true,
+          message: `Delegation queued — @${store.bot(toBotId)?.name ?? toBotId} will pick it up after your current turn finishes.`,
+        });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
     }
@@ -1462,12 +1475,18 @@ const server = createServer(async (req, res) => {
       if (body.hidden === true && existing?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });
       }
-      // the two permission fields decide what runs unattended, so they are
+      // the permission fields decide what runs unattended, so they are
       // type-checked rather than copied through: a string alwaysAllow would
       // still answer .includes() — with substring matches, not tool names
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
+      }
+      if (body.approvePeerComms !== undefined) {
+        if (typeof body.approvePeerComms !== "boolean") {
+          return json(res, 400, { error: "approvePeerComms must be true or false" });
+        }
+        patch.approvePeerComms = body.approvePeerComms;
       }
       if (body.alwaysAllow !== undefined) {
         if (!Array.isArray(body.alwaysAllow) || body.alwaysAllow.some((t: unknown) => typeof t !== "string")) {
@@ -1588,6 +1607,12 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      // peer-approval intercept: harness-native cards carry a requestId
+      // that lives in peer-approval's pending map. Resolve them here so
+      // the provider adapter never sees a request it didn't raise.
+      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
+        return json(res, 200, { ok: true });
+      }
       const instance = registry.get(bot.modelSelection.instanceId);
       if (!instance) return json(res, 409, { error: "provider unavailable" });
       await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
@@ -1606,6 +1631,10 @@ const server = createServer(async (req, res) => {
       const group = store.groupByThread(threadId);
       const owner = group ? (group.busyBotId ? store.bot(group.busyBotId) : undefined) : store.botByThread(threadId);
       if (!owner) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
+      // peer-approval intercept (see /api/bots/:id/respond above).
+      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
+        return json(res, 200, { ok: true });
+      }
       const instance = registry.get(owner.modelSelection.instanceId);
       if (!instance) return json(res, 409, { error: "provider unavailable" });
       await instance.adapter.respondToRequest(threadId, String(body.requestId), {

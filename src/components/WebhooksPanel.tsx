@@ -21,6 +21,12 @@ import {
 import { MausAvatar } from "@/components/Avatar";
 import { cn } from "@/lib/cn";
 import type { RoutineRun, RoutineRunOn } from "@/lib/routines";
+import {
+  loadWebhookCredentials,
+  removeWebhookCredential,
+  saveWebhookCredential,
+  webhookCredentialStore,
+} from "@/lib/webhook-credentials";
 import type { WebhookAttempt, WebhookCredential, WebhookTrigger, WebhookTriggerInput } from "@/lib/webhooks";
 import { api, useStore, type Bot } from "@/state/store";
 
@@ -70,7 +76,7 @@ function outcomeLabel(outcome: WebhookAttempt["outcome"], run?: RoutineRun) {
 }
 
 function terminalCommand(credential: WebhookCredential) {
-  return `curl -sS '${credential.url}' --json '{"task":"A production deploy failed. Summarize what happened and tell me the first thing to check."}'`;
+  return `curl -sS '${credential.url}' --json '{"task":"A customer wrote: This app saved me hours. Write a short thank-you reply."}'`;
 }
 
 function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: WebhookTrigger; bots: Bot[]; onClose: () => void; onCredential: (credential: WebhookCredential, webhookId: string) => void }) {
@@ -133,7 +139,9 @@ interface ActivityItem { id: string; at: number; outcome: WebhookAttempt["outcom
 export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   const { state, dispatch } = useStore();
   const [editor, setEditor] = useState<WebhookTrigger | "new" | null>(null);
-  const [credentials, setCredentials] = useState<Record<string, WebhookCredential>>({});
+  const [credentials, setCredentials] = useState<Record<string, WebhookCredential>>(() =>
+    loadWebhookCredentials(webhookCredentialStore()),
+  );
   const [selectedId, setSelectedId] = useState<string | null>(state.webhooks[0]?.id ?? null);
   const [tab, setTab] = useState<"setup" | "activity">("setup");
   const [working, setWorking] = useState<string | null>(null);
@@ -179,6 +187,12 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
         if (!window.confirm(`Delete “${webhook.name}”? Existing task history will stay available.`)) return;
         await api(`/api/webhooks/${webhook.id}`, { method: "DELETE" });
         dispatch({ type: "webhookDeleted", webhookId: webhook.id });
+        removeWebhookCredential(webhookCredentialStore(), webhook.id);
+        setCredentials((current) => {
+          const next = { ...current };
+          delete next[webhook.id];
+          return next;
+        });
       } else {
         const enabling = !webhook.enabled;
         if (enabling && webhook.verificationPending) throw new Error("Send a test event before turning this webhook on");
@@ -193,6 +207,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   };
 
   const createAndCopyCommand = async (webhook: WebhookTrigger, replace = false) => {
+    if (replace && !window.confirm("Replace this private URL? Every previously copied command will stop working.")) return;
     setWorking(`${webhook.id}:command`);
     setError("");
     try {
@@ -202,6 +217,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
         credential = response.credential;
         dispatch({ type: "webhookPatched", webhook: response.webhook });
         setCredentials((current) => ({ ...current, [webhook.id]: credential! }));
+        saveWebhookCredential(webhookCredentialStore(), webhook.id, credential!);
       }
       if (!credential) throw new Error("Could not create a terminal command");
       await navigator.clipboard.writeText(terminalCommand(credential));
@@ -305,7 +321,10 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
                         <pre className="overflow-x-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-ink-secondary">{command}</pre>
                       </div>
                     ) : (
-                      <button disabled={Boolean(working) || !ingress?.available} onClick={() => void createAndCopyCommand(selected)} className="mt-4 flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-40">{working === `${selected.id}:command` ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}Create & copy test command</button>
+                      <div className="mt-4">
+                        <p className="max-w-[560px] text-[10.5px] leading-relaxed text-ink-secondary">The private URL is shown once. Generate a replacement to copy a test command; any older command for this webhook will stop working.</p>
+                        <button disabled={Boolean(working) || !ingress?.available} onClick={() => void createAndCopyCommand(selected)} className="mt-3 flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-40">{working === `${selected.id}:command` ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />}Generate new private URL</button>
+                      </div>
                     )}
                     <div className="mt-3 flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-secondary"><Laptop size={12} className="mt-0.5 shrink-0" /><span>Local only for now. Keep OpenMausBot open while sending the request.</span></div>
 
@@ -337,7 +356,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
           </div>
         )}
       </div>
-      {editor && <WebhookEditor webhook={editor === "new" ? undefined : editor} bots={bots} onClose={() => setEditor(null)} onCredential={(newCredential, webhookId) => { setCredentials((current) => ({ ...current, [webhookId]: newCredential })); setSelectedId(webhookId); setTab("setup"); }} />}
+      {editor && <WebhookEditor webhook={editor === "new" ? undefined : editor} bots={bots} onClose={() => setEditor(null)} onCredential={(newCredential, webhookId) => { saveWebhookCredential(webhookCredentialStore(), webhookId, newCredential); setCredentials((current) => ({ ...current, [webhookId]: newCredential })); setSelectedId(webhookId); setTab("setup"); }} />}
     </div>
   );
 }

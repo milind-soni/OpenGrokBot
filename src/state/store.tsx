@@ -503,7 +503,20 @@ function reducer(state: AppState, action: Action): AppState {
             ),
           }
         : animated;
-      return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+      const switchedThread =
+        typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
+      return updateBot(next, action.bot.id, (b) => ({
+        ...b,
+        ...action.bot,
+        // Ordinary bot patches omit messages and must preserve the current
+        // transcript. A task switch is different: its full bot event carries
+        // the new transcript, which must replace the previous task before the
+        // webhook's streamed messages begin arriving.
+        messages:
+          switchedThread && Array.isArray(action.bot.messages)
+            ? action.bot.messages
+            : b.messages,
+      }));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);

@@ -89,7 +89,7 @@ export interface RoutineManagerOptions {
    * is what lets the server number and replay them. */
   emit?: (payload: Record<string, unknown>) => void;
   botState: (botId: string) => "ready" | "busy" | "missing";
-  createTask: (botId: string, title: string) => { threadId: string } | null;
+  createTask: (botId: string, title: string, activate?: boolean) => { threadId: string } | null;
   startTurn: (
     botId: string,
     threadId: string,
@@ -451,7 +451,9 @@ export class RoutineManager {
           this.emitRun(run);
           continue;
         }
-        const task = this.options.createTask(run.botId, run.routineName);
+        // A webhook is an incoming message, so make its task the bot's live
+        // chat immediately. Scheduled work remains detached and unobtrusive.
+        const task = this.options.createTask(run.botId, run.routineName, run.triggerSource === "webhook");
         if (!task) {
           run.status = "failed";
           run.error = "Could not create a task for this run";

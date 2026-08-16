@@ -1144,6 +1144,31 @@ describe("opencode catalog discovery", () => {
     expect(b.options).toEqual([{ id: "only/one", label: "one" }]);
   });
 
+  // The cache collapses SEQUENTIAL callers: describe() awaits snapshot() —
+  // which asks isAuthenticated, which discovers — before it awaits catalog(),
+  // so the second one hits a warm entry. Concurrent callers are the gap: two
+  // in-flight /api/instances requests both miss and both spawn the CLI.
+  it("spawns one probe when two callers arrive at once", async () => {
+    let clock = 1_000;
+    __catalogTestHooks.setClock(() => clock);
+    const dir = mkdtempSync(join(tmpdir(), "omb-probe-count-"));
+    try {
+      const log = join(dir, "probes.log");
+      const env = { ...process.env, FAKE_ACP_MODELS_LOG: log };
+
+      const [a, b] = await Promise.all([
+        discoverCatalog(FAKE_CLI, env),
+        discoverCatalog(FAKE_CLI, env),
+      ]);
+
+      expect(a.options).toHaveLength(2);
+      expect(b).toEqual(a);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // The tests above call discoverCatalog directly, so they prove the cwd
   // reaches execCli — not that the support computes it from the instance
   // config. Drop `probeCwd(config)` from opencode.ts's `catalog` and every one

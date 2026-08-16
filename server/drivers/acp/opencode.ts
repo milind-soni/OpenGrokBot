@@ -44,10 +44,18 @@ const CLI_TIMEOUT_MS = 10_000;
 // it — a test that needs a sleep to pass is wrong.
 let now: () => number = () => Date.now();
 const cache = new Map<string, { at: number; value: ModelCatalog }>();
+// The cache only collapses callers that arrive one after another. describe()
+// awaits snapshot() — which asks isAuthenticated, which discovers — before it
+// awaits catalog(), so that pair is already free. Two /api/instances requests
+// in flight together are not: both would miss the cache and both would spawn
+// the CLI. Holding the in-flight promise makes the second one wait on the
+// first instead.
+const inFlight = new Map<string, Promise<ModelCatalog>>();
 
 export const __catalogTestHooks = {
   reset() {
     cache.clear();
+    inFlight.clear();
     now = () => Date.now();
   },
   setClock(clock: () => number) {
@@ -165,21 +173,36 @@ export async function discoverCatalog(cli: string, env: Env, cwd?: string): Prom
   const hit = cache.get(key);
   if (hit && now() - hit.at < CATALOG_TTL_MS) return hit.value;
 
-  const [listing, configured] = await Promise.all([
-    run(cli, ["models"], env, cwd),
-    defaultModel(cli, env, cwd),
-  ]);
-  // A CLI that could not run at all is not a CLI reporting no models. Caching
-  // that would keep the engine dark for the whole TTL after the problem
-  // cleared, and re-opening the picker would not help. Serve the last good
-  // catalog if we have one, store nothing, and let the next call retry.
-  if (listing === null) return hit?.value ?? { default: "", options: [] };
+  const running = inFlight.get(key);
+  if (running) return running;
 
-  const options = parseModels(listing);
-  const chosen = configured && options.some((o) => o.id === configured) ? configured : (options[0]?.id ?? "");
-  const value: ModelCatalog = { default: chosen, options };
-  cache.set(key, { at: now(), value });
-  return value;
+  const probe = (async (): Promise<ModelCatalog> => {
+    const [listing, configured] = await Promise.all([
+      run(cli, ["models"], env, cwd),
+      defaultModel(cli, env, cwd),
+    ]);
+    // A CLI that could not run at all is not a CLI reporting no models. Caching
+    // that would keep the engine dark for the whole TTL after the problem
+    // cleared, and re-opening the picker would not help. Serve the last good
+    // catalog if we have one, store nothing, and let the next call retry.
+    if (listing === null) return hit?.value ?? { default: "", options: [] };
+
+    const options = parseModels(listing);
+    const chosen = configured && options.some((o) => o.id === configured) ? configured : (options[0]?.id ?? "");
+    const value: ModelCatalog = { default: chosen, options };
+    cache.set(key, { at: now(), value });
+    return value;
+  })();
+
+  // Registered before the first await above can yield, so a caller arriving in
+  // the same tick finds it. Cleared either way: a failed probe must not pin
+  // every later caller to the same rejection.
+  inFlight.set(key, probe);
+  try {
+    return await probe;
+  } finally {
+    inFlight.delete(key);
+  }
 }
 
 /** Parse `opencode models`: one provider-qualified id per line, no decoration.

@@ -14,6 +14,7 @@ import {
   Pencil,
   RefreshCw,
   Square,
+  Webhook,
   X,
 } from "lucide-react";
 import {
@@ -39,6 +40,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { webhookMessageView } from "@/lib/webhook-message";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -268,10 +270,12 @@ function Bubble({
   const user = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   const text = message.text ?? "";
+  const webhookView = user ? webhookMessageView(text) : null;
+  const visibleText = webhookView?.task ?? text;
   const collapsible =
-    user && !expanded && (text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES);
+    user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
-  if (user && editing) {
+  if (user && editing && !webhookView) {
     return (
       <div className="flex w-full justify-end">
         <BubbleEditor initial={text} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />
@@ -291,7 +295,7 @@ function Bubble({
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {/* editing rewinds the thread, so it waits for the turn to end —
             same rule as the version switcher below */}
-        {user && message.kind === "text" && !bot.busy && (
+        {user && message.kind === "text" && !webhookView && !bot.busy && (
           <button
             onClick={onStartEdit}
             aria-label="Edit message"
@@ -302,15 +306,39 @@ function Bubble({
           </button>
         )}
         {user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
-        {user && <CopyButton text={text} />}
+        {user && <CopyButton text={visibleText} />}
         <div
           className={cn(
-            "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
-            user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+            "max-w-[70%] rounded-2xl text-[15px] leading-relaxed",
+            user && webhookView
+              ? "overflow-hidden border border-accent/20 bg-bubble-user text-ink"
+              : user
+                ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
+                : "bg-card px-4 py-2.5 text-ink",
           )}
           title={new Date(message.at).toLocaleString()}
         >
-          {user ? (
+          {user && webhookView ? (
+            <div className="min-w-[300px] max-w-[520px]">
+              <div className="flex items-center gap-2 border-b border-hairline/30 px-4 py-2.5 text-[11.5px] font-medium text-accent">
+                <Webhook size={13} />
+                <span>Webhook task</span>
+                {webhookView.eventName && <><span className="text-ink-secondary/60">·</span><span className="truncate text-ink-secondary">{webhookView.eventName}</span></>}
+              </div>
+              <div className="px-4 py-3 whitespace-pre-wrap">{webhookView.task}</div>
+              {(webhookView.eventName || webhookView.details.length > 0) && (
+                <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3 text-[10.5px] text-ink-secondary">
+                  {webhookView.details.map((detail) => <span key={detail} className="rounded-md bg-raised/70 px-2 py-1">{detail}</span>)}
+                </div>
+              )}
+              {webhookView.payload && (
+                <details className="border-t border-hairline/25 px-4 py-2.5 text-[11.5px] text-ink-secondary">
+                  <summary className="cursor-pointer select-none hover:text-ink">View event payload</summary>
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-black/20 p-3 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary">{webhookView.payload}</pre>
+                </details>
+              )}
+            </div>
+          ) : user ? (
             <>
               <div
                 className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}

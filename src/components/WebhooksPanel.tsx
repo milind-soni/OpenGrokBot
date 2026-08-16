@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Check,
+  ChevronDown,
   Cloud,
   Copy,
   ExternalLink,
@@ -127,11 +128,14 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
 
 interface ActivityItem { id: string; at: number; outcome: WebhookAttempt["outcome"]; eventName: string; preview: string; reason?: string; run?: RoutineRun }
 
+/** A destination-first webhook view: choose a MAUS endpoint on the left, then
+ * either copy its setup command or inspect its deliveries on the right. */
 export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   const { state, dispatch } = useStore();
   const [editor, setEditor] = useState<WebhookTrigger | "new" | null>(null);
   const [credentials, setCredentials] = useState<Record<string, WebhookCredential>>({});
   const [selectedId, setSelectedId] = useState<string | null>(state.webhooks[0]?.id ?? null);
+  const [tab, setTab] = useState<"setup" | "activity">("setup");
   const [working, setWorking] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -147,8 +151,23 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   const attemptsByRun = useMemo(() => new Set(state.webhookAttempts.map((attempt) => attempt.runId).filter(Boolean)), [state.webhookAttempts]);
   const activity = useMemo<ActivityItem[]>(() => {
     if (!selected) return [];
-    const attempts = state.webhookAttempts.filter((attempt) => attempt.webhookId === selected.id).map((attempt) => ({ id: attempt.id, at: attempt.receivedAt, outcome: attempt.outcome, eventName: attempt.eventName || (attempt.outcome === "rejected" ? "Rejected request" : "Webhook event"), preview: attempt.preview || "", reason: attempt.reason, run: attempt.runId ? runById.get(attempt.runId) : undefined }));
-    const legacy = state.routineRuns.filter((run) => run.webhookId === selected.id && !attemptsByRun.has(run.id)).map((run) => { const summary = deliverySummary(run); return { id: run.id, at: run.scheduledFor, outcome: "accepted" as const, eventName: summary.eventName, preview: summary.preview, run }; });
+    const attempts = state.webhookAttempts
+      .filter((attempt) => attempt.webhookId === selected.id)
+      .map((attempt) => ({
+        id: attempt.id,
+        at: attempt.receivedAt,
+        outcome: attempt.outcome,
+        eventName: attempt.eventName || (attempt.outcome === "rejected" ? "Rejected request" : "Webhook event"),
+        preview: attempt.preview || "",
+        reason: attempt.reason,
+        run: attempt.runId ? runById.get(attempt.runId) : undefined,
+      }));
+    const legacy = state.routineRuns
+      .filter((run) => run.webhookId === selected.id && !attemptsByRun.has(run.id))
+      .map((run) => {
+        const summary = deliverySummary(run);
+        return { id: run.id, at: run.scheduledFor, outcome: "accepted" as const, eventName: summary.eventName, preview: summary.preview, run };
+      });
     return [...attempts, ...legacy].sort((a, b) => b.at - a.at).slice(0, 30);
   }, [attemptsByRun, runById, selected, state.routineRuns, state.webhookAttempts]);
 
@@ -160,7 +179,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
         if (!window.confirm(`Delete “${webhook.name}”? Existing task history will stay available.`)) return;
         await api(`/api/webhooks/${webhook.id}`, { method: "DELETE" });
         dispatch({ type: "webhookDeleted", webhookId: webhook.id });
-      } else if (action === "toggle") {
+      } else {
         const enabling = !webhook.enabled;
         if (enabling && webhook.verificationPending) throw new Error("Send a test event before turning this webhook on");
         const response = await api(`/api/webhooks/${webhook.id}`, { method: "PATCH", body: JSON.stringify({ enabled: enabling, verificationPending: false }) });
@@ -200,68 +219,125 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   const command = credential ? terminalCommand(credential) : "";
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto border-t border-hairline/40 p-5 md:p-6">
-      <div className="mx-auto max-w-[980px] space-y-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="min-h-0 flex-1 overflow-y-auto border-t border-hairline/40 p-4 md:p-6">
+      <div className="mx-auto max-w-[1120px] space-y-4">
+        <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-[16px] font-semibold text-ink">Webhooks <span className="ml-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-accent">Local beta</span></h2>
-            <p className="mt-1 text-[12px] text-ink-secondary">Send a task to a MAUS from Terminal or another app.</p>
-            <div className={cn("mt-2 flex items-center gap-1.5 text-[10.5px]", ingress?.available ? "text-success" : "text-danger")}>
-              <span className={cn("size-1.5 rounded-full", ingress?.available ? "bg-success" : "bg-danger")} />
-              {ingress?.available ? "Listening on this Mac" : ingress?.error ?? "Receiver unavailable"}
+            <div className="flex items-center gap-2">
+              <h2 className="text-[17px] font-semibold text-ink">Webhooks</h2>
+              <span className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-accent">Local beta</span>
             </div>
+            <p className="mt-1 text-[12px] text-ink-secondary">Send a task to a MAUS when another tool reports an event.</p>
           </div>
-          <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />New webhook</button>
-        </div>
+          <div className="flex items-center gap-3">
+            <div className={cn("hidden items-center gap-1.5 text-[10.5px] sm:flex", ingress?.available ? "text-success" : "text-danger")}>
+              <span className={cn("size-1.5 rounded-full", ingress?.available ? "bg-success" : "bg-danger")} />
+              {ingress?.available ? "Receiver running" : ingress?.error ?? "Receiver unavailable"}
+            </div>
+            <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-40">
+              <Plus size={15} />New webhook
+            </button>
+          </div>
+        </header>
+
         {error && <div className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12px] text-danger">{error}</div>}
+
         {state.webhooks.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-hairline/60 bg-panel/50 px-6 py-12 text-center"><div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent/10 text-accent"><Send size={26} /></div><h3 className="text-[16px] font-semibold text-ink">Send a task from anywhere on this Mac</h3><p className="mx-auto mt-2 max-w-[450px] text-[12.5px] leading-relaxed text-ink-secondary">Create a URL for a MAUS, then send <code className="text-ink">{`{"task":"…"}`}</code> from Terminal or another local app.</p><button onClick={() => setEditor("new")} disabled={bots.length === 0} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />Create local webhook</button>{bots.length === 0 && <p className="mt-3 text-[12px] text-warning">Create a MAUS first, then come back here.</p>}</div>
-        ) : (
-          <div>
-            {state.webhooks.length > 1 && (
-              <label className="mb-5 block max-w-[360px]">
-                <span className="mb-1.5 block text-[10.5px] font-medium uppercase tracking-wider text-ink-secondary">Webhook</span>
-                <select value={selectedId ?? ""} onChange={(event) => setSelectedId(event.target.value)} className="w-full rounded-xl border border-hairline/50 bg-panel px-3.5 py-2.5 text-[12.5px] text-ink outline-none focus:border-accent/70">
-                  {state.webhooks.map((webhook) => <option key={webhook.id} value={webhook.id}>{webhook.name} · {statusFor(webhook).label}</option>)}
-                </select>
-              </label>
-            )}
-            {selected && <div className="min-w-0">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-hairline/35 pb-5">
+          <div className="border-t border-hairline/40 px-6 py-16 text-center">
+            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent/10 text-accent"><Send size={23} /></div>
+            <h3 className="text-[16px] font-semibold text-ink">Create your first webhook</h3>
+            <p className="mx-auto mt-2 max-w-[420px] text-[12.5px] leading-relaxed text-ink-secondary">Choose a MAUS, copy one command, and every request becomes a new task in its chat.</p>
+            <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />Create local webhook</button>
+            {bots.length === 0 && <p className="mt-3 text-[12px] text-warning">Create a MAUS first, then come back here.</p>}
+          </div>
+        ) : selected && (
+          <div className="min-h-[580px] overflow-hidden rounded-2xl border border-hairline/45 bg-panel/25 md:grid md:grid-cols-[250px_minmax(0,1fr)]">
+            <aside className="border-b border-hairline/40 bg-inset/35 p-2.5 md:border-r md:border-b-0">
+              <div className="flex items-center justify-between px-2 py-2">
+                <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-secondary">Your webhooks</span>
+                <span className="text-[10px] tabular-nums text-ink-secondary">{state.webhooks.length}</span>
+              </div>
+              <nav className="flex gap-1 overflow-x-auto md:block md:space-y-1 md:overflow-visible">
+                {state.webhooks.map((webhook) => {
+                  const bot = bots.find((candidate) => candidate.id === webhook.botId);
+                  const status = statusFor(webhook);
+                  return (
+                    <button key={webhook.id} onClick={() => { setSelectedId(webhook.id); setTab("setup"); setError(""); }} className={cn("flex min-w-[210px] items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors md:w-full md:min-w-0", webhook.id === selected.id ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:bg-raised/55 hover:text-ink")}>
+                      {bot ? <MausAvatar color={bot.color} state={webhook.enabled ? "idle" : "sleeping"} size={36} animated={false} label={bot.name} /> : <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-raised text-ink-secondary"><Webhook size={16} /></div>}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12.5px] font-medium">{webhook.name}</span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[10px]"><span className={cn("size-1.5 rounded-full", status.dot)} /><span className={status.tone}>{status.label}</span></span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
+            </aside>
+
+            <section className="min-w-0">
+              <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 md:px-7 md:pt-6">
                 <div className="flex min-w-0 items-center gap-3">
-                  {selectedBot ? <MausAvatar color={selectedBot.color} state={selected.enabled ? "idle" : "sleeping"} size={48} animated={false} label={selectedBot.name} /> : <div className="flex size-12 items-center justify-center rounded-xl bg-raised text-ink-secondary"><Webhook size={20} /></div>}
+                  {selectedBot ? <MausAvatar color={selectedBot.color} state={selected.enabled ? "idle" : "sleeping"} size={44} animated={false} label={selectedBot.name} /> : <div className="flex size-11 items-center justify-center rounded-xl bg-raised text-ink-secondary"><Webhook size={18} /></div>}
                   <div className="min-w-0">
                     <h3 className="truncate text-[17px] font-semibold text-ink">{selected.name}</h3>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-secondary"><span>{selectedBot?.name ?? "Deleted MAUS"}</span><span>·</span><span>{selected.runOn === "cloud" ? "Cloud VM" : "This Mac"}</span><span>·</span><span className={statusFor(selected).tone}>{statusFor(selected).label}</span></div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10.5px] text-ink-secondary"><span>{selectedBot?.name ?? "Deleted MAUS"}</span><span>·</span><span>{selected.runOn === "cloud" ? "Cloud VM" : "This computer"}</span></div>
                   </div>
                 </div>
-                <details className="relative"><summary className="list-none rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><MoreHorizontal size={17} /></summary><div className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border border-hairline/50 bg-card p-1.5 shadow-2xl"><button onClick={() => setEditor(selected)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-ink hover:bg-raised">Edit</button>{!selected.verificationPending && <button onClick={() => void invoke(selected, "toggle")} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-ink hover:bg-raised">{selected.enabled ? <Pause size={13} /> : <Play size={13} />}{selected.enabled ? "Pause" : "Enable"}</button>}<button onClick={() => void invoke(selected, "delete")} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-danger hover:bg-danger/10"><Trash2 size={13} />Delete</button></div></details>
+                <div className="flex items-center gap-2">
+                  {!selected.verificationPending && <button disabled={Boolean(working)} onClick={() => void invoke(selected, "toggle")} className={cn("flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11.5px] font-medium", selected.enabled ? "bg-raised text-ink-secondary hover:text-ink" : "bg-accent text-white hover:brightness-110")}>{selected.enabled ? <Pause size={13} /> : <Play size={13} />}{selected.enabled ? "Pause" : "Enable"}</button>}
+                  <details className="relative"><summary className="list-none rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><MoreHorizontal size={17} /></summary><div className="absolute right-0 top-full z-20 mt-1 w-[180px] rounded-xl border border-hairline/50 bg-card p-1.5 shadow-2xl"><button onClick={() => setEditor(selected)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-ink hover:bg-raised">Edit settings</button><button onClick={() => void invoke(selected, "delete")} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-danger hover:bg-danger/10"><Trash2 size={13} />Delete</button></div></details>
+                </div>
               </div>
 
-              <section className="py-5">
-                <div className="flex flex-wrap items-end justify-between gap-3">
-                  <div><h4 className="text-[13px] font-medium text-ink">Test from Terminal</h4><p className="mt-1 text-[11.5px] text-ink-secondary">Copy, paste, and press Return. The task is already included.</p></div>
-                  {!credential && <button disabled={Boolean(working) || !ingress?.available} onClick={() => void createAndCopyCommand(selected)} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2.5 text-[12.5px] font-medium text-white hover:brightness-110 disabled:opacity-40">{working === `${selected.id}:command` ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}Create & copy command</button>}
-                </div>
-                {credential ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-xl border border-hairline/45 bg-[#101010] p-2 pl-3">
-                    <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] text-ink-secondary">{command}</code>
-                    <button onClick={() => void createAndCopyCommand(selected)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11.5px] font-medium text-white hover:brightness-110">{copiedId === selected.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === selected.id ? "Copied" : "Copy"}</button>
-                    <button onClick={() => void createAndCopyCommand(selected, true)} className="shrink-0 rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink" title="Create a different private URL"><RotateCw size={14} /></button>
-                  </div>
-                ) : <p className="mt-2 text-[10.5px] text-ink-secondary">Creates a private local URL. Any previous URL for this webhook will stop working.</p>}
-                <p className="mt-2 text-[10.5px] text-ink-secondary">OpenMausBot must stay open. This local URL cannot be called from GitHub, Stripe, or another internet service yet.</p>
-                {selected.prompt && <p className="mt-2 text-[10.5px] text-ink-secondary">Default instruction: <span className="text-ink">{selected.prompt}</span></p>}
-                {selected.eventTypes?.length ? <p className="mt-1 text-[10.5px] text-ink-secondary">Accepted events: <span className="text-ink">{selected.eventTypes.join(", ")}</span></p> : null}
-              </section>
+              <div className="mt-5 flex gap-5 border-b border-hairline/35 px-5 md:px-7">
+                <button onClick={() => setTab("setup")} className={cn("border-b-2 px-0.5 pb-3 text-[12px] font-medium", tab === "setup" ? "border-accent text-ink" : "border-transparent text-ink-secondary hover:text-ink")}>Setup</button>
+                <button onClick={() => setTab("activity")} className={cn("flex items-center gap-1.5 border-b-2 px-0.5 pb-3 text-[12px] font-medium", tab === "activity" ? "border-accent text-ink" : "border-transparent text-ink-secondary hover:text-ink")}>Activity{activity.length > 0 && <span className="rounded-full bg-raised px-1.5 py-0.5 text-[9px] tabular-nums text-ink-secondary">{activity.length}</span>}</button>
+              </div>
 
-              {selected.verificationSample && !selected.enabled && <div className="mt-3 rounded-xl border border-success/20 bg-success/5 p-3.5"><div className="flex items-center gap-2 text-[12px] font-medium text-success"><Check size={13} />Test event received</div><p className="mt-2 break-words font-mono text-[10.5px] leading-relaxed text-ink-secondary">{selected.verificationSample.preview || "Empty payload"}</p><button disabled={Boolean(working)} onClick={() => void invoke(selected, "toggle")} className="mt-3 flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-[11.5px] font-medium text-white hover:brightness-110"><Play size={12} />Turn on webhook</button></div>}
-              <div className="border-t border-hairline/35 pt-5"><div className="mb-2 flex items-center justify-between"><h4 className="text-[12.5px] font-medium text-ink">Activity</h4><span className="text-[10.5px] text-ink-secondary">Updates automatically</span></div><div className="overflow-hidden rounded-xl border border-hairline/35">{activity.length === 0 ? <div className="px-4 py-8 text-center text-[11.5px] text-ink-secondary">No requests yet. Copy the terminal command above to send one.</div> : activity.map((item, index) => <div key={item.id} className={cn("flex items-center gap-2.5 px-3.5 py-3", index > 0 && "border-t border-hairline/25")}><span className={cn("size-2 shrink-0 rounded-full", item.outcome === "rejected" || item.run?.status === "failed" ? "bg-danger" : item.run && ["queued", "running", "waiting"].includes(item.run.status) ? "animate-pulse bg-accent" : item.outcome === "ignored" || item.outcome === "duplicate" ? "bg-ink-secondary/50" : "bg-success")} /><div className="min-w-0 flex-1"><div className="flex items-center gap-1.5 text-[11.5px]"><span className="truncate font-medium text-ink">{item.eventName}</span><span className="shrink-0 text-ink-secondary">· {relativeTime(item.at)}</span></div><div className="mt-0.5 truncate font-mono text-[10.5px] text-ink-secondary/85">{item.reason || item.preview || "Empty payload"}</div></div><span className={cn("shrink-0 text-[10.5px] font-medium", outcomeTone(item.outcome, item.run))}>{outcomeLabel(item.outcome, item.run)}</span>{item.run?.threadId && selectedBot && <button onClick={() => { dispatch({ type: "select", id: selectedBot.id }); dispatch({ type: "switchTask", botId: selectedBot.id, threadId: item.run!.threadId! }); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] text-ink-secondary hover:bg-raised hover:text-ink" title="Open this execution in the MAUS chat"><ExternalLink size={11} />Open chat</button>}</div>)}</div></div>
-            </div>}
+              {tab === "setup" ? (
+                <div className="px-5 py-6 md:px-7">
+                  <div className="max-w-[720px]">
+                    <h4 className="text-[14px] font-semibold text-ink">Send a test task</h4>
+                    <p className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">Copy this command into Terminal and press Return. Edit only the task text when you want to try something different.</p>
+                    {credential ? (
+                      <div className="mt-4 overflow-hidden rounded-xl border border-hairline/45 bg-[#0d0d0d]">
+                        <div className="flex items-center justify-between border-b border-white/5 px-3.5 py-2"><span className="text-[9.5px] font-medium uppercase tracking-wider text-ink-secondary">Terminal</span><div className="flex items-center gap-1"><button onClick={() => void createAndCopyCommand(selected)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10.5px] font-medium text-ink-secondary hover:bg-raised hover:text-ink">{copiedId === selected.id ? <Check size={12} className="text-success" /> : <Copy size={12} />}{copiedId === selected.id ? "Copied" : "Copy command"}</button><button onClick={() => void createAndCopyCommand(selected, true)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink" title="Rotate private URL"><RotateCw size={12} /></button></div></div>
+                        <pre className="overflow-x-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-ink-secondary">{command}</pre>
+                      </div>
+                    ) : (
+                      <button disabled={Boolean(working) || !ingress?.available} onClick={() => void createAndCopyCommand(selected)} className="mt-4 flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-40">{working === `${selected.id}:command` ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}Create & copy test command</button>
+                    )}
+                    <div className="mt-3 flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-secondary"><Laptop size={12} className="mt-0.5 shrink-0" /><span>Local only for now. Keep OpenMausBot open while sending the request.</span></div>
+
+                    {selected.verificationSample && !selected.enabled && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-y border-success/20 bg-success/5 px-3.5 py-3"><div><div className="flex items-center gap-2 text-[11.5px] font-medium text-success"><Check size={13} />Test event received</div><p className="mt-1 max-w-[520px] truncate font-mono text-[10px] text-ink-secondary">{selected.verificationSample.preview || "Empty payload"}</p></div><button disabled={Boolean(working)} onClick={() => void invoke(selected, "toggle")} className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11px] font-medium text-white hover:brightness-110"><Play size={12} />Turn on</button></div>}
+
+                    <div className="mt-7 border-t border-hairline/35 pt-5">
+                      <div className="grid gap-4 text-[11.5px] sm:grid-cols-2"><div><div className="text-[10px] uppercase tracking-wider text-ink-secondary">Tasks go to</div><div className="mt-1.5 font-medium text-ink">{selectedBot?.name ?? "Deleted MAUS"}</div></div><div><div className="text-[10px] uppercase tracking-wider text-ink-secondary">Runs on</div><div className="mt-1.5 font-medium text-ink">{selected.runOn === "cloud" ? "Cloud VM" : "This computer"}</div></div></div>
+                    </div>
+
+                    <details className="group mt-5 border-t border-hairline/35 pt-4"><summary className="flex cursor-pointer list-none items-center justify-between text-[11.5px] font-medium text-ink"><span>Advanced</span><ChevronDown size={14} className="text-ink-secondary transition-transform group-open:rotate-180" /></summary><div className="mt-4 space-y-3 text-[10.5px] leading-relaxed text-ink-secondary">{selected.prompt ? <p><span className="font-medium text-ink">Default instruction:</span> {selected.prompt}</p> : <p>The task or message sent with each request becomes the MAUS instruction.</p>}{selected.eventTypes?.length ? <p><span className="font-medium text-ink">Accepted events:</span> {selected.eventTypes.join(", ")}</p> : <p>All event types are accepted.</p>}<button onClick={() => setEditor(selected)} className="rounded-lg border border-hairline/50 px-3 py-2 text-[11px] font-medium text-ink hover:bg-raised">Edit settings</button></div></details>
+                  </div>
+                </div>
+              ) : (
+                <div className="px-5 py-5 md:px-7">
+                  <div className="mb-3"><h4 className="text-[13px] font-semibold text-ink">Recent deliveries</h4><p className="mt-1 text-[10.5px] text-ink-secondary">Accepted and rejected requests update automatically.</p></div>
+                  <div className="border-t border-hairline/35">
+                    {activity.length === 0 ? <div className="px-2 py-12 text-center text-[11.5px] text-ink-secondary">No requests yet. Use the command in Setup to send one.</div> : activity.map((item) => (
+                      <div key={item.id} className="flex items-center gap-2.5 border-b border-hairline/25 px-1 py-3.5">
+                        <span className={cn("size-2 shrink-0 rounded-full", item.outcome === "rejected" || item.run?.status === "failed" ? "bg-danger" : item.run && ["queued", "running", "waiting"].includes(item.run.status) ? "animate-pulse bg-accent" : item.outcome === "ignored" || item.outcome === "duplicate" ? "bg-ink-secondary/50" : "bg-success")} />
+                        <div className="min-w-0 flex-1"><div className="flex items-center gap-1.5 text-[11.5px]"><span className="truncate font-medium text-ink">{item.eventName}</span><span className="shrink-0 text-ink-secondary">· {relativeTime(item.at)}</span></div><div className="mt-0.5 truncate font-mono text-[10px] text-ink-secondary/85">{item.reason || item.preview || "Empty payload"}</div></div>
+                        <span className={cn("shrink-0 text-[10px] font-medium", outcomeTone(item.outcome, item.run))}>{outcomeLabel(item.outcome, item.run)}</span>
+                        {item.run?.threadId && selectedBot && <button onClick={() => { dispatch({ type: "select", id: selectedBot.id }); dispatch({ type: "switchTask", botId: selectedBot.id, threadId: item.run!.threadId! }); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] text-ink-secondary hover:bg-raised hover:text-ink" title="Open this execution in the MAUS chat"><ExternalLink size={11} />Open chat</button>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </div>
-      {editor && <WebhookEditor webhook={editor === "new" ? undefined : editor} bots={bots} onClose={() => setEditor(null)} onCredential={(newCredential, webhookId) => { setCredentials((current) => ({ ...current, [webhookId]: newCredential })); setSelectedId(webhookId); }} />}
+      {editor && <WebhookEditor webhook={editor === "new" ? undefined : editor} bots={bots} onClose={() => setEditor(null)} onCredential={(newCredential, webhookId) => { setCredentials((current) => ({ ...current, [webhookId]: newCredential })); setSelectedId(webhookId); setTab("setup"); }} />}
     </div>
   );
 }

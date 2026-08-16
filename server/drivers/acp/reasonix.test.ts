@@ -3,7 +3,7 @@
 // Windows %APPDATA% fallback, plus the .env value grammar (valid, empty,
 // comment-only, quoted-empty, export-prefixed).
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -23,14 +23,30 @@ describe("reasonixHome", () => {
     );
   });
 
-  it("Windows without APPDATA falls back to ~/AppData/Roaming/reasonix", () => {
-    expect(reasonixHome({}, "win32")).toBe(
-      join(process.env.HOME || process.env.USERPROFILE || "", "AppData", "Roaming", "reasonix"),
+  it("Windows without APPDATA uses USERPROFILE/AppData/Roaming/reasonix", () => {
+    expect(reasonixHome({ USERPROFILE: "C:\\Users\\me" }, "win32")).toBe(
+      join("C:\\Users\\me", "AppData", "Roaming", "reasonix"),
     );
   });
 
-  it("non-Windows defaults to ~/.reasonix", () => {
-    expect(reasonixHome({}, "linux")).toBe(join(process.env.HOME || "", ".reasonix"));
+  it("Windows without APPDATA falls back HOME for AppData/Roaming/reasonix", () => {
+    expect(reasonixHome({ HOME: "C:\\Users\\home" }, "win32")).toBe(
+      join("C:\\Users\\home", "AppData", "Roaming", "reasonix"),
+    );
+  });
+
+  it("Windows without APPDATA, USERPROFILE or HOME falls back to homedir", () => {
+    expect(reasonixHome({}, "win32")).toBe(
+      join(homedir(), "AppData", "Roaming", "reasonix"),
+    );
+  });
+
+  it("non-Windows defaults to <HOME>/.reasonix", () => {
+    expect(reasonixHome({ HOME: "/home/child" }, "linux")).toBe(join("/home/child", ".reasonix"));
+  });
+
+  it("non-Windows falls back to homedir when HOME unset", () => {
+    expect(reasonixHome({}, "linux")).toBe(join(homedir(), ".reasonix"));
   });
 });
 

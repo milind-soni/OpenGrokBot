@@ -22,8 +22,8 @@ export function reasonixHome(
   return (
     env.REASONIX_HOME ||
     (platform === "win32"
-      ? join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "reasonix")
-      : join(homedir(), ".reasonix"))
+      ? join(env.APPDATA || join(env.USERPROFILE || env.HOME || homedir(), "AppData", "Roaming"), "reasonix")
+      : join(env.HOME || homedir(), ".reasonix"))
   );
 }
 

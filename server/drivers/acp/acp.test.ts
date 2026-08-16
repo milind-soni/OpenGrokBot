@@ -20,6 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
+import { ReasonixDriver } from "./reasonix.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -650,6 +651,51 @@ describe("ACP snapshot", () => {
       expect((await instance.snapshot()).authenticated).toBe(true);
     } finally {
       await instance.dispose();
+    }
+  });
+
+  it("reasonix checks REASONIX_HOME before the child HOME", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-reasonix-auth-"));
+    const reasonixHome = join(scratch, "custom-reasonix-home");
+    const childHome = join(scratch, "child-home");
+    mkdirSync(childHome, { recursive: true });
+    writeFileSync(join(childHome, ".env"), "export DEEPSEEK_API_KEY=sk-abc123\n");
+
+    const instance = await ReasonixDriver.create({
+      instanceId: "reasonix-custom-home",
+      displayName: undefined,
+      environment: { REASONIX_HOME: reasonixHome, HOME: childHome },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(false);
+      mkdirSync(reasonixHome, { recursive: true });
+      writeFileSync(join(reasonixHome, ".env"), "export DEEPSEEK_API_KEY=sk-abc123\n");
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("reasonix resolves default credentials from the child HOME", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-reasonix-home-"));
+    mkdirSync(join(scratch, ".reasonix"), { recursive: true });
+    writeFileSync(join(scratch, ".reasonix", ".env"), "export DEEPSEEK_API_KEY=sk-abc123\n");
+
+    const instance = await ReasonixDriver.create({
+      instanceId: "reasonix-child-home",
+      displayName: undefined,
+      environment: { HOME: scratch },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 });

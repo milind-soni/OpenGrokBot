@@ -17,6 +17,8 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
+const WEBHOOK_PORT = 39000 + Math.floor(Math.random() * 10_000);
+const WEBHOOK_BASE = `http://127.0.0.1:${WEBHOOK_PORT}`;
 
 let child: ChildProcess;
 /** stands in for the box provider so config saving never touches the network */
@@ -74,6 +76,7 @@ beforeAll(async () => {
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
+      OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_STATIC_DIR: staticDir,
     },
@@ -380,6 +383,55 @@ describe("harness HTTP API", () => {
 
     const after = await api("GET", "/api/config");
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+  });
+
+  it("creates an independent webhook, accepts a delivery, deduplicates it, and rotates its secret", async () => {
+    const bots = await api("GET", "/api/bots");
+    const created = await api("POST", "/api/webhooks", {
+      name: "Incoming build",
+      prompt: "Review the incoming build event",
+      botId: bots.body.bots[0].id,
+      runOn: "maus",
+      durationMinutes: 30,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.ingress).toMatchObject({ available: true, baseUrl: WEBHOOK_BASE });
+    expect(created.body.credential.url).toMatch(new RegExp(`^${WEBHOOK_BASE}/hooks/wh_`));
+
+    const listed = await api("GET", "/api/webhooks");
+    expect(listed.body.webhooks).toHaveLength(1);
+    expect(JSON.stringify(listed.body)).not.toContain(created.body.credential.secret);
+
+    const deliver = () => fetch(created.body.credential.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "build-42" },
+      body: JSON.stringify({ status: "failed", build: 42 }),
+    });
+    const first = await deliver();
+    expect(first.status).toBe(202);
+    const accepted = await first.json() as { runId: string; accepted: boolean; duplicate: boolean };
+    expect(accepted).toMatchObject({ accepted: true, duplicate: false });
+    const retry = await deliver();
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toMatchObject({ accepted: true, duplicate: true, runId: accepted.runId });
+
+    const receipts = await api("GET", "/api/routines");
+    expect(receipts.body.runs.find((run: { id: string }) => run.id === accepted.runId)).toMatchObject({
+      triggerSource: "webhook",
+      deliveryId: "build-42",
+      routineName: "Incoming build",
+    });
+
+    const rotated = await api("POST", `/api/webhooks/${created.body.webhook.id}/rotate`);
+    expect(rotated.status).toBe(200);
+    expect(rotated.body.credential.url).not.toBe(created.body.credential.url);
+    expect((await deliver()).status).toBe(401);
+
+    expect((await api("DELETE", `/api/webhooks/${created.body.webhook.id}`)).status).toBe(200);
+    expect((await api("GET", "/api/webhooks")).body.webhooks).toHaveLength(0);
+    if (process.platform !== "win32") {
+      expect(statSync(join(home, ".openmausbot", "webhooks.json")).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("stores OpenCode Go credentials as a configured-only status", async () => {

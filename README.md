@@ -245,11 +245,24 @@ pnpm package:win   # Windows installer + zip → release/
 pnpm package:linux # Ubuntu x64 .deb + AppImage → release/
 ```
 
+### Routines and webhook triggers
+
+Routines can run once or on selected weekdays, using either a MAUS's configured model/computer or the
+Cloud VM runner. Webhook triggers are independent from schedules but reuse the same queued task executor
+and calendar receipts.
+
+OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
+Set `OMB_WEBHOOK_PORT` to choose another port. The generated capability URL is shown once when a webhook
+is created or rotated. The receiver exposes only `/health` and secret `/hooks/...` endpoints; it never
+exposes the app's broader API. OpenMausBot must remain running to accept a delivery. For public internet
+delivery, proxy only this dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
+
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
 computer use. macOS and Windows have released builds; Ubuntu 24.04 x64 packages are in beta with the
-capability limits above. Rough edges to expect: routines are a placeholder and sidebar sections aren't built yet.
+capability limits above. Rough edges to expect: hosted/mobile connectivity is still being built, and webhook
+triggers currently use the local receiver rather than an always-on hosted relay.
 Voice needs an ElevenLabs key, and calls are macOS-only for now (they ride the same on-device dictation as
 the composer mic) — see [`docs/voice-mode.md`](docs/voice-mode.md) for the design and the known gaps.
 

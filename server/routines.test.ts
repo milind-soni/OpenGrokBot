@@ -19,6 +19,7 @@ function harness(start = new Date(2026, 7, 17, 8, 0, 0).getTime()) {
   let task = 0;
   const started: Array<{ botId: string; threadId: string; prompt: string }> = [];
   const runOns: string[] = [];
+  const triggerSources: string[] = [];
   const emitted: any[] = [];
   const options: RoutineManagerOptions = {
     file: tempFile(),
@@ -26,9 +27,10 @@ function harness(start = new Date(2026, 7, 17, 8, 0, 0).getTime()) {
     emit: (payload) => emitted.push(payload),
     botState: () => bot,
     createTask: () => ({ threadId: `thread-${++task}` }),
-    startTurn: async (botId, threadId, prompt, runOn) => {
+    startTurn: async (botId, threadId, prompt, runOn, triggerSource) => {
       started.push({ botId, threadId, prompt });
       runOns.push(runOn);
+      triggerSources.push(triggerSource);
     },
   };
   const manager = new RoutineManager(options);
@@ -38,6 +40,7 @@ function harness(start = new Date(2026, 7, 17, 8, 0, 0).getTime()) {
     emitted,
     started,
     runOns,
+    triggerSources,
     setNow: (value: number) => (now = value),
     setBot: (value: typeof bot) => (bot = value),
   };
@@ -170,6 +173,33 @@ describe("RoutineManager", () => {
     expect(h.runOns).toEqual(["cloud"]);
     expect(h.manager.listRuns()[0]).toMatchObject({ runOn: "cloud" });
     expect(h.manager.listRoutines()[0]).toMatchObject({ runOn: "maus" });
+  });
+
+  it("queues webhook jobs through the same detached-task executor", async () => {
+    const h = harness();
+    const receivedAt = new Date(2026, 7, 17, 8, 2).getTime();
+    const queued = h.manager.enqueueWebhook({
+      webhookId: "hook-1",
+      webhookName: "New ticket",
+      prompt: "Handle ticket 42",
+      botId: "maus-webhook",
+      runOn: "cloud",
+      durationMinutes: 30,
+      deliveryId: "delivery-42",
+      receivedAt,
+    });
+    await h.manager.tick();
+
+    expect(queued).toMatchObject({
+      routineId: "hook-1",
+      webhookId: "hook-1",
+      deliveryId: "delivery-42",
+      triggerSource: "webhook",
+      scheduledFor: receivedAt,
+    });
+    expect(h.started).toEqual([{ botId: "maus-webhook", threadId: "thread-1", prompt: "Handle ticket 42" }]);
+    expect(h.runOns).toEqual(["cloud"]);
+    expect(h.triggerSources).toEqual(["webhook"]);
   });
 
   it("folds provider lifecycle events into the calendar receipt", async () => {

@@ -4,6 +4,8 @@ export type RoutineSchedule =
 
 export type RoutineRunOn = "maus" | "cloud";
 
+export type RoutineRunTrigger = "schedule" | "manual" | "webhook";
+
 export type RoutineRunStatus =
   | "queued"
   | "running"
@@ -38,6 +40,9 @@ export interface RoutineRun {
   scheduledFor: number;
   status: RoutineRunStatus;
   manual: boolean;
+  triggerSource?: RoutineRunTrigger;
+  webhookId?: string;
+  deliveryId?: string;
   threadId?: string;
   startedAt?: number;
   finishedAt?: number;

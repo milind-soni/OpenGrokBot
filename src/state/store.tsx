@@ -15,6 +15,7 @@ import {
 } from "react";
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
+import type { WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { currentCall } from "@/lib/call";
 import { showNotification } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
@@ -211,6 +212,8 @@ interface AppState {
   activeView: "chat" | "routines";
   routines: Routine[];
   routineRuns: RoutineRun[];
+  webhooks: WebhookTrigger[];
+  webhookIngress: WebhookIngressStatus | null;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
@@ -236,6 +239,9 @@ type Action =
   | { type: "routinePatched"; routine: Routine }
   | { type: "routineDeleted"; routineId: string }
   | { type: "routineRunPatched"; run: RoutineRun }
+  | { type: "webhooksHydrated"; webhooks: WebhookTrigger[]; ingress: WebhookIngressStatus }
+  | { type: "webhookPatched"; webhook: WebhookTrigger }
+  | { type: "webhookDeleted"; webhookId: string }
   | { type: "createRoutine"; input: RoutineInput }
   | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
   | { type: "deleteRoutine"; routineId: string }
@@ -385,6 +391,19 @@ function reducer(state: AppState, action: Action): AppState {
         : [action.run, ...state.routineRuns];
       return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
     }
+    case "webhooksHydrated":
+      return { ...state, webhooks: action.webhooks, webhookIngress: action.ingress };
+    case "webhookPatched": {
+      const exists = state.webhooks.some((webhook) => webhook.id === action.webhook.id);
+      return {
+        ...state,
+        webhooks: exists
+          ? state.webhooks.map((webhook) => (webhook.id === action.webhook.id ? action.webhook : webhook))
+          : [action.webhook, ...state.webhooks],
+      };
+    }
+    case "webhookDeleted":
+      return { ...state, webhooks: state.webhooks.filter((webhook) => webhook.id !== action.webhookId) };
     case "groupPatched": {
       const exists = state.groups.some((g) => g.id === action.group.id);
       const groups = exists
@@ -699,6 +718,8 @@ const initialState: AppState = {
   activeView: "chat",
   routines: [],
   routineRuns: [],
+  webhooks: [],
+  webhookIngress: null,
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
@@ -1066,6 +1087,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api("/api/routines")
           .then(({ routines, runs }) => alive && rawDispatch({ type: "routinesHydrated", routines, runs }))
           .catch(() => {}),
+        api("/api/webhooks")
+          .then(({ webhooks, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, ingress }))
+          .catch(() => {}),
       ]);
 
     // A snapshot and the live fold have to meet at a defined boundary. Start
@@ -1190,6 +1214,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "routine.run":
           rawDispatch({ type: "routineRunPatched", run: frame.run });
+          break;
+        case "webhook":
+          rawDispatch({ type: "webhookPatched", webhook: frame.webhook });
+          break;
+        case "webhook.deleted":
+          rawDispatch({ type: "webhookDeleted", webhookId: frame.webhookId });
           break;
         case "runtime": {
           const event = frame.event;

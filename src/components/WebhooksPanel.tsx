@@ -11,7 +11,6 @@ import {
   Pause,
   Play,
   Plus,
-  Radio,
   RotateCw,
   ShieldCheck,
   Trash2,
@@ -82,24 +81,23 @@ function CredentialModal({
             </div>
             <p className="mt-2 text-[11px] leading-relaxed text-ink-secondary">Send the secret as <code className="text-ink">Authorization: Bearer …</code>. This keeps it out of request URLs and most access logs.</p>
           </div>
-          <div>
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Try it</div>
-            <div className="relative rounded-xl border border-hairline/50 bg-[#101010] p-3.5 pr-12">
+          <details className="rounded-xl border border-hairline/40 bg-inset px-3.5 py-3">
+            <summary className="cursor-pointer text-[12px] font-medium text-ink">Show a test command</summary>
+            <div className="relative mt-3 rounded-xl border border-hairline/50 bg-[#101010] p-3.5 pr-12">
               <pre className="overflow-x-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-ink-secondary">{command}</pre>
               <button onClick={() => void copy("curl", command)} className="absolute right-2 top-2 rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink" title="Copy curl command">{copied === "curl" ? <Check size={14} className="text-success" /> : <Copy size={14} />}</button>
             </div>
-          </div>
-          <div>
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Single URL compatibility</div>
-            <div className="flex items-center gap-2 rounded-xl border border-hairline/50 bg-inset p-2">
+          </details>
+          <details className="rounded-xl border border-hairline/40 bg-inset px-3.5 py-3">
+            <summary className="cursor-pointer text-[12px] font-medium text-ink">Need one URL instead?</summary>
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-hairline/50 bg-panel p-2">
               <code className="min-w-0 flex-1 select-all overflow-x-auto px-2 text-[12px] text-ink">{credential.url}</code>
               <button onClick={() => void copy("url", credential.url)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12px] text-ink hover:bg-raised-hover">{copied === "url" ? <Check size={13} className="text-success" /> : <Copy size={13} />}Copy URL</button>
             </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-secondary">Use this only when the sender cannot configure an Authorization header.</p>
-          </div>
-          <div className="rounded-xl bg-accent/10 px-3.5 py-3 text-[12px] leading-relaxed text-ink-secondary">This address currently listens only on this computer. A hosted relay or Tailscale Funnel can later make the same trigger reachable from the public internet without changing how the MAUS runs it.</div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-secondary">For services that cannot send an Authorization header.</p>
+          </details>
         </div>
-        <div className="flex justify-end border-t border-hairline/40 px-5 py-4"><button onClick={onClose} className="rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110">Done</button></div>
+        <div className="flex items-center justify-between gap-3 border-t border-hairline/40 px-5 py-4"><span className="text-[11px] text-ink-secondary">OpenMausBot must stay open to receive local events.</span><button onClick={onClose} className="rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110">Done</button></div>
       </div>
     </div>
   );
@@ -111,14 +109,13 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
   const [prompt, setPrompt] = useState(webhook?.prompt ?? "");
   const [botId, setBotId] = useState(webhook?.botId ?? bots[0]?.id ?? "");
   const [runOn, setRunOn] = useState<RoutineRunOn>(webhook?.runOn ?? "maus");
-  const [durationMinutes, setDurationMinutes] = useState(webhook?.durationMinutes ?? 30);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const cloudInstance = state.instances.find((instance) => instance.driverKind === "boxAgent");
   const cloudReady = Boolean(state.config?.box.configured && cloudInstance?.snapshot.state === "available");
 
   const save = async () => {
-    const input: WebhookTriggerInput = { name, prompt, botId, runOn, durationMinutes, enabled: webhook?.enabled ?? true };
+    const input: WebhookTriggerInput = { name, prompt, botId, runOn, enabled: webhook?.enabled ?? true };
     setSaving(true);
     setError("");
     try {
@@ -138,12 +135,12 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="max-h-[90vh] w-full max-w-[620px] overflow-y-auto rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-hairline/40 bg-panel/95 px-5 py-4 backdrop-blur">
-          <div><div className="text-[17px] font-semibold text-ink">{webhook ? "Edit webhook" : "New webhook trigger"}</div><div className="mt-0.5 text-[12px] text-ink-secondary">Start a real MAUS task whenever an external event arrives.</div></div>
+      <div className="flex max-h-[90vh] w-full max-w-[620px] flex-col overflow-hidden rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-hairline/40 bg-panel/95 px-5 py-4">
+          <div><div className="text-[17px] font-semibold text-ink">{webhook ? "Edit webhook" : "New webhook"}</div><div className="mt-0.5 text-[12px] text-ink-secondary">Turn an event from another app into a MAUS task.</div></div>
           <button onClick={onClose} className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><X size={18} /></button>
         </div>
-        <div className="space-y-5 p-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
           <label className="block"><span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">Webhook name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="New support ticket" className="w-full rounded-xl border border-hairline/60 bg-inset px-3.5 py-2.5 text-[14px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent/70" /></label>
           <div>
             <div className="mb-2 text-[12px] font-medium text-ink-secondary">Who handles it?</div>
@@ -158,11 +155,10 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
               <button type="button" disabled={!cloudReady && runOn !== "cloud"} onClick={() => setRunOn("cloud")} className={cn("rounded-xl border p-3 text-left disabled:cursor-not-allowed disabled:opacity-45", runOn === "cloud" ? "border-accent/70 bg-accent/10" : "border-hairline/50 bg-inset hover:bg-raised/60")}><div className="flex items-center gap-2 text-[13px] font-medium text-ink"><Cloud size={15} />Cloud VM</div><div className="mt-1 text-[11px] text-ink-secondary">Runs the MAUS inside its Box VM.</div></button>
             </div>
           </div>
-          <label className="block"><span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">What should this MAUS do?</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="Read the incoming ticket data, investigate the issue, and prepare a response…" className="w-full resize-y rounded-xl border border-hairline/60 bg-inset px-3.5 py-3 text-[14px] leading-relaxed text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent/70" /><span className="mt-1.5 block text-[11px] leading-relaxed text-ink-secondary">Incoming payloads are attached as untrusted event data after these instructions.</span></label>
-          <label className="block"><span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">Calendar receipt size</span><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))} className="rounded-xl border border-hairline/60 bg-inset px-3.5 py-2.5 text-[14px] text-ink outline-none focus:border-accent/70">{[15, 30, 45, 60, 90, 120].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select></label>
+          <label className="block"><span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">What should this MAUS do?</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} placeholder="Read the incoming ticket data, investigate the issue, and prepare a response…" className="w-full resize-y rounded-xl border border-hairline/60 bg-inset px-3.5 py-3 text-[14px] leading-relaxed text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent/70" /><span className="mt-1.5 block text-[11px] leading-relaxed text-ink-secondary">The event is attached as untrusted data. Good for support tickets, failed builds, forms, orders, and alerts.</span></label>
           {error && <div className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12px] text-danger">{error}</div>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-hairline/40 px-5 py-4"><button onClick={onClose} className="rounded-xl px-4 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink">Cancel</button><button disabled={saving || !name.trim() || !prompt.trim() || !botId} onClick={() => void save()} className="flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{webhook ? "Save changes" : "Create webhook"}</button></div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-hairline/40 px-5 py-4"><button onClick={onClose} className="rounded-xl px-4 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink">Cancel</button><button disabled={saving || !name.trim() || !prompt.trim() || !botId} onClick={() => void save()} className="flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{webhook ? "Save changes" : "Create webhook"}</button></div>
       </div>
     </div>
   );
@@ -206,23 +202,18 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto border-t border-hairline/40 p-5 md:p-6">
       <div className="mx-auto max-w-[1100px] space-y-5">
-        <div className={cn("flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3.5", ingress?.available ? "border-success/25 bg-success/5" : "border-warning/25 bg-warning/5")}>
-          <div className={cn("flex size-10 items-center justify-center rounded-xl", ingress?.available ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}><Radio size={19} /></div>
-          <div className="min-w-0 flex-1"><div className="text-[13px] font-semibold text-ink">{ingress?.available ? "Local webhook receiver is ready" : "Local webhook receiver needs attention"}</div><div className="mt-0.5 truncate text-[11.5px] text-ink-secondary">{ingress?.baseUrl ?? "Starting receiver…"} · OpenMausBot must remain open to accept deliveries.</div></div>
-          <div className="max-w-[360px] text-[11px] leading-relaxed text-ink-secondary">Use a hosted relay or Tailscale Funnel for public internet delivery. Only this dedicated receiver should be exposed.</div>
-        </div>
-
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div><h2 className="text-[16px] font-semibold text-ink">Webhook triggers</h2><p className="mt-1 text-[12px] text-ink-secondary">External events start tasks immediately; schedules remain independent.</p></div>
+          <div><div className="flex items-center gap-2"><h2 className="text-[16px] font-semibold text-ink">Webhook triggers</h2><span title={ingress?.baseUrl} className={cn("flex items-center gap-1.5 rounded-full px-2 py-1 text-[10.5px]", ingress?.available ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}><span className={cn("size-1.5 rounded-full", ingress?.available ? "bg-success" : "bg-warning")} />{ingress?.available ? "Ready on this Mac" : "Receiver unavailable"}</span></div><p className="mt-1 text-[12px] text-ink-secondary">Start a MAUS when another app sends an event.</p></div>
           <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />New webhook</button>
         </div>
+        {!ingress?.available && ingress?.error && <div role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3.5 py-3 text-[12px] text-warning">{ingress.error}</div>}
         {error && <div className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12px] text-danger">{error}</div>}
 
         {state.webhooks.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-hairline/60 bg-panel/50 px-6 py-12 text-center">
             <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl bg-accent/10 text-accent"><Webhook size={30} /></div>
             <h3 className="text-[16px] font-semibold text-ink">React the moment something happens</h3>
-            <p className="mx-auto mt-2 max-w-[460px] text-[12.5px] leading-relaxed text-ink-secondary">Give GitHub, a CRM, your server, or a future mobile service a secret URL. Every delivery becomes a visible MAUS task and calendar receipt.</p>
+            <p className="mx-auto mt-2 max-w-[480px] text-[12.5px] leading-relaxed text-ink-secondary">Triage a new support ticket, investigate a failed build, summarize a form submission, or react to an order—right when it happens.</p>
             <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />Create your first webhook</button>
             {bots.length === 0 && <p className="mt-3 text-[12px] text-warning">Create a MAUS first, then come back to connect a webhook.</p>}
           </div>
@@ -239,7 +230,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
                     <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[14px] font-semibold text-ink">{webhook.name}</h3><span className={cn("size-2 shrink-0 rounded-full", webhook.enabled ? "bg-success" : "bg-ink-secondary/40")} /></div><div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-secondary"><span>{bot?.name ?? "Deleted MAUS"}</span><span>·</span><span className="flex items-center gap-1">{webhook.runOn === "cloud" ? <Cloud size={11} /> : <Laptop size={11} />}{webhook.runOn === "cloud" ? "Cloud VM" : "MAUS setup"}</span><span>·</span><span>{relativeTime(webhook.lastReceivedAt)}</span>{webhook.deliveryCount > 0 && <><span>·</span><span>{webhook.deliveryCount} {webhook.deliveryCount === 1 ? "delivery" : "deliveries"}</span></>}</div></div>
                     {busy && <Loader2 size={15} className="animate-spin text-accent" />}
                   </div>
-                  <div className="mt-3 rounded-xl bg-inset px-3 py-2.5"><div className="text-[10px] uppercase tracking-wider text-ink-secondary">Endpoint ID</div><code className="mt-1 block truncate text-[11.5px] text-ink">{webhook.endpointId}</code></div>
+                  <p className="mt-3 line-clamp-2 text-[12px] leading-relaxed text-ink-secondary">{webhook.prompt}</p>
                   {run && <div className="mt-3 flex items-center justify-between rounded-xl border border-hairline/35 px-3 py-2 text-[11.5px]"><span className="text-ink-secondary">Latest delivery</span><span className={cn("font-medium capitalize", run.status === "failed" ? "text-danger" : run.status === "completed" ? "text-success" : "text-accent")}>{run.status.replace("waiting", "needs you")}</span></div>}
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
                     <button disabled={busy || !webhook.enabled} onClick={() => void invoke(webhook, "test")} className="flex items-center gap-1.5 rounded-lg bg-raised px-2.5 py-1.5 text-[11.5px] text-ink hover:bg-raised-hover disabled:opacity-40"><FlaskConical size={12} />Test</button>

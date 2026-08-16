@@ -194,7 +194,9 @@ function RoutineCard({ item, bot, compact, onOpen }: { item: CalendarItem; bot: 
       )}
       style={{
         top: `${((new Date(item.at).getHours() * 60 + new Date(item.at).getMinutes()) / 60) * HOUR_HEIGHT}px`,
-        minHeight: `${Math.max(48, ((item.routine?.durationMinutes ?? item.run?.durationMinutes ?? 30) / 60) * HOUR_HEIGHT)}px`,
+        minHeight: item.run?.triggerSource === "webhook"
+          ? "48px"
+          : `${Math.max(48, ((item.routine?.durationMinutes ?? item.run?.durationMinutes ?? 30) / 60) * HOUR_HEIGHT)}px`,
         background: `linear-gradient(115deg, color-mix(in srgb, ${color} 48%, #181818), color-mix(in srgb, ${color} 20%, #111))`,
       }}
     >

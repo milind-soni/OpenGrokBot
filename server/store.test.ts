@@ -101,7 +101,7 @@ describe("Store", () => {
     );
   });
 
-  it("persists a bot's effort level across a restart, defaulting to none", () => {
+  it("persists a bot's effort level across a restart, defaulting to unset", () => {
     const store = new Store(selection);
     const bot = store.createBot();
     expect(bot.modelSelection.effort).toBeUndefined();

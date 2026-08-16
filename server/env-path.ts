@@ -36,6 +36,7 @@ function knownDirs(): string[] {
     join(home, ".kimi-code", "bin"), // kimi-code installer
     join(home, ".grok", "bin"), // x.ai installer
     join(home, ".claude", "local"), // claude "local install"
+    join(home, ".opencode", "bin"), // opencode.ai/install — a standalone binary, not an npm shim
     "/opt/homebrew/bin", // brew, Apple silicon
     "/usr/local/bin", // brew Intel / classic installs
     join(home, ".volta", "bin"),

@@ -20,15 +20,13 @@ describe("webhookMessageView", () => {
 
     expect(webhookMessageView(text)).toEqual({
       task: "Summarize the failed deploy and suggest the first check.",
-      eventName: "deployment.failed",
       payload: JSON.stringify({ task: "Summarize the failed deploy and suggest the first check.", service: "checkout-api", environment: "production" }, null, 2),
-      details: ["checkout-api", "production"],
     });
   });
 
   it("supports configured instructions and leaves normal chat messages alone", () => {
     const webhook = "[USER-CONFIGURED WEBHOOK INSTRUCTIONS]\nTriage every build failure.\n[/USER-CONFIGURED WEBHOOK INSTRUCTIONS]\n\n[UNTRUSTED WEBHOOK EVENT DATA]\nEvent: build.failed\n\nraw payload\n[/UNTRUSTED WEBHOOK EVENT DATA]";
-    expect(webhookMessageView(webhook)).toMatchObject({ task: "Triage every build failure.", eventName: "build.failed", payload: "raw payload" });
+    expect(webhookMessageView(webhook)).toMatchObject({ task: "Triage every build failure.", payload: "raw payload" });
     expect(webhookMessageView("hello from a person")).toBeNull();
   });
 });

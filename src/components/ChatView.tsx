@@ -311,7 +311,7 @@ function Bubble({
           className={cn(
             "max-w-[70%] rounded-2xl text-[15px] leading-relaxed",
             user && webhookView
-              ? "overflow-hidden border border-accent/20 bg-bubble-user text-ink"
+              ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
                 ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
                 : "bg-card px-4 py-2.5 text-ink",
@@ -320,21 +320,15 @@ function Bubble({
         >
           {user && webhookView ? (
             <div className="min-w-[300px] max-w-[520px]">
-              <div className="flex items-center gap-2 border-b border-hairline/30 px-4 py-2.5 text-[11.5px] font-medium text-accent">
+              <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
                 <Webhook size={13} />
                 <span>Webhook task</span>
-                {webhookView.eventName && <><span className="text-ink-secondary/60">·</span><span className="truncate text-ink-secondary">{webhookView.eventName}</span></>}
               </div>
               <div className="px-4 py-3 whitespace-pre-wrap">{webhookView.task}</div>
-              {(webhookView.eventName || webhookView.details.length > 0) && (
-                <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3 text-[10.5px] text-ink-secondary">
-                  {webhookView.details.map((detail) => <span key={detail} className="rounded-md bg-raised/70 px-2 py-1">{detail}</span>)}
-                </div>
-              )}
               {webhookView.payload && (
-                <details className="border-t border-hairline/25 px-4 py-2.5 text-[11.5px] text-ink-secondary">
+                <details className="border-t border-hairline/30 bg-inset/25 px-4 py-2.5 text-[11.5px] text-ink-secondary">
                   <summary className="cursor-pointer select-none hover:text-ink">View event payload</summary>
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-black/20 p-3 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary">{webhookView.payload}</pre>
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-hairline/25 bg-black/25 p-3 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary">{webhookView.payload}</pre>
                 </details>
               )}
             </div>

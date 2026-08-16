@@ -10,7 +10,6 @@ import { GrokAgentDriver } from "./acp/grok.ts";
 import { GeminiAgentDriver } from "./acp/gemini.ts";
 import { KimiAgentDriver } from "./acp/kimi.ts";
 import { DroidAgentDriver } from "./acp/droid.ts";
-import { OpenCodeGoDriver } from "./acp/opencode-go.ts";
 import { OpenCodeAgentDriver } from "./acp/opencode.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
@@ -19,7 +18,6 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   GeminiAgentDriver,
   KimiAgentDriver,
   DroidAgentDriver,
-  OpenCodeGoDriver,
   OpenCodeAgentDriver,
   ClaudeDriver,
   CodexDriver,

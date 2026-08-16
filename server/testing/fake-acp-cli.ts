@@ -216,7 +216,7 @@ function handle(msg: any) {
         out({
           jsonrpc: "2.0",
           id: msg.id,
-          error: { code: -32000, message: "Authentication required", data: { providerId: "opencode-go" } },
+          error: { code: -32000, message: "Authentication required", data: { providerId: "opencode" } },
         });
         break;
       }

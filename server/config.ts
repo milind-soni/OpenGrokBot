@@ -181,7 +181,6 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
           antigravity: { driver: "antigravityAgent" },
-          opencodeGo: { driver: "opencodeGo" },
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {

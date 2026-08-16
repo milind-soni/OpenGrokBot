@@ -389,6 +389,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await request("turn/start", {
             threadId: codexThreadId,
             input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
+            // spread, not `effort: turn.effort ?? null` — an absent key leaves
+            // the thread's current effort alone, while null would clear it
+            ...(turn.effort ? { effort: turn.effort } : {}),
           });
         } catch (e) {
           if (!state.settled) {

@@ -204,4 +204,30 @@ describe("CodexDriver turns (fake app-server)", () => {
       "low", "medium", "high", "xhigh", "max",
     ]);
   });
+
+  it("sends effort on turn/start, and omits the key when unset", async () => {
+    await create();
+    const dump = join(scratch, "effort.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "xhigh" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const turnStart = seen.calls.find((c: any) => c.method === "turn/start");
+    expect(turnStart.params.effort).toBe("xhigh");
+  });
+
+  it("sends no effort key when the turn has none", async () => {
+    await create();
+    const dump = join(scratch, "no-effort.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const turnStart = seen.calls.find((c: any) => c.method === "turn/start");
+    expect(turnStart.params).not.toHaveProperty("effort");
+  });
 });

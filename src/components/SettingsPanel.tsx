@@ -50,6 +50,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "voice"
         | "chiefOfStaff"
         | "approvePeerComms"
+        | "modelSelection"
       >
     >,
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
@@ -274,6 +275,32 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </div>
             <ModelPicker bot={bot} />
           </div>
+
+          {!!engine?.capabilities?.effortLevels?.length && (
+            <div className="rounded-xl bg-card p-4">
+              <div className="text-[15px] font-medium text-ink">Effort</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                How hard this bot thinks{bot.modelSelection.effort ? "" : " (currently: engine default)"}
+              </div>
+              <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
+                {([undefined, ...engine.capabilities.effortLevels] as const).map((level, i) => (
+                  <button
+                    key={level ?? "default"}
+                    onClick={() => patch({ modelSelection: { ...bot.modelSelection, effort: level } })}
+                    className={cn(
+                      "flex-1 py-1.5 text-[13px] capitalize",
+                      i > 0 && "border-l border-hairline/40",
+                      bot.modelSelection.effort === level
+                        ? "bg-raised text-ink"
+                        : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
+                    )}
+                  >
+                    {level ?? "Default"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>

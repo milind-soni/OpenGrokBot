@@ -87,6 +87,7 @@ export interface Group {
 export interface ModelSelection {
   instanceId: string;
   model: string;
+  effort?: string;
 }
 
 /** One of a bot's separate contexts: its own thread, transcript and
@@ -196,7 +197,7 @@ export interface InstanceInfo {
     version?: string | null;
   };
   models: { default: string; options: Array<{ id: string; label: string }> };
-  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean };
+  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; effortLevels?: readonly string[] };
   install?: EngineInstall;
 }
 
@@ -325,6 +326,7 @@ type Action =
           | "hidden"
           | "chiefOfStaff"
           | "approvePeerComms"
+          | "modelSelection"
         >
       >;
     };

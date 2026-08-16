@@ -31,7 +31,14 @@ import { discardDelegations, drainDelegations, queueDelegation, type QueueResult
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
-import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type Message } from "./store.ts";
+import {
+  mentionedBots,
+  roomResponders,
+  Store,
+  type GroupDefaultResponder,
+  type Message,
+  type TaskRecord,
+} from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
@@ -146,16 +153,18 @@ store.seedIfEmpty();
  * paired phone has even less business holding provider session identifiers
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
+const wireTask = ({ resumeCursors, ...task }: TaskRecord) => task;
+
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  return { ...rest, ...(tasks ? { tasks: tasks.map(({ resumeCursors: _, ...task }) => task) } : {}) };
+  return { ...rest, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
 };
 
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   ...wireBot(bot),
   messages: store.messagesFor(bot.threadId),
   activeLeafId: store.activeLeaf(bot.threadId),
-  tasks: store.tasks(bot.id).map(({ resumeCursors, ...task }) => task),
+  tasks: store.tasks(bot.id).map(wireTask),
 });
 
 // ── message pages ──────────────────────────────────────────────────────
@@ -1825,7 +1834,7 @@ const server = createServer(async (req, res) => {
       ...wireBot(bot),
       messages: store.messagesFor(bot.threadId),
       activeLeafId: store.activeLeaf(bot.threadId),
-      tasks: store.tasks(bot.id).map(({ resumeCursors, ...t }) => t),
+      tasks: store.tasks(bot.id).map(wireTask),
     });
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks$/);
@@ -1838,7 +1847,7 @@ const server = createServer(async (req, res) => {
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       const fresh = botWithThread(store.bot(bot.id)!);
       broadcast({ kind: "bot", bot: fresh });
-      return json(res, 201, { bot: fresh, task });
+      return json(res, 201, { bot: fresh, task: wireTask(task) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks\/([\w-]+)$/);
     if (m && method === "POST") {
@@ -1854,7 +1863,7 @@ const server = createServer(async (req, res) => {
       if (!task) return json(res, 404, { error: "no such task" });
       const fresh = botWithThread(store.bot(m[1])!);
       broadcast({ kind: "bot", bot: fresh });
-      return json(res, 200, { task });
+      return json(res, 200, { task: wireTask(task) });
     }
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);

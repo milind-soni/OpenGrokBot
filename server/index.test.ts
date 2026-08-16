@@ -414,25 +414,35 @@ describe("harness HTTP API", () => {
     }
 
     const created = await api("POST", "/api/bots");
-    expect(created.body.bot).not.toHaveProperty("resumeCursors");
-    const patched = await api("PATCH", `/api/bots/${created.body.bot.id}`, { name: "Cursorless" });
-    expect(patched.body.bot).not.toHaveProperty("resumeCursors");
-
-    const task = await api("POST", `/api/bots/${created.body.bot.id}/tasks`, {});
-    expect(task.body.bot).not.toHaveProperty("resumeCursors");
-    for (const t of task.body.bot.tasks ?? []) expect(t).not.toHaveProperty("resumeCursors");
-
-    // and the same on the wire, not just in the HTTP responses
-    const stream = await openSse(`${BASE}/api/events`);
+    const botId = created.body.bot.id;
     try {
-      await api("PATCH", `/api/bots/${created.body.bot.id}`, { unread: true });
-      const frame = await stream.until((f) => f.kind === "bot");
-      expect(frame.bot).not.toHaveProperty("resumeCursors");
-      expect(JSON.stringify(frame)).not.toContain("resumeCursors");
+      expect(created.body.bot).not.toHaveProperty("resumeCursors");
+      const patched = await api("PATCH", `/api/bots/${botId}`, { name: "Cursorless" });
+      expect(patched.body.bot).not.toHaveProperty("resumeCursors");
+
+      const task = await api("POST", `/api/bots/${botId}/tasks`, {});
+      expect(task.body.bot).not.toHaveProperty("resumeCursors");
+      for (const t of task.body.bot.tasks ?? []) expect(t).not.toHaveProperty("resumeCursors");
+      // the task alone, not just the bot it came attached to
+      expect(task.body.task).not.toHaveProperty("resumeCursors");
+      const renamed = await api("PATCH", `/api/bots/${botId}/tasks/${task.body.task.threadId}`, {
+        title: "Cursorless task",
+      });
+      expect(renamed.body.task).not.toHaveProperty("resumeCursors");
+
+      // and the same on the wire, not just in the HTTP responses
+      const stream = await openSse(`${BASE}/api/events`);
+      try {
+        await api("PATCH", `/api/bots/${botId}`, { unread: true });
+        const frame = await stream.until((f) => f.kind === "bot");
+        expect(frame.bot).not.toHaveProperty("resumeCursors");
+        expect(JSON.stringify(frame)).not.toContain("resumeCursors");
+      } finally {
+        stream.close();
+      }
     } finally {
-      stream.close();
+      await api("DELETE", `/api/bots/${botId}`);
     }
-    await api("DELETE", `/api/bots/${created.body.bot.id}`);
   });
 
   it("404s unknown routes with the route in the error", async () => {

@@ -298,6 +298,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (sessionId) args.push("--resume", sessionId);
       else args.push("--session-id", newSessionId!);
       if (turn.model) args.push("--model", turn.model);
+      if (turn.effort) args.push("--effort", turn.effort);
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless

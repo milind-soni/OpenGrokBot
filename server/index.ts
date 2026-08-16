@@ -23,7 +23,7 @@ import {
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import type { EffortLevel, RuntimeEvent } from "./contracts.ts";
+import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -1786,16 +1786,24 @@ const server = createServer(async (req, res) => {
       const existing = store.bot(m[1]);
       // Neither Codex (free-form string field) nor Grok (lazy, logs-only)
       // rejects an unknown effort level at their own boundary — this is the
-      // only real gate. An unavailable target instance (registry.get finds
-      // nothing) offers an empty list, so any effort is rejected: an engine
-      // that isn't there cannot promise to honour a level.
+      // only real gate, so it stays. But it fires only when the target
+      // instance actually resolves. An instance that isn't there declares no
+      // levels, and rejecting against that empty list would 400 the *whole*
+      // request: this is the app's general-purpose bot endpoint, and
+      // duplicateBot re-sends the source bot's entire modelSelection beside
+      // its name, title and description, so a source engine that happens to
+      // be offline would cost the copy all of them. Letting it through is
+      // safe — startTurn refuses to run a turn on an unavailable instance
+      // anyway, so an unverifiable level never reaches a CLI.
       const nextSelection = (body as Record<string, unknown>).modelSelection as
         | { instanceId?: string; effort?: string }
         | undefined;
       if (nextSelection?.effort !== undefined) {
         const target = registry.get(nextSelection.instanceId ?? existing?.modelSelection.instanceId ?? "");
-        const allowed = target?.adapter.capabilities.effortLevels ?? [];
-        if (!allowed.includes(nextSelection.effort as EffortLevel)) {
+        // typed as strings, not levels: this is the boundary that decides
+        // whether the value *is* a level, so it must not assert that it is
+        const allowed: readonly string[] = target?.adapter.capabilities.effortLevels ?? [];
+        if (target && !allowed.includes(nextSelection.effort)) {
           return json(res, 400, {
             error: `effort "${nextSelection.effort}" is not offered by this bot's engine`,
           });

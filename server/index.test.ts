@@ -291,17 +291,28 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("rejects an effort level the bot's engine does not declare", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
+  it("keeps the rest of a duplicate's fields when the source engine is offline", async () => {
+    // duplicateBot POSTs a blank bot, then PATCHes the source's whole
+    // modelSelection in one body beside its name, title and description.
+    // "ghost" is an unknown driver, so the registry resolves nothing and the
+    // level cannot be verified — which must not cost the copy everything
+    // else in the request.
+    const copy = (await api("POST", "/api/bots")).body.bot;
 
-    const bad = await api("PATCH", `/api/bots/${bot.id}`, {
-      modelSelection: { ...bot.modelSelection, effort: "banana" },
+    const patched = await api("PATCH", `/api/bots/${copy.id}`, {
+      name: "Reviewer copy",
+      title: "Reviewer",
+      description: "reads diffs",
+      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "xhigh" },
     });
-    expect(bad.status).toBe(400);
 
-    const after = await api("GET", "/api/bots");
-    const reread = after.body.bots.find((b: { id: string }) => b.id === bot.id);
-    expect(reread.modelSelection.effort).toBeUndefined();
+    expect(patched.status).toBe(200);
+    expect(patched.body.bot).toMatchObject({
+      name: "Reviewer copy",
+      title: "Reviewer",
+      description: "reads diffs",
+      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "xhigh" },
+    });
   });
 
   it("leaves a bot with no effort level untouched", async () => {

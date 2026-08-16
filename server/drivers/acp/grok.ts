@@ -23,11 +23,10 @@ const support: AcpSupport = {
       { id: "grok-4.5", label: "Grok 4.5" },
     ],
   },
-  // Grok's accepted levels vary by model (grok-4.3 takes `none`,
-  // grok-4.20-multi-agent takes `xhigh`) and the CLI validates lazily — a
-  // rejected level logs and falls back. This is the subset its current
-  // models share.
-  effortLevels: ["low", "medium", "high", "xhigh"],
+  // Grok's accepted levels vary by model and the CLI validates lazily — a
+  // rejected level only logs and falls back. Offer the intersection shared
+  // by every model in this driver's picker; notably, grok-4.5 rejects xhigh.
+  effortLevels: ["low", "medium", "high"],
   defaultCli: "grok",
   nativeSource: "grok.acp",
   loginNote: "Grok CLI is not signed in — run `grok login` in a terminal",

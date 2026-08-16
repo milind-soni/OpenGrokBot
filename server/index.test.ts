@@ -315,6 +315,16 @@ describe("harness HTTP API", () => {
     });
   });
 
+  it("rejects an unknown effort value even while the engine is offline", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const patched = await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "turbo" },
+    });
+
+    expect(patched.status).toBe(400);
+    expect(patched.body.error).toContain("not recognized");
+  });
+
   it("leaves a bot with no effort level untouched", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     expect(bot.modelSelection.effort).toBeUndefined();

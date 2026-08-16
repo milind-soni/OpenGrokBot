@@ -30,7 +30,13 @@ export class ProviderError extends Error {
 
 /** Reasoning-effort levels, ascending. A union of everything any engine
  * accepts; each driver declares the subset its CLI will take. */
-export type EffortLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export const EFFORT_LEVELS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/** Narrow untrusted API/config input before it becomes a model selection. */
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
+}
 
 // ── model selection ────────────────────────────────────────────────────
 // "Which model" is a data value carried on the request, never a service

@@ -458,7 +458,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("declares effort levels for Grok only", async () => {
     await create(GrokAgentDriver);
-    expect(instance.adapter.capabilities.effortLevels).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(instance.adapter.capabilities.effortLevels).toEqual(["low", "medium", "high"]);
 
     await create(GeminiAgentDriver);
     expect(instance.adapter.capabilities.effortLevels).toBeUndefined();

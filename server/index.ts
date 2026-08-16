@@ -23,7 +23,7 @@ import {
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import type { RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -694,6 +694,14 @@ async function startTurn(
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
   const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  // A selection can be persisted while its engine is offline. Re-check when
+  // the engine returns so an old or unsupported value never reaches a CLI.
+  if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
+    throw Object.assign(
+      new Error(`effort "${effort}" is not offered by this bot's engine — choose another level in settings`),
+      { status: 409 },
+    );
+  }
 
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
@@ -1799,6 +1807,9 @@ const server = createServer(async (req, res) => {
         | { instanceId?: string; effort?: string }
         | undefined;
       if (nextSelection?.effort !== undefined) {
+        if (!isEffortLevel(nextSelection.effort)) {
+          return json(res, 400, { error: `effort "${String(nextSelection.effort)}" is not recognized` });
+        }
         const target = registry.get(nextSelection.instanceId ?? existing?.modelSelection.instanceId ?? "");
         // typed as strings, not levels: this is the boundary that decides
         // whether the value *is* a level, so it must not assert that it is

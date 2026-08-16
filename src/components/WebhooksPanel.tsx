@@ -20,7 +20,7 @@ import {
 
 import { MausAvatar } from "@/components/Avatar";
 import { cn } from "@/lib/cn";
-import type { RoutineRunOn } from "@/lib/routines";
+import type { RoutineRun, RoutineRunOn } from "@/lib/routines";
 import type { WebhookCredential, WebhookTrigger, WebhookTriggerInput } from "@/lib/webhooks";
 import { api, useStore, type Bot } from "@/state/store";
 
@@ -31,6 +31,24 @@ function relativeTime(at?: number) {
   if (elapsed < 60 * 60_000) return `Received ${Math.floor(elapsed / 60_000)}m ago`;
   if (elapsed < 24 * 60 * 60_000) return `Received ${Math.floor(elapsed / 3_600_000)}h ago`;
   return `Last received ${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}`;
+}
+
+function deliverySummary(run: RoutineRun) {
+  const eventName = run.prompt?.match(/^Event: (.+)$/m)?.[1]?.trim() || "Webhook event";
+  const eventData = run.prompt?.match(/\[UNTRUSTED WEBHOOK EVENT DATA\]\n([\s\S]*?)\n\[\/UNTRUSTED WEBHOOK EVENT DATA\]/)?.[1] ?? "";
+  const payloadStart = eventData.indexOf("\n\n");
+  const payload = (payloadStart >= 0 ? eventData.slice(payloadStart + 2) : eventData).replace(/\s+/g, " ").trim();
+  return {
+    eventName,
+    preview: payload ? `${payload.slice(0, 150)}${payload.length > 150 ? "…" : ""}` : `Delivery ${run.deliveryId ?? run.id}`,
+  };
+}
+
+function deliveryTone(status: RoutineRun["status"]) {
+  if (status === "completed") return "text-success";
+  if (status === "failed" || status === "missed") return "text-danger";
+  if (status === "cancelled") return "text-ink-secondary";
+  return "text-accent";
 }
 
 function CredentialModal({
@@ -171,6 +189,17 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState("");
   const runById = useMemo(() => new Map(state.routineRuns.map((run) => [run.id, run])), [state.routineRuns]);
+  const deliveriesByWebhook = useMemo(() => {
+    const deliveries = new Map<string, RoutineRun[]>();
+    for (const run of [...state.routineRuns].sort((a, b) => b.scheduledFor - a.scheduledFor)) {
+      if (run.triggerSource !== "webhook" || !run.webhookId) continue;
+      const webhookRuns = deliveries.get(run.webhookId) ?? [];
+      if (webhookRuns.length >= 3) continue;
+      webhookRuns.push(run);
+      deliveries.set(run.webhookId, webhookRuns);
+    }
+    return deliveries;
+  }, [state.routineRuns]);
 
   const invoke = async (webhook: WebhookTrigger, action: "test" | "rotate" | "toggle" | "delete") => {
     setWorking(`${webhook.id}:${action}`);
@@ -221,7 +250,8 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
           <div className="grid gap-3 lg:grid-cols-2">
             {state.webhooks.map((webhook) => {
               const bot = bots.find((candidate) => candidate.id === webhook.botId);
-              const run = webhook.lastRunId ? runById.get(webhook.lastRunId) : undefined;
+              const recentDeliveries = deliveriesByWebhook.get(webhook.id) ?? [];
+              const run = recentDeliveries[0] ?? (webhook.lastRunId ? runById.get(webhook.lastRunId) : undefined);
               const busy = working?.startsWith(`${webhook.id}:`);
               return (
                 <div key={webhook.id} className={cn("rounded-2xl border bg-panel p-4 shadow-lg shadow-black/5", webhook.enabled ? "border-hairline/50" : "border-hairline/30 opacity-65")}>
@@ -231,10 +261,31 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
                     {busy && <Loader2 size={15} className="animate-spin text-accent" />}
                   </div>
                   <p className="mt-3 line-clamp-2 text-[12px] leading-relaxed text-ink-secondary">{webhook.prompt}</p>
-                  {run && <div className="mt-3 flex items-center justify-between rounded-xl border border-hairline/35 px-3 py-2 text-[11.5px]"><span className="text-ink-secondary">Latest delivery</span><span className={cn("font-medium capitalize", run.status === "failed" ? "text-danger" : run.status === "completed" ? "text-success" : "text-accent")}>{run.status.replace("waiting", "needs you")}</span></div>}
+                  <div className="mt-3 overflow-hidden rounded-xl border border-hairline/35 bg-inset/45">
+                    <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-2">
+                      <span className="text-[11.5px] font-medium text-ink">Recent deliveries</span>
+                      <span className="text-[10.5px] text-ink-secondary">Updates automatically</span>
+                    </div>
+                    {recentDeliveries.length === 0 ? (
+                      <div className="px-3 py-3 text-[11.5px] text-ink-secondary">Send an event and it will appear here.</div>
+                    ) : recentDeliveries.map((delivery, index) => {
+                      const summary = deliverySummary(delivery);
+                      const active = ["queued", "running", "waiting"].includes(delivery.status);
+                      return (
+                        <div key={delivery.id} className={cn("flex items-center gap-2.5 px-3 py-2.5", index > 0 && "border-t border-hairline/25", index === 0 && "bg-accent/[0.035]")}>
+                          <span className={cn("size-2 shrink-0 rounded-full", active ? "animate-pulse bg-accent" : delivery.status === "completed" ? "bg-success" : delivery.status === "failed" || delivery.status === "missed" ? "bg-danger" : "bg-ink-secondary/50")} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-1.5 text-[11.5px]"><span className="truncate font-medium text-ink">{summary.eventName}</span><span className="shrink-0 text-ink-secondary">· {relativeTime(delivery.scheduledFor).replace("Received ", "")}</span></div>
+                            <div className="mt-0.5 truncate font-mono text-[10.5px] text-ink-secondary/80">{summary.preview}</div>
+                          </div>
+                          <span className={cn("shrink-0 text-[10.5px] font-medium capitalize", deliveryTone(delivery.status))}>{delivery.status.replace("waiting", "needs you")}</span>
+                          {delivery.threadId && bot && <button onClick={() => { dispatch({ type: "select", id: bot.id }); dispatch({ type: "switchTask", botId: bot.id, threadId: delivery.threadId! }); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] text-ink-secondary hover:bg-raised hover:text-ink" title="Open this run"><ExternalLink size={11} />Open</button>}
+                        </div>
+                      );
+                    })}
+                  </div>
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
                     <button disabled={busy || !webhook.enabled} onClick={() => void invoke(webhook, "test")} className="flex items-center gap-1.5 rounded-lg bg-raised px-2.5 py-1.5 text-[11.5px] text-ink hover:bg-raised-hover disabled:opacity-40"><FlaskConical size={12} />Test</button>
-                    {run?.threadId && bot && <button onClick={() => { dispatch({ type: "select", id: bot.id }); dispatch({ type: "switchTask", botId: bot.id, threadId: run.threadId! }); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] text-ink-secondary hover:bg-raised hover:text-ink"><ExternalLink size={12} />Open run</button>}
                     <button disabled={busy} onClick={() => setEditor(webhook)} className="rounded-lg px-2.5 py-1.5 text-[11.5px] text-ink-secondary hover:bg-raised hover:text-ink">Edit</button>
                     <button disabled={busy} onClick={() => void invoke(webhook, "rotate")} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] text-ink-secondary hover:bg-raised hover:text-ink"><RotateCw size={12} />New URL</button>
                     <div className="flex-1" />

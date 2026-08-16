@@ -48,6 +48,34 @@ jobs:
           echo "version: $(node -p "require('./package.json').version")"
           echo "commit:  $(git rev-parse HEAD)"
           ls -lh release/*.exe release/*.yml 2>/dev/null || true
+      # Three things silently produce an installer that builds fine and is
+      # broken in the field, and none of them can be checked from the Mac the
+      # release is cut on — the artifact carries only the .exe. So assert them
+      # here, where the unpacked tree exists, and fail the build instead of
+      # shipping it.
+      - name: verify the packaged tree
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          fail=0
+          # missing → utilityProcess.fork fails → the 🐭 "Couldn't start the
+          # bot server" page
+          [ -f "$res/server/index.js" ] || { echo "::error::missing $res/server/index.js"; fail=1; }
+          # missing → the server has nothing to serve → black window
+          [ -f "$res/ui/index.html" ] || { echo "::error::missing $res/ui/index.html"; fail=1; }
+          [ -f "$res/app-update.yml" ] || { echo "::error::missing $res/app-update.yml"; fail=1; }
+          if [ -f "$res/app-update.yml" ]; then
+            grep -q "openmausbot-releases" "$res/app-update.yml" || {
+              echo "::error::app-update.yml does not point at openmausbot-releases"; fail=1; }
+            # while the build is unsigned, a publisherName makes
+            # electron-updater reject every update as untrusted
+            if grep -q "publisherName" "$res/app-update.yml"; then
+              echo "::error::app-update.yml carries publisherName on an unsigned build"; fail=1
+            fi
+          fi
+          echo "--- app-update.yml ---"; cat "$res/app-update.yml" 2>/dev/null || true
+          exit $fail
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer

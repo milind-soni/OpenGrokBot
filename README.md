@@ -252,10 +252,12 @@ Cloud VM runner. Webhook triggers are independent from schedules but reuse the s
 and calendar receipts.
 
 OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
-Set `OMB_WEBHOOK_PORT` to choose another port. The generated capability URL is shown once when a webhook
-is created or rotated. The receiver exposes only `/health` and secret `/hooks/...` endpoints; it never
-exposes the app's broader API. OpenMausBot must remain running to accept a delivery. For public internet
-delivery, proxy only this dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
+Set `OMB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
+or rotated. Bearer authentication is recommended so the secret stays out of request URLs and most access
+logs; a single capability URL remains available for senders that cannot configure headers. The receiver
+exposes only `/health` and secret `/hooks/...` endpoints; it never exposes the app's broader API.
+OpenMausBot must remain running to accept a delivery. For public internet delivery, proxy only this
+dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
 
 ## Status
 

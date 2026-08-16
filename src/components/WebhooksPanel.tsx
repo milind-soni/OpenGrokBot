@@ -5,6 +5,7 @@ import {
   Copy,
   ExternalLink,
   FlaskConical,
+  KeyRound,
   Laptop,
   Loader2,
   Pause,
@@ -42,36 +43,44 @@ function CredentialModal({
   available: boolean;
   onClose: () => void;
 }) {
-  const [copied, setCopied] = useState<"url" | "curl" | null>(null);
+  const [copied, setCopied] = useState<"endpoint" | "secret" | "url" | "curl" | null>(null);
   const command = [
-    "curl -X POST '" + credential.url + "'",
+    "curl -X POST '" + credential.endpointUrl + "'",
+    "-H 'Authorization: Bearer " + credential.secret + "'",
     "-H 'Content-Type: application/json'",
     "-H 'Idempotency-Key: event-123'",
     "-d '{\"event\":\"new_item\",\"id\":\"123\"}'",
   ].join(" \\\n  ");
-  const copy = async (kind: "url" | "curl", value: string) => {
+  const copy = async (kind: "endpoint" | "secret" | "url" | "curl", value: string) => {
     await navigator.clipboard?.writeText(value);
     setCopied(kind);
     setTimeout(() => setCopied(null), 1_800);
   };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="w-full max-w-[650px] overflow-hidden rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-[650px] overflow-y-auto rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
         <div className="flex items-center justify-between border-b border-hairline/40 px-5 py-4">
           <div>
-            <div className="flex items-center gap-2 text-[17px] font-semibold text-ink"><ShieldCheck size={18} className="text-success" />Webhook URL ready</div>
-            <div className="mt-1 text-[12px] text-ink-secondary">This secret URL is shown once. Treat it like a password.</div>
+            <div className="flex items-center gap-2 text-[17px] font-semibold text-ink"><ShieldCheck size={18} className="text-success" />Webhook connection ready</div>
+            <div className="mt-1 text-[12px] text-ink-secondary">The secret is shown once. Treat it like a password.</div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><X size={18} /></button>
         </div>
         <div className="space-y-4 p-5">
           {!available && <div className="rounded-xl border border-warning/30 bg-warning/10 px-3.5 py-3 text-[12px] leading-relaxed text-warning">The local receiver could not start. Save this URL, then restart OpenMausBot or change its webhook port before using it.</div>}
-          <div>
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Capability URL</div>
-            <div className="flex items-center gap-2 rounded-xl border border-hairline/50 bg-inset p-2">
-              <code className="min-w-0 flex-1 select-all overflow-x-auto px-2 text-[12px] text-ink">{credential.url}</code>
-              <button onClick={() => void copy("url", credential.url)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12px] text-ink hover:bg-raised-hover">{copied === "url" ? <Check size={13} className="text-success" /> : <Copy size={13} />}Copy URL</button>
+          <div className="rounded-xl border border-success/20 bg-success/5 p-3.5">
+            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-success"><KeyRound size={13} />Recommended · header authentication</div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset p-2">
+                <div className="min-w-0 flex-1"><div className="px-2 text-[9px] uppercase tracking-wider text-ink-secondary">Endpoint</div><code className="block select-all overflow-x-auto px-2 pt-0.5 text-[11.5px] text-ink">{credential.endpointUrl}</code></div>
+                <button onClick={() => void copy("endpoint", credential.endpointUrl)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12px] text-ink hover:bg-raised-hover">{copied === "endpoint" ? <Check size={13} className="text-success" /> : <Copy size={13} />}Copy</button>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset p-2">
+                <div className="min-w-0 flex-1"><div className="px-2 text-[9px] uppercase tracking-wider text-ink-secondary">Bearer secret</div><code className="block select-all overflow-x-auto px-2 pt-0.5 text-[11.5px] text-ink">{credential.secret}</code></div>
+                <button onClick={() => void copy("secret", credential.secret)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12px] text-ink hover:bg-raised-hover">{copied === "secret" ? <Check size={13} className="text-success" /> : <Copy size={13} />}Copy</button>
+              </div>
             </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-ink-secondary">Send the secret as <code className="text-ink">Authorization: Bearer …</code>. This keeps it out of request URLs and most access logs.</p>
           </div>
           <div>
             <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Try it</div>
@@ -79,6 +88,14 @@ function CredentialModal({
               <pre className="overflow-x-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-ink-secondary">{command}</pre>
               <button onClick={() => void copy("curl", command)} className="absolute right-2 top-2 rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink" title="Copy curl command">{copied === "curl" ? <Check size={14} className="text-success" /> : <Copy size={14} />}</button>
             </div>
+          </div>
+          <div>
+            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Single URL compatibility</div>
+            <div className="flex items-center gap-2 rounded-xl border border-hairline/50 bg-inset p-2">
+              <code className="min-w-0 flex-1 select-all overflow-x-auto px-2 text-[12px] text-ink">{credential.url}</code>
+              <button onClick={() => void copy("url", credential.url)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12px] text-ink hover:bg-raised-hover">{copied === "url" ? <Check size={13} className="text-success" /> : <Copy size={13} />}Copy URL</button>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-secondary">Use this only when the sender cannot configure an Authorization header.</p>
           </div>
           <div className="rounded-xl bg-accent/10 px-3.5 py-3 text-[12px] leading-relaxed text-ink-secondary">This address currently listens only on this computer. A hosted relay or Tailscale Funnel can later make the same trigger reachable from the public internet without changing how the MAUS runs it.</div>
         </div>
@@ -207,6 +224,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
             <h3 className="text-[16px] font-semibold text-ink">React the moment something happens</h3>
             <p className="mx-auto mt-2 max-w-[460px] text-[12.5px] leading-relaxed text-ink-secondary">Give GitHub, a CRM, your server, or a future mobile service a secret URL. Every delivery becomes a visible MAUS task and calendar receipt.</p>
             <button onClick={() => setEditor("new")} disabled={bots.length === 0} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-40"><Plus size={15} />Create your first webhook</button>
+            {bots.length === 0 && <p className="mt-3 text-[12px] text-warning">Create a MAUS first, then come back to connect a webhook.</p>}
           </div>
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">
@@ -218,7 +236,7 @@ export function WebhooksPanel({ bots }: { bots: Bot[] }) {
                 <div key={webhook.id} className={cn("rounded-2xl border bg-panel p-4 shadow-lg shadow-black/5", webhook.enabled ? "border-hairline/50" : "border-hairline/30 opacity-65")}>
                   <div className="flex items-start gap-3">
                     {bot ? <MausAvatar color={bot.color} state={run?.status === "running" ? "working" : webhook.enabled ? "idle" : "sleeping"} size={50} animated={run?.status === "running"} label={bot.name} /> : <div className="flex size-[50px] items-center justify-center rounded-xl bg-raised text-ink-secondary"><Webhook size={22} /></div>}
-                    <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[14px] font-semibold text-ink">{webhook.name}</h3><span className={cn("size-2 shrink-0 rounded-full", webhook.enabled ? "bg-success" : "bg-ink-secondary/40")} /></div><div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-secondary"><span>{bot?.name ?? "Deleted MAUS"}</span><span>·</span><span className="flex items-center gap-1">{webhook.runOn === "cloud" ? <Cloud size={11} /> : <Laptop size={11} />}{webhook.runOn === "cloud" ? "Cloud VM" : "MAUS setup"}</span><span>·</span><span>{relativeTime(webhook.lastReceivedAt)}</span></div></div>
+                    <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[14px] font-semibold text-ink">{webhook.name}</h3><span className={cn("size-2 shrink-0 rounded-full", webhook.enabled ? "bg-success" : "bg-ink-secondary/40")} /></div><div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-secondary"><span>{bot?.name ?? "Deleted MAUS"}</span><span>·</span><span className="flex items-center gap-1">{webhook.runOn === "cloud" ? <Cloud size={11} /> : <Laptop size={11} />}{webhook.runOn === "cloud" ? "Cloud VM" : "MAUS setup"}</span><span>·</span><span>{relativeTime(webhook.lastReceivedAt)}</span>{webhook.deliveryCount > 0 && <><span>·</span><span>{webhook.deliveryCount} {webhook.deliveryCount === 1 ? "delivery" : "deliveries"}</span></>}</div></div>
                     {busy && <Loader2 size={15} className="animate-spin text-accent" />}
                   </div>
                   <div className="mt-3 rounded-xl bg-inset px-3 py-2.5"><div className="text-[10px] uppercase tracking-wider text-ink-secondary">Endpoint ID</div><code className="mt-1 block truncate text-[11.5px] text-ink">{webhook.endpointId}</code></div>

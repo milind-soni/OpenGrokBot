@@ -46,7 +46,21 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   }, [open]);
 
   const pick = (instance: InstanceInfo, model: string) => {
-    dispatch({ type: "setModel", botId: bot.id, selection: { instanceId: instance.instanceId, model } });
+    // setModel replaces the whole selection, so a configured effort has to be
+    // carried across deliberately. Same engine, different model: keep it —
+    // silently resetting the level the user chose is not what "pick a model"
+    // means. Different engine: drop it, since effort vocabularies are
+    // per-driver and the old level may be one the new engine never declared.
+    const sameInstance = instance.instanceId === selection.instanceId;
+    dispatch({
+      type: "setModel",
+      botId: bot.id,
+      selection: {
+        instanceId: instance.instanceId,
+        model,
+        ...(sameInstance && selection.effort ? { effort: selection.effort } : {}),
+      },
+    });
     setOpen(false);
   };
 

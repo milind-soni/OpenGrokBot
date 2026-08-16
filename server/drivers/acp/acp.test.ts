@@ -175,6 +175,8 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_DUMP;
     delete process.env.XAI_API_KEY;
     delete process.env.OPENCODE_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
@@ -600,6 +602,29 @@ describe("ACP turns (fake CLI)", () => {
 
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv).toEqual(["acp"]);
+  });
+
+  it("opencode inherits its own provider key and no one else's", async () => {
+    process.env.FAKE_ACP_MODELS = "opencode/hy3-free";
+    const dump = join(scratch, "opencode-keys.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await create(OpenCodeAgentDriver);
+    // OPENCODE_API_KEY unlocks the OpenCode Zen provider: on a virgin HOME the
+    // catalog goes from 8 free models to 81 once it is set (measured, 1.18.18).
+    // It is in core.ts's PROVIDER_CREDENTIAL_ENV, so only declaring it in
+    // credentialEnv keeps it. The user's own logins live in opencode's
+    // auth.json and need nothing from us — these two must not travel.
+    process.env.OPENCODE_API_KEY = "zen-key";
+    process.env.OPENAI_API_KEY = "openai-should-not-leak";
+    process.env.ANTHROPIC_API_KEY = "anthropic-should-not-leak";
+
+    await instance.adapter.sendTurn({ threadId: "t-oc-keys", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const { env } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(env.OPENCODE_API_KEY).toBe("zen-key");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 });
 

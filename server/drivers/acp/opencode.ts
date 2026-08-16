@@ -377,6 +377,14 @@ const support: AcpSupport = {
 
   spawnArgs: () => ["acp"],
 
+  // OPENCODE_API_KEY unlocks the OpenCode Zen provider: on a virgin HOME the
+  // catalog goes from 8 free models to 81 once it is set (measured, 1.18.18).
+  // core.ts strips every PROVIDER_CREDENTIAL_ENV name a support does not claim,
+  // so this line is what keeps it. Nothing else belongs here — the user's own
+  // providers authenticate through opencode's auth.json, not through us, and a
+  // foreign key in this child would only be a leak.
+  credentialEnv: ["OPENCODE_API_KEY"],
+
   transformEnv: (env, config) => {
     env.OPENCODE_CONFIG_CONTENT = permissionEnv(env.OPENCODE_CONFIG_CONTENT, config.fullAuto);
     if (config.fullAuto) return;

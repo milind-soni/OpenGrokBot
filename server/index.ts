@@ -139,8 +139,20 @@ const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
+/** A bot as a client may see it: no provider session cursors.
+ *
+ * `resumeCursors` is the harness's own bookkeeping — the native session id
+ * to resume, per instance, per task. No client has ever used it, and a
+ * paired phone has even less business holding provider session identifiers
+ * than the desktop window did. Stripped here rather than at each call site
+ * so a new broadcast cannot forget. */
+const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
+  const { resumeCursors, tasks, ...rest } = bot;
+  return { ...rest, ...(tasks ? { tasks: tasks.map(({ resumeCursors: _, ...task }) => task) } : {}) };
+};
+
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
-  ...bot,
+  ...wireBot(bot),
   messages: store.messagesFor(bot.threadId),
   activeLeafId: store.activeLeaf(bot.threadId),
   tasks: store.tasks(bot.id).map(({ resumeCursors, ...task }) => task),
@@ -442,7 +454,7 @@ bus.subscribe((event: RuntimeEvent) => {
       lastReply.delete(event.threadId);
       if (bot) {
         store.patchBot(bot.id, { busy: false, unread: true });
-        broadcast({ kind: "bot", bot: store.bot(bot.id) });
+        broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
         notify(buildNotification("done", bot, event.threadId, reply));
         if (screenPollers.has(bot.id)) {
           // the last live frame becomes a settled inline screen message —
@@ -661,7 +673,7 @@ async function startTurn(
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   store.patchBot(bot.id, { busy: true, unread: false });
-  broadcast({ kind: "bot", bot: store.bot(bot.id) });
+  broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
 
   void (async () => {
     try {
@@ -827,7 +839,7 @@ async function startTurn(
       });
       broadcast({ kind: "message", threadId, message: failure });
       store.patchBot(bot.id, { busy: false });
-      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      broadcast({ kind: "bot", bot: wireBot(store.bot(bot.id)!) });
       opts?.onDispatchError?.(message);
     }
   })();
@@ -1063,7 +1075,7 @@ async function reloadProviders() {
     });
     broadcast({ kind: "message", threadId: b.threadId, message: note });
     store.patchBot(b.id, { busy: false });
-    broadcast({ kind: "bot", bot: store.bot(b.id) });
+    broadcast({ kind: "bot", bot: wireBot(store.bot(b.id)!) });
   }
 }
 
@@ -1593,7 +1605,7 @@ const server = createServer(async (req, res) => {
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
       return json(res, 201, {
         bot: {
-          ...store.bot(bot.id)!,
+          ...wireBot(store.bot(bot.id)!),
           messages: store.messagesFor(bot.threadId),
           activeLeafId: store.activeLeaf(bot.threadId),
         },
@@ -1649,8 +1661,8 @@ const server = createServer(async (req, res) => {
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
       const changed = new Map([[bot.id, store.bot(bot.id)!]]);
       for (const changedBot of chiefChanges) changed.set(changedBot.id, changedBot);
-      for (const changedBot of changed.values()) broadcast({ kind: "bot", bot: changedBot });
-      return json(res, 200, { bot });
+      for (const changedBot of changed.values()) broadcast({ kind: "bot", bot: wireBot(changedBot) });
+      return json(res, 200, { bot: wireBot(bot) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "DELETE") {
@@ -1810,7 +1822,7 @@ const server = createServer(async (req, res) => {
     // changes which transcript is live, and a partial patch would leave
     // the client showing the previous task's conversation.
     const botWithThread = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
-      ...bot,
+      ...wireBot(bot),
       messages: store.messagesFor(bot.threadId),
       activeLeafId: store.activeLeaf(bot.threadId),
       tasks: store.tasks(bot.id).map(({ resumeCursors, ...t }) => t),

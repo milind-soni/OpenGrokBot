@@ -403,6 +403,38 @@ describe("harness HTTP API", () => {
     expect(array.body.error).toContain("opencodeGo");
   });
 
+  it("never hands a client the provider session cursors", async () => {
+    // resumeCursors is the harness's own bookkeeping. It reached clients for
+    // a long time as harmless noise; once a phone is a client it is provider
+    // session state leaving the machine, so nothing carrying a bot may have it.
+    const listed = await api("GET", "/api/bots");
+    for (const bot of listed.body.bots) {
+      expect(bot).not.toHaveProperty("resumeCursors");
+      for (const task of bot.tasks ?? []) expect(task).not.toHaveProperty("resumeCursors");
+    }
+
+    const created = await api("POST", "/api/bots");
+    expect(created.body.bot).not.toHaveProperty("resumeCursors");
+    const patched = await api("PATCH", `/api/bots/${created.body.bot.id}`, { name: "Cursorless" });
+    expect(patched.body.bot).not.toHaveProperty("resumeCursors");
+
+    const task = await api("POST", `/api/bots/${created.body.bot.id}/tasks`, {});
+    expect(task.body.bot).not.toHaveProperty("resumeCursors");
+    for (const t of task.body.bot.tasks ?? []) expect(t).not.toHaveProperty("resumeCursors");
+
+    // and the same on the wire, not just in the HTTP responses
+    const stream = await openSse(`${BASE}/api/events`);
+    try {
+      await api("PATCH", `/api/bots/${created.body.bot.id}`, { unread: true });
+      const frame = await stream.until((f) => f.kind === "bot");
+      expect(frame.bot).not.toHaveProperty("resumeCursors");
+      expect(JSON.stringify(frame)).not.toContain("resumeCursors");
+    } finally {
+      stream.close();
+    }
+    await api("DELETE", `/api/bots/${created.body.bot.id}`);
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

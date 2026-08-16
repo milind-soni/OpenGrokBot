@@ -455,6 +455,17 @@ describe("ACP turns (fake CLI)", () => {
 
     expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_POLICY).toBe("auto");
   });
+
+  it("declares effort levels for Grok only", async () => {
+    await create(GrokAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toEqual(["low", "medium", "high", "xhigh"]);
+
+    await create(GeminiAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
+
+    await create(KimiAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
+  });
 });
 
 describe("ACP snapshot", () => {

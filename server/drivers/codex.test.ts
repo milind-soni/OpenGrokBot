@@ -197,4 +197,11 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(done).toMatchObject({ ok: false });
     expect(await instance.snapshot()).toMatchObject({ state: "unavailable" });
   });
+
+  it("declares the effort levels the app-server accepts", async () => {
+    await create();
+    expect(instance.adapter.capabilities.effortLevels).toEqual([
+      "low", "medium", "high", "xhigh", "max",
+    ]);
+  });
 });

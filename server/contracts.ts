@@ -28,12 +28,18 @@ export class ProviderError extends Error {
   }
 }
 
+/** Reasoning-effort levels, ascending. A union of everything any engine
+ * accepts; each driver declares the subset its CLI will take. */
+export type EffortLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+
 // ── model selection ────────────────────────────────────────────────────
 // "Which model" is a data value carried on the request, never a service
 // binding (upstream ModelSelectionWire). instanceId is the routing key.
 export interface ModelSelection {
   instanceId: InstanceId;
   model: string;
+  /** Optional: no effort means no flag, and the CLI keeps its own default. */
+  effort?: EffortLevel;
 }
 
 // ── instance configuration envelope ────────────────────────────────────
@@ -110,6 +116,7 @@ export interface SendTurnInput {
   threadId: ThreadId;
   text: string;
   model?: string;
+  effort?: EffortLevel;
   resumeCursor?: unknown;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
@@ -154,6 +161,10 @@ export interface ProviderAdapter {
      * connected apps). Same rule again: a key in the config says the user
      * HAS those connections, not that this driver can reach them. */
     composioMcp?: boolean;
+    /** Effort levels this driver can pass to its CLI, ascending. Absent =
+     * the driver cannot set effort, so the app never offers the control —
+     * same rule as computerMcp: never show a knob the driver cannot turn. */
+    effortLevels?: readonly EffortLevel[];
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

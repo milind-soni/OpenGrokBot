@@ -350,6 +350,13 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.interruptTurn("t-perm-2");
     await recorder.until((e) => e.type === "turn.completed");
   });
+
+  it("declares the effort levels the CLI accepts", async () => {
+    await create();
+    expect(instance.adapter.capabilities.effortLevels).toEqual([
+      "low", "medium", "high", "xhigh", "max",
+    ]);
+  });
 });
 
 // Auth state must come from the CLI, not from probing its credential store:

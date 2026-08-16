@@ -22,6 +22,7 @@ import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../proc
 
 import type {
   DriverCreateInput,
+  EffortLevel,
   EngineInstall,
   ProviderDriver,
   ProviderInstance,
@@ -56,6 +57,11 @@ export interface AcpSupport {
   driverKind: string;
   displayName: string;
   models: { default: string; options: Array<{ id: string; label: string }> };
+  /** Effort levels this harness's CLI accepts, ascending. Omit when it has
+   * no reasoning-effort control. Static for the same reason `models` is:
+   * describe() runs before any session exists, so there is no _meta to read
+   * — eventually both should come from initialize's _meta.modelState. */
+  effortLevels?: readonly EffortLevel[];
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
   /** Optional live model catalog. A failed lookup keeps the last usable catalog. */
@@ -639,7 +645,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, computerMcp: true },
+          capabilities: {
+            sessionModelSwitch: "unsupported",
+            agentsMcp: true,
+            computerMcp: true,
+            effortLevels: support.effortLevels,
+          },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

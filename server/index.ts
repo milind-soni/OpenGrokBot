@@ -23,6 +23,13 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import {
+  PROVIDER_PRESETS,
+  normalizeProviderBaseUrl,
+  safeProviderSummary,
+  type ApiProviderConfig,
+  type ProviderPresetId,
+} from "./providers.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -975,6 +982,86 @@ function configStatus() {
   };
 }
 
+function providerSummaries() {
+  return Object.entries(cfg.apiProviders ?? {}).map(([id, provider]) => safeProviderSummary(id, provider));
+}
+
+function isPreset(value: string): value is ProviderPresetId {
+  return Object.hasOwn(PROVIDER_PRESETS, value);
+}
+
+function providerFromBody(body: Record<string, unknown>, existing?: ApiProviderConfig): ApiProviderConfig {
+  const presetValue = typeof body.preset === "string" ? body.preset : existing?.preset ?? "custom";
+  if (presetValue !== "custom" && !isPreset(presetValue)) throw new Error("unknown provider preset");
+  const preset = presetValue === "custom" ? null : PROVIDER_PRESETS[presetValue];
+  const baseCandidate = body.baseUrl ?? existing?.baseUrl ?? preset?.baseUrl;
+  const apiKey = Object.hasOwn(body, "apiKey") ? String(body.apiKey ?? "") : existing?.apiKey;
+  const manualModel = typeof body.manualModel === "string" ? body.manualModel.trim() : "";
+  const existingModels = existing?.models ?? [];
+  const models = manualModel && !existingModels.some((model) => model.id === manualModel)
+    ? [...existingModels, { id: manualModel, label: manualModel }]
+    : existingModels;
+  const defaultModel = typeof body.defaultModel === "string" ? body.defaultModel.trim() : existing?.defaultModel;
+  const label = typeof body.label === "string" ? body.label.trim() : existing?.label;
+  return {
+    preset: presetValue,
+    ...(label ? { label } : {}),
+    baseUrl: normalizeProviderBaseUrl(baseCandidate),
+    requiresApiKey: preset?.requiresApiKey ?? (typeof body.requiresApiKey === "boolean" ? body.requiresApiKey : existing?.requiresApiKey ?? true),
+    ...(apiKey ? { apiKey } : {}),
+    ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : existing?.enabled !== undefined ? { enabled: existing.enabled } : {}),
+    ...(models.length ? { models } : {}),
+    ...(defaultModel ? { defaultModel } : manualModel ? { defaultModel: manualModel } : {}),
+    ...(existing?.discoveredAt ? { discoveredAt: existing.discoveredAt } : {}),
+    ...(existing?.discoveryError ? { discoveryError: existing.discoveryError } : {}),
+  };
+}
+
+async function refreshProviderModels(provider: ApiProviderConfig): Promise<ApiProviderConfig> {
+  const headers: Record<string, string> = {};
+  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
+  try {
+    const response = await fetch(`${provider.baseUrl}/models`, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`model discovery failed (HTTP ${response.status})`);
+    const payload: unknown = await response.json();
+    const data = (payload as { data?: unknown })?.data;
+    const ids = Array.isArray(data)
+      ? data.flatMap((item) => (typeof (item as { id?: unknown }).id === "string" && (item as { id: string }).id.trim()
+        ? [(item as { id: string }).id.trim()]
+        : []))
+      : [];
+    if (!ids.length) throw new Error("model discovery returned no models");
+    const models = [...new Set(ids)].sort().map((model) => ({ id: model, label: model }));
+    return {
+      ...provider,
+      models,
+      defaultModel: provider.defaultModel && models.some((model) => model.id === provider.defaultModel)
+        ? provider.defaultModel
+        : models[0].id,
+      discoveredAt: Date.now(),
+      discoveryError: undefined,
+    };
+  } catch (error) {
+    // Keep the last known-good cache. Never include response bodies or credentials in this status.
+    return { ...provider, discoveryError: error instanceof Error ? error.message : "model discovery failed" };
+  }
+}
+
+async function saveProvider(id: string, provider: ApiProviderConfig) {
+  const existing = cfg.apiProviders?.[id];
+  if (existing && JSON.stringify(existing) === JSON.stringify(provider)) return safeProviderSummary(id, existing);
+  const providers = { ...(cfg.apiProviders ?? {}), [id]: provider };
+  saveConfig({ apiProviders: providers });
+  Object.assign(cfg, loadConfig());
+  const instance = await registry.reload(`api-${id}`, instanceConfigs(cfg)[`api-${id}`]);
+  if (instance) bus.attach([instance]);
+  broadcast({ kind: "providers" });
+  return safeProviderSummary(id, provider);
+}
+
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
@@ -1666,6 +1753,50 @@ const server = createServer(async (req, res) => {
       // this the answer is frozen at boot and "check again" is a no-op.
       resetPathCache();
       return json(res, 200, { instances: await registry.describe() });
+    }
+
+    // ── direct OpenAI-compatible providers ──
+    if (method === "GET" && path === "/api/providers") {
+      return json(res, 200, { presets: PROVIDER_PRESETS, providers: providerSummaries() });
+    }
+    if (method === "POST" && path === "/api/providers") {
+      const body = await readBody(req);
+      // Named presets intentionally upsert a single instance. Custom endpoints
+      // receive an id here so users can keep more than one local or self-hosted
+      // endpoint without their setup silently replacing another one.
+      const requested = typeof body.id === "string"
+        ? body.id
+        : body.preset === "custom"
+          ? `custom-${randomBytes(5).toString("hex")}`
+          : typeof body.preset === "string"
+            ? body.preset
+            : "custom";
+      const id = /^[a-z][a-z0-9-]{0,63}$/.test(requested) ? requested : `custom-${randomBytes(5).toString("hex")}`;
+      const provider = providerFromBody(body, cfg.apiProviders?.[id]);
+      return json(res, 201, { provider: await saveProvider(id, provider) });
+    }
+    m = path.match(/^\/api\/providers\/([a-z][a-z0-9-]{0,63})$/);
+    if (m && method === "PUT") {
+      const body = await readBody(req);
+      const provider = providerFromBody(body, cfg.apiProviders?.[m[1]]);
+      return json(res, 200, { provider: await saveProvider(m[1], provider) });
+    }
+    if (m && method === "DELETE") {
+      if (!cfg.apiProviders?.[m[1]]) return json(res, 404, { error: "no such provider" });
+      const providers = { ...cfg.apiProviders };
+      delete providers[m[1]];
+      saveConfig({ apiProviders: providers });
+      Object.assign(cfg, loadConfig());
+      await registry.reload(`api-${m[1]}`, undefined);
+      broadcast({ kind: "providers" });
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/providers\/([a-z][a-z0-9-]{0,63})\/models\/refresh$/);
+    if (m && method === "POST") {
+      const existing = cfg.apiProviders?.[m[1]];
+      if (!existing) return json(res, 404, { error: "no such provider" });
+      const provider = await refreshProviderModels(existing);
+      return json(res, 200, { provider: await saveProvider(m[1], provider) });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──

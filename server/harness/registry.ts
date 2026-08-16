@@ -73,6 +73,15 @@ export class ProviderRegistry {
     }
   }
 
+  /** Replace one configured instance without disturbing sibling turns. */
+  async reload(instanceId: InstanceId, config: InstanceConfigMap[InstanceId] | undefined) {
+    const previous = this.byId.get(instanceId);
+    if (previous?.live) await previous.live.dispose();
+    this.byId.delete(instanceId);
+    if (config) await this.load({ [instanceId]: config });
+    return this.get(instanceId);
+  }
+
   get(instanceId: InstanceId): ProviderInstance | null {
     return this.byId.get(instanceId)?.live ?? null;
   }

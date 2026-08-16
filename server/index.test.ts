@@ -279,6 +279,71 @@ describe("harness HTTP API", () => {
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
   });
 
+  it("stores OpenAI-compatible providers write-only and keeps a manual model when discovery fails", async () => {
+    const created = await api("POST", "/api/providers", {
+      preset: "custom",
+      label: "Local test endpoint",
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKey: "provider_secret_value",
+      manualModel: "fallback-model",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.provider).toMatchObject({
+      id: expect.stringMatching(/^custom-[a-f0-9]{10}$/),
+      configured: true,
+      defaultModel: "fallback-model",
+      models: [{ id: "fallback-model" }],
+    });
+    expect(JSON.stringify(created.body)).not.toContain("provider_secret_value");
+
+    const providerId = created.body.provider.id;
+    const refreshed = await api("POST", `/api/providers/${providerId}/models/refresh`);
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.provider.models).toEqual([{ id: "fallback-model", label: "fallback-model" }]);
+    expect(refreshed.body.provider.discoveryError).toBeTruthy();
+    expect(JSON.stringify(refreshed.body)).not.toContain("provider_secret_value");
+
+    const listed = await api("GET", "/api/providers");
+    expect(listed.status).toBe(200);
+    expect(listed.body.providers).toHaveLength(1);
+    expect(JSON.stringify(listed.body)).not.toContain("provider_secret_value");
+    expect((await api("DELETE", `/api/providers/${providerId}`)).status).toBe(200);
+  });
+
+  it("discovers live OpenAI-compatible models and reloads the provider catalog", async () => {
+    const modelsServer = createServer((request, response) => {
+      if (request.url !== "/v1/models") return void response.writeHead(404).end();
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "live-model" }, { id: "another-model" }] }));
+    });
+    await new Promise<void>((resolve) => modelsServer.listen(0, "127.0.0.1", resolve));
+    const address = modelsServer.address();
+    if (!address || typeof address === "string") throw new Error("models test server did not bind");
+
+    try {
+      const created = await api("POST", "/api/providers", {
+        preset: "custom", label: "Discovery test", baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "provider_secret_value",
+      });
+      expect(created.status).toBe(201);
+      const refreshed = await api("POST", `/api/providers/${created.body.provider.id}/models/refresh`);
+      expect(refreshed.body.provider.models).toEqual([
+        { id: "another-model", label: "another-model" },
+        { id: "live-model", label: "live-model" },
+      ]);
+      expect(refreshed.body.provider.defaultModel).toBe("another-model");
+      expect(refreshed.body.provider.discoveryError).toBeUndefined();
+      const instances = await api("GET", "/api/instances");
+      expect(instances.body.instances).toContainEqual(expect.objectContaining({
+        instanceId: `api-${created.body.provider.id}`,
+        driverKind: "openaiCompatible",
+        snapshot: expect.objectContaining({ state: "available", version: "Chat only" }),
+      }));
+      expect((await api("DELETE", `/api/providers/${created.body.provider.id}`)).status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve) => modelsServer.close(() => resolve()));
+    }
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

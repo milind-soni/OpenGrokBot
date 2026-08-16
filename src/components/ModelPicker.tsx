@@ -112,6 +112,9 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                       ? (railInstance.snapshot.version ?? "ready")
                       : (railInstance.snapshot.reason ?? "sign-in required")}
                   </div>
+                  {railInstance.driverKind === "openaiCompatible" && (
+                    <span className="mt-1 inline-flex rounded bg-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">Chat only</span>
+                  )}
                 </div>
                 {/* An unavailable engine used to be a dead end here: dimmed
                     rows and the reason hidden in a tooltip, at exactly the

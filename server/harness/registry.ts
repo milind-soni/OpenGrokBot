@@ -118,6 +118,7 @@ export class ProviderRegistry {
           capabilities: {
             computerMcp: inst.adapter.capabilities.computerMcp === true,
             agentsMcp: inst.adapter.capabilities.agentsMcp === true,
+            effortLevels: inst.adapter.capabilities.effortLevels,
           },
           install: this.driversByKind.get(inst.driverKind)?.install,
         };

@@ -75,6 +75,24 @@ describe("ProviderRegistry", () => {
     expect(described.snapshot).toMatchObject({ state: "unavailable", reason: "provider probe exploded" });
   });
 
+  it("forwards a live instance's declared effort levels in describe()", async () => {
+    const fake = makeFakeDriver({ effortLevels: ["low", "high"] });
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({ a: { driver: "fake" } });
+
+    const [described] = await registry.describe();
+    expect(described.capabilities.effortLevels).toEqual(["low", "high"]);
+  });
+
+  it("omits effortLevels from describe() when the driver declares none", async () => {
+    const fake = makeFakeDriver();
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({ a: { driver: "fake" } });
+
+    const [described] = await registry.describe();
+    expect(described.capabilities.effortLevels).toBeUndefined();
+  });
+
   it("disposeAll disposes every live instance and empties the registry", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([fake.driver]);

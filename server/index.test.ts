@@ -557,25 +557,25 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("stores OpenCode Go credentials as a configured-only status", async () => {
-    const put = await api("PUT", "/api/config", { opencodeGo: { apiKey: "opencode-secret" } });
+  it("stores OpenCode credentials as a configured-only status", async () => {
+    const put = await api("PUT", "/api/config", { opencode: { apiKey: "opencode-secret" } });
     expect(put.status).toBe(200);
-    expect(put.body.opencodeGo).toEqual({ configured: true });
+    expect(put.body.opencode).toEqual({ configured: true });
     expect(JSON.stringify(put.body)).not.toContain("opencode-secret");
 
     const after = await api("GET", "/api/config");
-    expect(after.body.opencodeGo).toEqual({ configured: true });
+    expect(after.body.opencode).toEqual({ configured: true });
     expect(JSON.stringify(after.body)).not.toContain("opencode-secret");
   });
 
-  it("rejects a non-string OpenCode Go API key", async () => {
-    const bad = await api("PUT", "/api/config", { opencodeGo: { apiKey: 123 } });
+  it("rejects a non-string OpenCode API key", async () => {
+    const bad = await api("PUT", "/api/config", { opencode: { apiKey: 123 } });
     expect(bad.status).toBe(400);
-    expect(bad.body.error).toContain("opencodeGo.apiKey");
+    expect(bad.body.error).toContain("opencode.apiKey");
 
-    const array = await api("PUT", "/api/config", { opencodeGo: [] });
+    const array = await api("PUT", "/api/config", { opencode: [] });
     expect(array.status).toBe(400);
-    expect(array.body.error).toContain("opencodeGo");
+    expect(array.body.error).toContain("opencode");
   });
 
   it("never hands a client the provider session cursors", async () => {

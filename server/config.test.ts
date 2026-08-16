@@ -54,12 +54,12 @@ describe("Instance CLI override", () => {
   });
 });
 
-describe("OpenCode Go configuration", () => {
-  it("injects the key only into OpenCode Go instances", () => {
+describe("OpenCode configuration", () => {
+  it("injects the key only into OpenCode instances", () => {
     const cfg: AppConfig = {
-      opencodeGo: { apiKey: "secret-value" },
+      opencode: { apiKey: "secret-value" },
       instances: {
-        opencode: { driver: "opencodeGo" },
+        opencode: { driver: "opencodeAgent" },
         grok: { driver: "grokAgent" },
       },
     };
@@ -67,5 +67,29 @@ describe("OpenCode Go configuration", () => {
     const instances = instanceConfigs(cfg);
     expect(instances.opencode.environment).toEqual({ OPENCODE_API_KEY: "secret-value" });
     expect(instances.grok.environment).toEqual({});
+  });
+
+  // The key used to live under `opencodeGo`. Anyone who saved one before this
+  // rename has it on disk under the old name, and silently dropping it would
+  // send them back to the sign-in screen with no idea why.
+  it("still reads a key saved under the previous name", () => {
+    const cfg: AppConfig = {
+      opencodeGo: { apiKey: "saved-before-the-rename" },
+      instances: { opencode: { driver: "opencodeAgent" } },
+    };
+
+    expect(instanceConfigs(cfg).opencode.environment).toEqual({
+      OPENCODE_API_KEY: "saved-before-the-rename",
+    });
+  });
+
+  it("prefers the current name when a config carries both", () => {
+    const cfg: AppConfig = {
+      opencode: { apiKey: "current" },
+      opencodeGo: { apiKey: "legacy" },
+      instances: { opencode: { driver: "opencodeAgent" } },
+    };
+
+    expect(instanceConfigs(cfg).opencode.environment).toEqual({ OPENCODE_API_KEY: "current" });
   });
 });

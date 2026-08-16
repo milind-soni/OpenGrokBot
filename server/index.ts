@@ -1332,7 +1332,7 @@ function configStatus() {
       configured: Boolean(cfg.composio?.apiKey),
     },
     box: { configured: Boolean(cfg.box?.token) },
-    opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
+    opencode: { configured: Boolean(cfg.opencode?.apiKey ?? cfg.opencodeGo?.apiKey) },
     // the chosen voice is a setting, not a secret; the key is reported the
     // same configured-or-not way as every other credential
     tts: tts.describeVoice(cfg),
@@ -2412,22 +2412,24 @@ const server = createServer(async (req, res) => {
           }
         }
       }
-      const rawOpenCode = body.opencodeGo;
+      const rawOpenCode = body.opencode;
       if (
         rawOpenCode !== undefined
         && (rawOpenCode === null || typeof rawOpenCode !== "object" || Array.isArray(rawOpenCode))
       ) {
-        return json(res, 400, { error: "opencodeGo must be an object" });
+        return json(res, 400, { error: "opencode must be an object" });
       }
       if (
         rawOpenCode
         && Object.prototype.hasOwnProperty.call(rawOpenCode, "apiKey")
         && typeof (rawOpenCode as { apiKey?: unknown }).apiKey !== "string"
       ) {
-        return json(res, 400, { error: "opencodeGo.apiKey must be a string" });
+        return json(res, 400, { error: "opencode.apiKey must be a string" });
       }
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile"] as const) {
+      // `opencodeGo` is deliberately absent: a key saved under the old name is
+      // still READ (see config.ts), but writes only ever land on the new one.
+      for (const key of ["xai", "composio", "box", "opencode", "tts", "profile"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });

@@ -186,6 +186,9 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     />
                     <input
                       autoFocus
+                      // the placeholder carries the model count, so it changes
+                      // per engine and cannot double as the accessible name
+                      aria-label="Search models"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder={`Search ${options.length} models`}

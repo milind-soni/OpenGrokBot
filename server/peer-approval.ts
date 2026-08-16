@@ -23,7 +23,7 @@ import type { BotRecord, Message, Store } from "./store.ts";
 export interface ApprovalBus {
   store: Store;
   /** SSE broadcast (kind: "message" envelope). */
-  broadcast: (payload: unknown) => void;
+  broadcast: (payload: Record<string, unknown>) => void;
 }
 
 interface Pending {
@@ -33,6 +33,28 @@ interface Pending {
   fromBotId: string;
   toBotId: string;
   message: string;
+  /** Where the card lives, so answering it can settle it. A card that is
+   * never settled keeps matching the client's "unanswered" filter, and the
+   * composer stays disabled behind it — the thread is unusable from then on. */
+  threadId: string;
+  messageId: string;
+  bus: ApprovalBus;
+}
+
+/** Mark the card answered so the UI stops treating it as pending. Mirrors
+ * what the `request.resolved` fold does for provider cards; a harness-native
+ * card never emits that event, so it has to settle itself. */
+function settleCard(pending: Pending, behavior: string, source: "user" | "system"): void {
+  const existing = pending.bus.store
+    .messagesFor(pending.threadId)
+    .find((m) => m.id === pending.messageId);
+  if (!existing?.card || existing.card.answered) return;
+  const patched = pending.bus.store.patchMessage(pending.threadId, pending.messageId, {
+    card: { ...existing.card, answered: behavior, dismissed: source !== "user" },
+  });
+  if (patched) {
+    pending.bus.broadcast({ kind: "message.patch", threadId: pending.threadId, message: patched });
+  }
 }
 
 /** requestId → pending ask. Lives only in memory — restarting the
@@ -93,19 +115,29 @@ export function requestPeerApproval(
   }
   return new Promise((resolve) => {
     const requestId = newId();
+    // the card has to exist before the entry, so a timeout or an answer can
+    // always find it to settle
+    const card = pushApprovalCard(bus, from, target, message, action, requestId);
     const timer = setTimeout(() => {
       // 15 minutes without an answer → deny. Keeps an unattended bot from
       // stalling its own turn forever (matches the Claude broker timeout).
-      if (pendingComms.delete(requestId)) resolve("deny");
+      const pending = pendingComms.get(requestId);
+      if (!pending) return;
+      pendingComms.delete(requestId);
+      settleCard(pending, "deny", "system");
+      resolve("deny");
     }, APPROVAL_TIMEOUT_MS);
+    timer.unref?.(); // a waiting card must never hold the process open
     pendingComms.set(requestId, {
       resolve,
       timer,
       fromBotId: from.id,
       toBotId: target.id,
       message,
+      threadId: from.threadId,
+      messageId: card.id,
+      bus,
     });
-    pushApprovalCard(bus, from, target, message, action, requestId);
   });
 }
 
@@ -123,6 +155,42 @@ export function resolvePeerComms(
   pendingComms.delete(requestId);
   clearTimeout(pending.timer);
   const allow = behavior === "allow";
+  settleCard(pending, allow ? "allow" : "deny", "user");
   pending.resolve(allow ? "allow" : "deny");
   return true;
+}
+
+/** Drop every approval waiting on a bot that no longer exists (or is being
+ * deleted), denying it so the caller's turn doesn't wait out the timeout. */
+export function cancelPeerApprovalsFor(botId: string): void {
+  for (const [requestId, pending] of [...pendingComms]) {
+    if (pending.fromBotId !== botId && pending.toBotId !== botId) continue;
+    pendingComms.delete(requestId);
+    clearTimeout(pending.timer);
+    settleCard(pending, "deny", "system");
+    pending.resolve("deny");
+  }
+}
+
+/** Cards left on disk by a previous run can never be answered — their
+ * in-memory approval died with the process. Settle them at boot so a
+ * crashed run doesn't leave a thread with a permanently blocked composer. */
+export function dismissStalePeerCards(bus: ApprovalBus): number {
+  let dismissed = 0;
+  for (const bot of bus.store.bots) {
+    for (const message of bus.store.messagesFor(bot.threadId)) {
+      const card = message.card;
+      if (!card?.requestId || card.answered || card.dismissed) continue;
+      if (card.tool !== "ask_bot" && card.tool !== "delegate_bot") continue;
+      if (pendingComms.has(card.requestId)) continue;
+      const patched = bus.store.patchMessage(bot.threadId, message.id, {
+        card: { ...card, answered: "deny", dismissed: true },
+      });
+      if (patched) {
+        bus.broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
+        dismissed += 1;
+      }
+    }
+  }
+  return dismissed;
 }

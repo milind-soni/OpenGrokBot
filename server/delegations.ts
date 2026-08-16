@@ -26,12 +26,16 @@ export interface DelegationItem {
   depth: number;
 }
 
-export type QueueResult = "ok" | "no_target" | "self" | "too_deep";
+export type QueueResult = "ok" | "no_target" | "self" | "too_deep" | "too_many";
 
 /** Per source-thread queue. Persisted nowhere — a server restart drops
  * delegations the same way provider permissions drop, which is honest:
  * nobody can answer for an unattended bot. */
 const pendingDelegations = new Map<string, DelegationItem[]>();
+
+/** How many handoffs one turn may queue. Small on purpose: this is the only
+ * thing standing between a confused bot and a fan-out of real turns. */
+const MAX_QUEUED_PER_THREAD = 4;
 
 /** Validate and enqueue a delegation. Pushes a "Delegated to @B: reason"
  * chip to the source thread so the user can see what was queued. */
@@ -46,6 +50,10 @@ export function queueDelegation(
   const target = bus.store.bot(item.toBotId);
   if (!target) return "no_target";
   const list = pendingDelegations.get(from.threadId) ?? [];
+  // Async handoff removes the backpressure that ask_bot got for free by
+  // making the caller wait. Without a cap, one turn can queue unboundedly
+  // and fan out into as many real turns on the next settle.
+  if (list.length >= MAX_QUEUED_PER_THREAD) return "too_many";
   list.push(item);
   pendingDelegations.set(from.threadId, list);
   const label = `Delegated to @${target.name}${item.reason ? `: ${item.reason}` : ""}`;
@@ -78,6 +86,22 @@ export function drainDelegations(
   for (const item of list) {
     void processOne(bus, approvalBus, from, item, runTarget);
   }
+}
+
+/** Drop a thread's queued handoffs without running them, telling the user
+ * they were dropped. Used when the queueing turn failed or was interrupted. */
+export function discardDelegations(bus: CommsBus, threadId: string): void {
+  const list = pendingDelegations.get(threadId);
+  if (!list?.length) return;
+  pendingDelegations.delete(threadId);
+  const from = bus.store.botByThread(threadId);
+  if (!from) return;
+  const note = bus.store.appendMessage(from.threadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: `${list.length} queued delegation${list.length > 1 ? "s" : ""} dropped — the turn did not finish`, ok: false },
+  });
+  bus.broadcast({ kind: "message", threadId: from.threadId, message: note });
 }
 
 async function processOne(
@@ -113,6 +137,22 @@ async function processOne(
         role: "bot",
         kind: "activity",
         tool: { name: `Delegation to @${target.name} denied by user`, ok: false },
+      });
+      bus.broadcast({ kind: "message", threadId: from.threadId, message: note });
+      return;
+    }
+    // The approval could have been sitting for up to 15 minutes. Everything
+    // checked above is a stale snapshot now: re-read both bots and re-check
+    // busy, or an allow can start a second turn on a bot that is mid-turn —
+    // and mirror a "Messaged @X" chip for an exchange that never happens.
+    const current = bus.store.bot(item.toBotId);
+    const sender = bus.store.bot(from.id);
+    if (!current || !sender) return;
+    if (current.busy) {
+      const note = bus.store.appendMessage(from.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `Delegation to @${current.name} canceled — @${current.name} is busy`, ok: false },
       });
       bus.broadcast({ kind: "message", threadId: from.threadId, message: note });
       return;

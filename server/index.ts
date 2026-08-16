@@ -27,10 +27,10 @@ import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
-import { drainDelegations, queueDelegation } from "./delegations.ts";
+import { discardDelegations, drainDelegations, queueDelegation, type QueueResult } from "./delegations.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type Message } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
@@ -467,9 +467,28 @@ bus.subscribe((event: RuntimeEvent) => {
 // fold (which has its own switch/case noise) and its approval + startTurn
 // calls never have to share locals with the fold's state machine.
 bus.subscribe((event: RuntimeEvent) => {
-  if (event.type !== "turn.completed" || !event.ok) return;
+  if (event.type !== "turn.completed") return;
+  // A turn that failed or was interrupted drops its queue rather than
+  // firing it later: the user who hit Stop does not expect the delegations
+  // that turn queued to run anyway, minutes later, on an unrelated turn.
+  if (!event.ok) return void discardDelegations(commsBus, event.threadId);
   drainDelegations(commsBus, approvalBus, event.threadId, (toBotId, text, commsDepth) => {
-    void startTurn(toBotId, text, { commsDepth });
+    // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
+    // unavailable provider. Unhandled, that rejection is fatal to the
+    // harness (Node's default), which in the packaged app kills the server
+    // child. Every delegation failure has to land as a chip instead.
+    void startTurn(toBotId, text, { commsDepth }).catch((err) => {
+      const bot = store.bot(toBotId);
+      const why = err instanceof Error ? err.message : String(err);
+      const source = store.botByThread(event.threadId);
+      if (!source) return;
+      const note = store.appendMessage(source.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, ok: false },
+      });
+      broadcast({ kind: "message", threadId: source.threadId, message: note });
+    });
   });
 });
 
@@ -876,6 +895,14 @@ const commsBus: CommsBus = { store, broadcast, broadcastGroup };
 // can call resolvePeerComms without holding a reference back to here.
 const approvalBus: ApprovalBus = { store, broadcast };
 
+// Approvals live only in memory, so any peer card still open on disk is one
+// whose resolver died with the previous process. Left alone it can never be
+// answered, and the composer stays disabled behind it — settle them at boot.
+{
+  const stale = dismissStalePeerCards(approvalBus);
+  if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
+}
+
 async function runGroupMemberTurn(
   groupId: string,
   botId: string,
@@ -1170,30 +1197,36 @@ const server = createServer(async (req, res) => {
         const target = store.bot(toBotId);
         if (!target) return json(res, 404, { error: "no such bot" });
         if (target.busy) return json(res, 200, { busy: true });
+        // An unknown sender used to fall through: no mirroring AND no
+        // approval, while still running the peer turn. That made an
+        // unresolvable id the cheapest way past the gate, so it is now a
+        // hard refusal — every peer turn has an accountable sender.
         const from = store.bot(fromBotId);
-        const fromName = from?.name ?? "another bot";
+        if (!from) return json(res, 403, { error: "unknown sender" });
+        const fromName = from.name;
 
         // the exchange is mirrored into a bot⇄bot channel: it shows up in
         // the sidebar like any room, keeps the pair's full history, and the
         // user can open it and chip in. Both 1:1 threads get a clickable
         // chip that opens the channel, so bot-to-bot turns are never
-        // invisible (they cost the user tokens). An unknown sender (the
-        // proxy lied about its bot id) skips mirroring — the call still
-        // runs the peer turn, exactly like the original.
-        const channel = from ? getOrCreateChannel(store, from, target) : undefined;
-        if (from) {
-          // per-bot approval gate: a chief-of-staff bot without this on is
-          // free to coordinate; one with it on must wait for a human card
-          // (15-min timeout → deny) before its peer turn starts.
-          if (from.approvePeerComms) {
-            const verdict = await requestPeerApproval(approvalBus, from, target, message, "ask_bot");
-            if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
-          }
-          mirrorExchange(commsBus, from, target, message, channel);
+        // invisible (they cost the user tokens).
+        //
+        // per-bot approval gate: a chief-of-staff bot without this on is
+        // free to coordinate; one with it on must wait for a human card
+        // (15-min timeout → deny) before its peer turn starts. The channel
+        // and the chips are created only AFTER the verdict, so a denied
+        // contact leaves no trace of an exchange that never happened.
+        if (from.approvePeerComms) {
+          const verdict = await requestPeerApproval(approvalBus, from, target, message, "ask_bot");
+          if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
+          // the card may have been open for minutes — re-check the target
+          if (store.bot(toBotId)?.busy) return json(res, 200, { busy: true });
         }
+        const channel = getOrCreateChannel(store, from, target);
+        mirrorExchange(commsBus, from, target, message, channel);
         const prefixed = `[Message from @${fromName}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth);
-        if (from) mirrorReply(commsBus, target, reply, channel);
+        mirrorReply(commsBus, target, reply, channel);
         return json(res, 200, { botName: target.name, text: reply });
       }
       // Async handoff: the source bot queues a task for a peer and goes
@@ -1210,10 +1243,23 @@ const server = createServer(async (req, res) => {
         const from = store.bot(fromBotId);
         if (!from) return json(res, 404, { error: "no such bot" });
         const result = queueDelegation(commsBus, from, { toBotId, message, reason, depth }, MAX_COMMS_DEPTH);
-        if (result !== "ok") return json(res, 400, { error: result });
+        if (result !== "ok") {
+          // the agent reads this string — a bare enum ("too_deep") tells it
+          // nothing about what to do instead
+          const said: Record<Exclude<QueueResult, "ok">, string> = {
+            self: "a bot cannot delegate to itself",
+            too_deep: "delegation chains are limited to one hop — do this one yourself",
+            no_target: "no such bot",
+            too_many: "too many delegations queued on this turn — finish some first",
+          };
+          return json(res, 400, { error: said[result] });
+        }
+        const targetName = store.bot(toBotId)?.name ?? toBotId;
         return json(res, 200, {
           queued: true,
-          message: `Delegation queued — @${store.bot(toBotId)?.name ?? toBotId} will pick it up after your current turn finishes.`,
+          message: from.approvePeerComms
+            ? `Queued for review — @${targetName} will only pick it up if the user approves after your turn finishes.`
+            : `Delegation queued — @${targetName} will pick it up after your current turn finishes.`,
         });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
@@ -1517,6 +1563,10 @@ const server = createServer(async (req, res) => {
       stopScreenPoller(bot.id);
       routines!.disableForBot(bot.id);
       lastReply.delete(bot.threadId);
+      // a peer approval naming this bot can never be meaningfully answered
+      // now, and its caller would otherwise wait out the 15-minute timeout
+      cancelPeerApprovalsFor(bot.id);
+      discardDelegations(commsBus, bot.threadId);
       store.deleteBot(bot.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
         try {

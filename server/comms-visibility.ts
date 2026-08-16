@@ -10,7 +10,7 @@ import type { BotRecord, GroupRecord, Message, Store } from "./store.ts";
 export interface CommsBus {
   store: Store;
   /** SSE broadcast (kind: "message" envelope). */
-  broadcast: (payload: unknown) => void;
+  broadcast: (payload: Record<string, unknown>) => void;
   /** SSE broadcast (kind: "group" envelope) for a single group. */
   broadcastGroup: (groupId: string) => void;
 }

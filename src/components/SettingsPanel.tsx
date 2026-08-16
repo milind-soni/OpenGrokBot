@@ -291,6 +291,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 {([undefined, ...engine.capabilities.effortLevels] as const).map((level, i) => (
                   <button
                     key={level ?? "default"}
+                    aria-pressed={bot.modelSelection.effort === level}
                     onClick={() => patch({ modelSelection: { ...bot.modelSelection, effort: level } })}
                     className={cn(
                       "flex-1 py-1.5 text-[13px] capitalize",
@@ -300,7 +301,8 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                         : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
                     )}
                   >
-                    {level ?? "Default"}
+                    {/* the others capitalize cleanly; "xhigh" would read "Xhigh" */}
+                    {level === "xhigh" ? "X-High" : (level ?? "Default")}
                   </button>
                 ))}
               </div>

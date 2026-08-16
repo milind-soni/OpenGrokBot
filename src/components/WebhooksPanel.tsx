@@ -27,7 +27,7 @@ import {
   saveWebhookCredential,
   webhookCredentialStore,
 } from "@/lib/webhook-credentials";
-import type { WebhookAttempt, WebhookCredential, WebhookTrigger, WebhookTriggerInput } from "@/lib/webhooks";
+import { webhookActivationDefaults, type WebhookAttempt, type WebhookCredential, type WebhookTrigger, type WebhookTriggerInput } from "@/lib/webhooks";
 import { api, useStore, type Bot } from "@/state/store";
 
 function relativeTime(at?: number) {
@@ -93,7 +93,7 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
 
   const save = async () => {
     const bot = bots.find((candidate) => candidate.id === botId);
-    const input: WebhookTriggerInput = { name: name.trim() || suggestedName(prompt, bot), prompt: prompt.trim(), botId, runOn, enabled: webhook?.enabled ?? false, verificationPending: webhook?.verificationPending ?? !webhook, eventTypes: eventTypes.split(",").map((value) => value.trim()).filter(Boolean) };
+    const input: WebhookTriggerInput = { name: name.trim() || suggestedName(prompt, bot), prompt: prompt.trim(), botId, runOn, ...webhookActivationDefaults(webhook), eventTypes: eventTypes.split(",").map((value) => value.trim()).filter(Boolean) };
     setSaving(true);
     setError("");
     try {
@@ -111,7 +111,7 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="flex max-h-[90vh] w-full max-w-[590px] flex-col overflow-hidden rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
-        <div className="flex items-start justify-between border-b border-hairline/40 px-5 py-4"><div><div className="text-[17px] font-semibold text-ink">{webhook ? "Edit webhook" : "New local webhook"}</div><div className="mt-1 text-[12px] text-ink-secondary">Each request sends a new background task to a MAUS.</div></div><button onClick={onClose} className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><X size={18} /></button></div>
+        <div className="flex items-start justify-between border-b border-hairline/40 px-5 py-4"><div><div className="text-[17px] font-semibold text-ink">{webhook ? "Edit webhook" : "New local webhook"}</div><div className="mt-1 text-[12px] text-ink-secondary">Each request starts a new task in the MAUS chat.</div></div><button onClick={onClose} className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><X size={18} /></button></div>
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
           <div><div className="mb-2 text-[12px] font-medium text-ink-secondary">Who receives the tasks?</div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{bots.map((bot) => <button key={bot.id} type="button" onClick={() => setBotId(bot.id)} className={cn("flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left", botId === bot.id ? "border-accent/70 bg-accent/10" : "border-hairline/50 bg-inset hover:bg-raised/60")}><MausAvatar color={bot.color} state={botId === bot.id ? "happy" : "idle"} size={38} animated={false} /><span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{bot.name}</span></button>)}</div></div>
           <div className="rounded-xl border border-accent/20 bg-accent/5 px-3.5 py-3 text-[11.5px] leading-relaxed text-ink-secondary">Send the task in the request: <code className="text-ink">{`{"task":"Check the failed build"}`}</code>. The MAUS keeps its model, tools, permissions, and computer setup.</div>

@@ -63,3 +63,14 @@ export interface WebhookCredential {
   /** Capability URL for senders that cannot configure an Authorization header. */
   url: string;
 }
+
+/** New local webhooks are ready to execute immediately. Editing an existing
+ * webhook must preserve its current pause/verification state. */
+export function webhookActivationDefaults(
+  webhook?: Pick<WebhookTrigger, "enabled" | "verificationPending">,
+): Pick<WebhookTriggerInput, "enabled" | "verificationPending"> {
+  return {
+    enabled: webhook?.enabled ?? true,
+    verificationPending: webhook?.verificationPending ?? false,
+  };
+}

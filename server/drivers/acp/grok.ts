@@ -48,6 +48,7 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
   const seen = new Set(options.map((o) => o.id));
   let configuredDefault: string | null = null;
   let current: { slug: string; name?: string } | null = null;
+  let inModels = false;
 
   const flush = () => {
     if (!current || !SLUG.test(current.slug) || seen.has(current.slug)) {
@@ -61,8 +62,14 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
 
   for (const line of text.split(/\r?\n/)) {
     const stripped = line.trim();
+    if (stripped === "[models]") {
+      flush();
+      inModels = true;
+      continue;
+    }
     if (stripped.startsWith("[model.") && stripped.endsWith("]")) {
       flush();
+      inModels = false;
       let inner = stripped.slice("[model.".length, -1);
       if (inner.startsWith('"') && inner.endsWith('"')) inner = inner.slice(1, -1);
       current = { slug: inner };
@@ -70,6 +77,7 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
     }
     if (stripped.startsWith("[")) {
       flush();
+      inModels = false;
       continue;
     }
     if (!stripped || stripped.startsWith("#") || !stripped.includes("=")) continue;
@@ -77,7 +85,7 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
     const key = stripped.slice(0, eq).trim();
     const value = unquote(stripped.slice(eq + 1));
     if (current && key === "name" && value) current.name = value;
-    if (!current && key === "default") configuredDefault = value;
+    if (!current && inModels && key === "default") configuredDefault = value;
   }
   flush();
 

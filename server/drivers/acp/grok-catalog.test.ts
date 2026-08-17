@@ -70,13 +70,25 @@ name = "OK"
 
   it("honors GROK_HOME over HOME", () => {
     const ignored = scratchConfig(`[model.ignored]\nname = "Ignored"\n`);
-    const grokHome = join(mkdtempSync(join(tmpdir(), "omb-grok-home-")), "grok");
-    scratchDirs.push(grokHome);
+    const grokHomeParent = mkdtempSync(join(tmpdir(), "omb-grok-home-"));
+    const grokHome = join(grokHomeParent, "grok");
+    scratchDirs.push(grokHomeParent);
     mkdirSync(grokHome, { recursive: true });
     writeFileSync(join(grokHome, "config.toml"), `[model.from-grok-home]\nname = "From GROK_HOME"\n`);
     const catalog = readGrokModelCatalog({ HOME: ignored, GROK_HOME: grokHome });
     expect(catalog.options.map((o) => o.id)).toContain("from-grok-home");
     expect(catalog.options.map((o) => o.id)).not.toContain("ignored");
+  });
+
+  it("ignores default keys outside the [models] table", () => {
+    const home = scratchConfig(`
+[cli]
+default = "grok-4.5"
+
+[model.ok-model]
+name = "OK"
+`);
+    expect(readGrokModelCatalog({ HOME: home }).default).toBe("grok-4.6");
   });
 });
 

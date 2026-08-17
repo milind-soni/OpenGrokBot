@@ -2,11 +2,10 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { dirname, extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join } from "node:path";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -64,6 +63,7 @@ import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { WebhookManager } from "./webhooks.ts";
+import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -104,11 +104,10 @@ function authorizedComms(header: string | string[] | undefined): boolean {
 // a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
 // A→B is allowed but B→C (and A→B→A loops) never start.
 const MAX_COMMS_DEPTH = 1;
-// proxy entry: .ts in dev (node type-strips), .js in the packaged dist-server
-const agentsProxyPath = (() => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "agents-proxy.ts");
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-})();
+// Resolved from the server root — see server/proxy-paths.ts. This descending
+// path happened to survive bundling, but it goes through the same anchor so
+// there is exactly one way proxies are located.
+const agentsProxyPath = SPAWNED_PROXIES.agents;
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
 

@@ -8,11 +8,10 @@
 //   - Composio Sessions (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
@@ -32,6 +31,7 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { applyClaudeInject, mergeLocalInject } from "./local-inject.ts";
 import { appendNative } from "./native.ts";
+import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 
 /** Whether `claude` has been signed in.
  *
@@ -147,15 +147,12 @@ export function readClaudeModelCatalog(env: Record<string, string | undefined> =
   return { default: STATIC_CLAUDE_MODELS.default, options };
 }
 
-// proxy entry files live next to this one as .ts in dev (node type
-// stripping) and .js in the compiled dist-server the packaged app ships
-const proxyPath = (basename: string) => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", `${basename}.ts`);
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-};
-const PROXY_PATH = proxyPath("computer-proxy");
-const PERM_PROXY_PATH = proxyPath("permission-proxy");
-const DWEB_PROXY_PATH = proxyPath("drivers/dweb-proxy");
+// Resolved from the server root, never relative to this file: bundling inlines
+// this module into an entry one directory up, so a `".."` here would climb too
+// far. See server/proxy-paths.ts.
+const PROXY_PATH = SPAWNED_PROXIES.computer;
+const PERM_PROXY_PATH = SPAWNED_PROXIES.permission;
+const DWEB_PROXY_PATH = SPAWNED_PROXIES.dweb;
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
 const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };

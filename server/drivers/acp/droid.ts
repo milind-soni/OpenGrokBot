@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { injectedApiModel, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 // FACTORY_HOME_OVERRIDE replaces the HOME the CLI resolves, NOT the data root:
@@ -56,12 +57,12 @@ function readSettings(env: Record<string, string | undefined>): FactorySettings 
   return JSON.parse(readFileSync(join(home, ".factory", "settings.json"), "utf8")) as FactorySettings;
 }
 
-function resolveModels(env: Record<string, string | undefined>) {
+async function resolveModels(env: Record<string, string | undefined>) {
   let settings: FactorySettings;
   try {
     settings = readSettings(env);
   } catch {
-    return MODELS; // no settings file yet, or unreadable: ship the built-ins
+    return mergeLocalInject(MODELS, env); // no settings file yet, or unreadable: ship the built-ins
   }
 
   const custom = (settings.customModels ?? []).flatMap((m) =>
@@ -76,7 +77,10 @@ function resolveModels(env: Record<string, string | undefined>) {
 
   const configured = settings.sessionDefaultSettings?.model;
   const fallback = options[0]?.id ?? MODELS.default;
-  return { default: configured && options.some((o) => o.id === configured) ? configured : fallback, options };
+  return mergeLocalInject(
+    { default: configured && options.some((o) => o.id === configured) ? configured : fallback, options },
+    env,
+  );
 }
 
 // droid answers a rejected setting with a bare JSON-RPC message ("Model not
@@ -165,7 +169,7 @@ const support: AcpSupport = {
     // Pin the model for the same reason as the mode: with no set_model the
     // session runs whatever ~/.factory/settings.json selected, which can be a
     // `custom:` provider pointing at its own endpoint and key.
-    const modelId = turn.model || MODELS.default;
+    const modelId = injectedApiModel(turn.model) ?? turn.model ?? MODELS.default;
     await applySetting(request, "session/set_model", { sessionId, modelId }, `model "${modelId}"`);
   },
 

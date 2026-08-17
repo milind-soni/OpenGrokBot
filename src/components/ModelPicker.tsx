@@ -132,7 +132,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   </div>
                   <div className="truncate text-[11px] text-ink-secondary">
                     {pane === "custom"
-                      ? "Models this agent already knows"
+                      ? "Inject a local model into this agent"
                       : (railInstance.snapshot.version ??
                         (railInstance.snapshot.state === "available"
                           ? "ready"
@@ -200,7 +200,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                         {rows.map(row)}
                         {pane === "custom" && custom.length === 0 && (
                           <div className="px-2 py-3 text-[13px] text-ink-secondary">
-                            No extra models on this machine yet
+                            Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here
                           </div>
                         )}
                       </div>

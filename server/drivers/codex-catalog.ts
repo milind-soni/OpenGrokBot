@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 import type { ModelCatalog } from "../contracts.ts";
+import { mergeLocalInject } from "./local-inject.ts";
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
   default: "gpt-5.6-sol",
@@ -300,8 +301,12 @@ export async function readCodexModelCatalog(
       ? main.model
       : null;
 
-  return {
-    default: configured && seen.has(configured) ? configured : STATIC_CODEX_MODELS.default,
-    options,
-  };
+  return mergeLocalInject(
+    {
+      default: configured && seen.has(configured) ? configured : STATIC_CODEX_MODELS.default,
+      options,
+    },
+    env,
+    fetchImpl,
+  );
 }

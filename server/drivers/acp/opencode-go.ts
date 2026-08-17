@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 import type { ModelCatalog, ProviderErrorCode } from "../../contracts.ts";
+import { mergeLocalInject } from "../local-inject.ts";
 
 const CATALOG_URL = "https://opencode.ai/zen/go/v1/models";
 const STATIC_MODELS: ModelCatalog = {
@@ -57,7 +58,9 @@ export async function fetchOpenCodeGoModels(fetcher: typeof fetch = fetch): Prom
         seen.add(full);
         options.push({ id: full, label: labelForModel(id), custom: true });
       }
-      const catalog = { default: STATIC_MODELS.default, options } satisfies ModelCatalog;
+      const catalog = await mergeLocalInject(
+        { default: STATIC_MODELS.default, options } satisfies ModelCatalog,
+      );
       lastSuccessfulCatalog = catalog;
       return catalog;
     } finally {

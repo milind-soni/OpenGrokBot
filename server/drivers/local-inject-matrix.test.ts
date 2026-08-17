@@ -460,6 +460,56 @@ describe("Qwen / Hermes ACP turns", () => {
   });
 });
 
+describe("room turns must pass the picker model", () => {
+  it("Qwen without a model never injects — the room used to do this", async () => {
+    const home = scratchHome("omb-qwen-noroom-");
+    const dump = join(home, "env.json");
+    const instance = await QwenAgentDriver.create({
+      instanceId: "qwen",
+      displayName: "Qwen",
+      environment: { HOME: home, FAKE_ACP_DUMP: dump },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: true },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-qwen-bare", text: "hi" });
+      await recorder.until((e) => e.type === "turn.completed");
+      const seen = JSON.parse(readFileSync(dump, "utf8")) as { argv: string[] };
+      expect(seen.argv).toEqual(["--acp"]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("Hermes without a model never session/set_model — that is the OpenRouter 401", async () => {
+    const home = scratchHome("omb-hermes-noroom-");
+    mkdirSync(join(home, ".hermes"), { recursive: true });
+    const dump = join(home, "env.json");
+    const instance = await HermesAgentDriver.create({
+      instanceId: "hermes",
+      displayName: "Hermes",
+      environment: { HOME: home, FAKE_ACP_DUMP: dump },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: true },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-hermes-bare", text: "hi" });
+      await recorder.until((e) => e.type === "turn.completed");
+      let configCalls: Array<{ method: string }> = [];
+      try {
+        configCalls = JSON.parse(readFileSync(`${dump}.config.json`, "utf8")) as Array<{ method: string }>;
+      } catch {
+        // no session/set_model → the dump file is never written
+      }
+      expect(configCalls.some((call) => call.method === "session/set_model")).toBe(false);
+    } finally {
+      await instance.dispose();
+    }
+  });
+});
+
 describe("Cloud vs Local catalog access", () => {
   it("Qwen and Hermes advertise access=custom", () => {
     expect(QwenAgentDriver.metadata.access).toBe("custom");

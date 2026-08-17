@@ -35,6 +35,7 @@ function knownDirs(): string[] {
     join(home, ".npm-global", "bin"), // npm prefix ~/.npm-global (claude, opencode)
     join(home, ".kimi-code", "bin"), // kimi-code installer
     join(home, ".grok", "bin"), // x.ai installer
+    join(home, ".opencode", "bin"), // opencode installer
     join(home, ".claude", "local"), // claude "local install"
     "/opt/homebrew/bin", // brew, Apple silicon
     "/usr/local/bin", // brew Intel / classic installs
@@ -76,9 +77,15 @@ let probed = false;
 
 /** Drop the memoized PATH so the next augmentedPath() rescans. Called when
  * the app re-probes engines, so "check again" can find something installed
- * since launch instead of answering from the PATH we booted with. */
+ * since launch instead of answering from the PATH we booted with. `probed`
+ * must reset too: the login-shell probe merges rc-file PATH entries (e.g.
+ * ~/.kimi-code/bin exported from .zshrc) into the cache asynchronously,
+ * and without resetting it a rescan would rebuild the cache without those
+ * entries and never re-probe — "check again" would permanently lose
+ * anything only the login shell's rc file knows about. */
 export function resetPathCache(): void {
   cached = null;
+  probed = false;
 }
 
 /** Current best PATH, synchronously. Cheap after the first call. */

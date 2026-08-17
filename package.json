@@ -46,7 +46,7 @@
     "package:linux": "pnpm package:prepare && electron-builder --linux --x64 --publish never",
     "package:linux:dir": "pnpm package:prepare && electron-builder --linux dir --x64 --publish never",
     "package": "pnpm package:mac",
-    "test:packaged-server": "node scripts/smoke-packaged-server.mjs"
+    "test:packaged-server": "pnpm build:server && node scripts/smoke-packaged-server.mjs"
   },
   "dependencies": {
     "@trycua/cua-driver": "0.20.0",

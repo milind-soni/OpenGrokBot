@@ -3,26 +3,95 @@
 // (~/.grok/auth.json), NOT the xAI API key (that driver is drivers/grok.ts).
 // The generic protocol runtime lives in acp/core.ts; this file is only the
 // per-harness quirks. Verified against grok 1.0.0.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { ModelCatalog } from "../../contracts.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
+
+export const STATIC_GROK_MODELS: ModelCatalog = {
+  default: "grok-4.6",
+  options: [
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "grok-4.5", label: "Grok 4.5" },
+  ],
+};
+
+const SLUG = /^[a-z0-9][a-z0-9._-]*$/i;
+
+function grokHome(env: Record<string, string | undefined>): string {
+  if (env.GROK_HOME) return env.GROK_HOME;
+  return join(env.HOME || env.USERPROFILE || homedir(), ".grok");
+}
+
+function unquote(raw: string): string {
+  const value = raw.trim();
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/\\"/g, '"');
+  }
+  return value;
+}
+
+/** Local slugs from ~/.grok/config.toml, plus the two cloud defaults.
+ *  `grok -m <slug>` already accepts these; the picker just didn't list them. */
+export function readGrokModelCatalog(env: Record<string, string | undefined> = process.env): ModelCatalog {
+  const path = join(grokHome(env), "config.toml");
+  let text = "";
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return STATIC_GROK_MODELS;
+  }
+
+  const options = STATIC_GROK_MODELS.options.map((o) => ({ ...o }));
+  const seen = new Set(options.map((o) => o.id));
+  let configuredDefault: string | null = null;
+  let current: { slug: string; name?: string } | null = null;
+
+  const flush = () => {
+    if (!current || !SLUG.test(current.slug) || seen.has(current.slug)) {
+      current = null;
+      return;
+    }
+    seen.add(current.slug);
+    options.push({ id: current.slug, label: current.name || current.slug });
+    current = null;
+  };
+
+  for (const line of text.split(/\r?\n/)) {
+    const stripped = line.trim();
+    if (stripped.startsWith("[model.") && stripped.endsWith("]")) {
+      flush();
+      let inner = stripped.slice("[model.".length, -1);
+      if (inner.startsWith('"') && inner.endsWith('"')) inner = inner.slice(1, -1);
+      current = { slug: inner };
+      continue;
+    }
+    if (stripped.startsWith("[")) {
+      flush();
+      continue;
+    }
+    if (!stripped || stripped.startsWith("#") || !stripped.includes("=")) continue;
+    const eq = stripped.indexOf("=");
+    const key = stripped.slice(0, eq).trim();
+    const value = unquote(stripped.slice(eq + 1));
+    if (current && key === "name" && value) current.name = value;
+    if (!current && key === "default") configuredDefault = value;
+  }
+  flush();
+
+  return {
+    default: configuredDefault && seen.has(configuredDefault) ? configuredDefault : STATIC_GROK_MODELS.default,
+    options,
+  };
+}
 
 const support: AcpSupport = {
   driverKind: "grokAgent",
   displayName: "Grok",
-  // Mirrors `grok models` (CLI 1.0.3): 4.6 is the account default, 4.5 still
-  // selectable. Static because the catalog is account-driven and we have no
-  // session yet at describe() time; a new model the CLI adds needs a bump
-  // here — eventually read the initialize result's _meta.modelState instead.
-  models: {
-    default: "grok-4.6",
-    options: [
-      { id: "grok-4.6", label: "Grok 4.6" },
-      { id: "grok-4.5", label: "Grok 4.5" },
-    ],
-  },
+  models: STATIC_GROK_MODELS,
+  resolveModels: (env) => readGrokModelCatalog(env),
   // Grok's accepted levels vary by model and the CLI validates lazily — a
   // rejected level only logs and falls back. Offer the intersection shared
   // by every model in this driver's picker; notably, grok-4.5 rejects xhigh.

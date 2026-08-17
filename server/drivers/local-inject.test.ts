@@ -441,6 +441,8 @@ describe("live Custom lists on every local CLI harness", () => {
           enabled: true,
           config: { cli: FAKE_ACP, fullAuto: false },
         }),
+      );
+      instances.push(
         await DroidAgentDriver.create({
           instanceId: "droid",
           displayName: "Droid",
@@ -448,6 +450,8 @@ describe("live Custom lists on every local CLI harness", () => {
           enabled: true,
           config: { cli: FAKE_ACP, fullAuto: false },
         }),
+      );
+      instances.push(
         await AntigravityDriver.create({
           instanceId: "agy",
           displayName: "Antigravity",

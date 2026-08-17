@@ -124,6 +124,13 @@ describe("comms e2e (fake ACP fleet)", () => {
             environment: { FAKE_ACP_MODE: "exit-early" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
+          // a successful peer turn that deliberately emits no assistant
+          // text — the channel still needs a positive terminal record.
+          helperEmpty: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "empty-reply" },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
         },
       }),
     );
@@ -350,8 +357,58 @@ describe("comms e2e (fake ACP fleet)", () => {
   // ── delegation terminal-state mirroring ─────────────────────────────
   // A delegated turn is fire-and-forget: nobody waits for B, so the ONLY
   // place a human would ever see how it ended is the A⇄B channel. These
-  // two tests pin the non-happy terminal states: the delegated turn
-  // crashed, and the delegated turn never started.
+  // tests pin a successful empty reply plus both non-happy terminal states:
+  // the delegated turn crashed, and the delegated turn never started.
+  it(
+    "mirrors a successful delegated turn with no reply as a completed terminal chip",
+    async () => {
+      const seeded = (await api("GET", "/api/bots")).body.bots[0];
+      await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
+      const helper = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${helper.id}`, {
+        name: "Helper",
+        modelSelection: { instanceId: "helperEmpty", model: "fake-model" },
+      });
+      const asker = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${asker.id}`, {
+        name: "Asker",
+        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+      });
+
+      const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
+      expect(send.status).toBe(202);
+
+      const deadline = Date.now() + 30_000;
+      let channel: any;
+      for (;;) {
+        const state = (await api("GET", "/api/bots")).body;
+        const askerBot = state.bots.find((b: any) => b.id === asker.id);
+        const note = askerBot.messages.find(
+          (m: any) => m.kind === "activity" && m.tool?.name === "Messaged @Helper",
+        );
+        channel = note?.comm?.groupId
+          ? state.groups.find((g: any) => g.id === note.comm.groupId)
+          : undefined;
+        const terminal = channel?.messages.some(
+          (m: any) =>
+            m.from?.botId === helper.id
+            && m.kind === "activity"
+            && m.tool?.ok === true
+            && m.tool?.name === "Delegated turn completed",
+        );
+        if (terminal) break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `no completed terminal chip in channel. channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\n` +
+              `stderr: ${stderr.slice(-2000)}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    },
+    45_000,
+  );
+
   it(
     "mirrors a crashed delegated turn into the channel as a failed terminal chip",
     async () => {

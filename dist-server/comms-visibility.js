@@ -64,3 +64,21 @@ export function mirrorReply(bus, target, reply, channel) {
     bus.store.patchGroup(channel.id, { unread: true });
     bus.broadcastGroup(channel.id);
 }
+/** Mirror a terminal activity note into the channel — for async handoffs
+ * whose terminal state is not a reply (turn failed, was stopped, or never
+ * started). Prior art (A2A, MCP Tasks) is unanimous that every terminal
+ * state of an async handoff should be visible where the human is looking,
+ * and the channel is that place. */
+export function mirrorActivity(bus, from, channel, name, ok) {
+    if (!channel)
+        return;
+    const message = bus.store.appendMessage(channel.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name, ok },
+        from: { botId: from.id, name: from.name, color: from.color },
+    });
+    bus.broadcast({ kind: "message", threadId: channel.threadId, message });
+    bus.store.patchGroup(channel.id, { unread: true });
+    bus.broadcastGroup(channel.id);
+}

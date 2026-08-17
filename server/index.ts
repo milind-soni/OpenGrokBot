@@ -568,8 +568,10 @@ bus.subscribe((event: RuntimeEvent) => {
         const target = store.bot(watched.toBotId);
         const channel = watched.channelId ? store.group(watched.channelId) : undefined;
         if (target && channel) {
-          if (event.ok) {
+          if (event.ok && reply.trim()) {
             mirrorReply(commsBus, target, reply, channel);
+          } else if (event.ok) {
+            mirrorActivity(commsBus, target, channel, "Delegated turn completed", true);
           } else {
             mirrorActivity(commsBus, target, channel, "Delegated turn did not finish", false);
           }
@@ -606,13 +608,13 @@ bus.subscribe((event: RuntimeEvent) => {
     // child. Every delegation failure has to land as a chip instead.
     const targetThreadId = store.bot(toBotId)?.threadId;
     if (targetThreadId) delegationWatch.set(targetThreadId, { channelId: channel?.id, toBotId });
-    return startTurn(toBotId, text, {
-      commsDepth,
-      unattended: isUnattended(store.botByThread(sourceThreadId)?.id),
-    }).catch((err) => {
+    let failureReported = false;
+    const reportStartFailure = (error: unknown) => {
+      if (failureReported) return;
+      failureReported = true;
       if (targetThreadId) delegationWatch.delete(targetThreadId);
       const bot = store.bot(toBotId);
-      const why = err instanceof Error ? err.message : String(err);
+      const why = error instanceof Error ? error.message : String(error);
       const source = store.botByThread(sourceThreadId);
       if (!source) return;
       const note = store.appendMessage(sourceThreadId, {
@@ -626,6 +628,16 @@ bus.subscribe((event: RuntimeEvent) => {
       if (bot && channel) {
         mirrorActivity(commsBus, bot, channel, `Delegated turn could not start — ${why.slice(0, 120)}`, false);
       }
+    };
+    return startTurn(toBotId, text, {
+      commsDepth,
+      unattended: isUnattended(store.botByThread(sourceThreadId)?.id),
+      // startTurn schedules provider/integration setup after marking the bot
+      // busy. Those asynchronous setup failures do not emit turn.completed,
+      // so clear the watch and report them through this callback too.
+      onDispatchError: reportStartFailure,
+    }).catch((err) => {
+      reportStartFailure(err);
     });
   });
 });

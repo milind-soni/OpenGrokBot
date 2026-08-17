@@ -131,11 +131,11 @@ function ThinkingStrip({ text, active }: { text: string; active: boolean }) {
 
 /** A failed turn: a real error block with a retry, not a truncated pill.
  *
- * A `setup` error — CLI missing — shows what to do instead of a Retry,
- * because retrying hits the same wall every time. A missing cloud login is
- * not treated as setup: that engine can still run a local model. Once the
- * CLI is installed the card flips back to Retry, which (with the on-focus
- * re-probe) happens by itself when the user returns from the terminal. */
+ * A `setup` error — CLI missing, or installed but not signed in — shows what
+ * to do instead of a Retry, because retrying hits the same wall every time.
+ * Once the engine reports itself fixed the card flips back to Retry, which
+ * (with the on-focus re-probe) happens by itself when the user returns from
+ * the terminal. */
 function ErrorRow({
   message,
   onRetry,
@@ -152,7 +152,8 @@ function ErrorRow({
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{message}</span>
         </div>
-        {setupInstance && setupInstance.snapshot.state !== "available" ? (
+        {setupInstance &&
+        !(setupInstance.snapshot.state === "available" && setupInstance.snapshot.authenticated !== false) ? (
           <EngineSetup instance={setupInstance} className="mt-2 text-ink-secondary" />
         ) : (
           onRetry && (

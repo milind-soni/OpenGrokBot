@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
-import { EngineSetup } from "./EngineSetup";
+import { EngineSetup, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
@@ -139,9 +139,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                           : (railInstance.snapshot.reason ?? "ready")))}
                   </div>
                 </div>
-                {/* CLI missing is the only setup dead-end. A missing cloud
-                    login is not — that engine can still run a local model. */}
-                {railInstance.snapshot.state !== "available" && (
+                {/* Keep cloud sign-in guidance on the official pane, while
+                    leaving Custom reachable for locally configured models. */}
+                {(railInstance.snapshot.state !== "available" ||
+                  (pane === "main" && needsSignIn(railInstance))) && (
                   <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
                     <EngineSetup instance={railInstance} />
                   </div>
@@ -157,12 +158,17 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   const row = (option: (typeof official)[number]) => {
                     const current =
                       selection.instanceId === railInstance.instanceId && selection.model === option.id;
+                    const disabled =
+                      railInstance.snapshot.state !== "available" ||
+                      (!option.custom && needsSignIn(railInstance));
                     return (
                       <button
                         key={option.id}
+                        disabled={disabled}
                         onClick={() => pick(railInstance, option.id)}
                         className={cn(
-                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink hover:bg-raised/60",
+                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
+                          disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
                           current && "bg-raised",
                         )}
                       >

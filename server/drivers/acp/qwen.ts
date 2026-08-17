@@ -1,7 +1,7 @@
 // Qwen Code — Alibaba's `qwen --acp` CLI. Custom-only in OpenMausBot:
 // the official pane has no Qwen Cloud catalog; live local hosts land in
 // Custom and are written into ~/.qwen/settings.json modelProviders.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -34,7 +34,11 @@ export function ensureQwenInjectModel(
   const path = join(dir, "settings.json");
   let settings: Record<string, unknown> = {};
   if (existsSync(path)) {
-    settings = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    try {
+      settings = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    } catch {
+      // Malformed user config — inject into a fresh object rather than fail the turn.
+    }
   }
   const keyName = envKeyFor(inject.host);
   const key = hostApiKey(host, env);
@@ -67,7 +71,12 @@ export function ensureQwenInjectModel(
     providers.openai = openai;
     settings.modelProviders = providers;
   }
-  writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Windows ignores POSIX modes; keep the inject even if chmod is unsupported.
+  }
   return inject.model;
 }
 

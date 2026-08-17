@@ -102,7 +102,11 @@ export function ensureOpenCodeInjectModel(
   const path = join(dir, "opencode.json");
   let config: Record<string, unknown> = { $schema: "https://opencode.ai/config.json" };
   if (existsSync(path)) {
-    config = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    try {
+      config = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    } catch {
+      // Malformed user config — inject into a fresh object rather than fail the turn.
+    }
   }
   const providers =
     config.provider && typeof config.provider === "object" && !Array.isArray(config.provider)

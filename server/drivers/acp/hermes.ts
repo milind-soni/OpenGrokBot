@@ -27,13 +27,28 @@ function upsertHermesProvider(text: string, hostId: string, baseUrl: string, api
   const block = [`  ${hostId}:`, `    base_url: ${quoteYaml(baseUrl)}`, `    api_key: ${quoteYaml(apiKey)}`, ""].join(
     "\n",
   );
-  const hostRe = new RegExp(`^  ${hostId}:\\n(?:    .*\\n)*`, "m");
   if (/^providers:\s*$/m.test(text)) {
-    if (hostRe.test(text)) return text.replace(hostRe, block);
+    const replaced = replaceHermesHostBlock(text, hostId, block);
+    if (replaced !== null) return replaced;
     return text.replace(/^providers:\s*$/m, `providers:\n${block.trimEnd()}`);
   }
   const prefix = text && !text.endsWith("\n") ? `${text}\n` : text;
   return `${prefix}\nproviders:\n${block}`;
+}
+
+/** Replace `  hostId:` through the next sibling 2-space key or a top-level key. */
+function replaceHermesHostBlock(text: string, hostId: string, block: string): string | null {
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line === `  ${hostId}:`);
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (/^  \S/.test(line) || /^\S/.test(line)) break;
+    end++;
+  }
+  while (end > start + 1 && lines[end - 1] === "") end--;
+  return [...lines.slice(0, start), ...block.replace(/\n$/, "").split("\n"), ...lines.slice(end)].join("\n");
 }
 
 /** Register an OpenAI-compatible host so ACP can `session/set_model custom:host:model`. */

@@ -75,7 +75,11 @@ function EngineRow({
     >
       {!ready &&
         (instance ? (
-          <EngineSetup instance={instance} className="mt-0.5" />
+          <EngineSetup
+            instance={instance}
+            className="mt-0.5"
+            intent={instance.access === "custom" ? "inject" : "cloud"}
+          />
         ) : (
           <div className="mt-0.5 text-[12.5px] text-ink-secondary">Not configured on this machine.</div>
         ))}

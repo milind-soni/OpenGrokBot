@@ -163,8 +163,11 @@ export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra:
   const loaded = new Set<string>();
   const catalogIds = new Set(idsFromModelsPayload(catalog));
   const add = (id: string) => {
-    if (catalogIds.size && !catalogIds.has(id) && !catalogIds.has(id.split(":")[0]!)) return;
-    if (MODEL_ID.test(id)) loaded.add(id);
+    const base = id.split(":")[0]!;
+    if (catalogIds.size && !catalogIds.has(id) && !catalogIds.has(base)) return;
+    if (!MODEL_ID.test(id)) return;
+    loaded.add(id);
+    if (catalogIds.has(base)) loaded.add(base);
   };
 
   if (extra && typeof extra === "object") {
@@ -217,9 +220,10 @@ export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra:
 }
 
 function loadedProbeUrl(host: LocalHost): string | null {
-  if (host.id === "omlx") return `${anthropicBaseUrl(host)}/health`;
-  if (host.id === "ollama" || host.id === "local_ollama") return "http://127.0.0.1:11434/api/ps";
-  if (host.id === "lmstudio") return "http://127.0.0.1:1234/api/v0/models";
+  const origin = anthropicBaseUrl(host);
+  if (host.id === "omlx") return `${origin}/health`;
+  if (host.id === "ollama" || host.id === "local_ollama") return `${origin}/api/ps`;
+  if (host.id === "lmstudio") return `${origin}/api/v0/models`;
   return null;
 }
 

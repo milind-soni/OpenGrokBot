@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,16 @@ describe("loadedIdsFromPayloads", () => {
       { models: [{ name: "llama3.2:latest", size: 1 }] },
     );
     expect([...loaded]).toEqual(["llama3.2:latest"]);
+  });
+
+  it("pins the catalog id when /api/ps reports a tagged name", () => {
+    const loaded = loadedIdsFromPayloads(
+      ollama,
+      { data: [{ id: "llama3.2" }, { id: "mistral" }] },
+      { models: [{ name: "llama3.2:latest", size: 1 }] },
+    );
+    expect(loaded.has("llama3.2")).toBe(true);
+    expect(loaded.has("llama3.2:latest")).toBe(true);
   });
 
   it("uses LM Studio state=loaded and skips not-loaded", () => {
@@ -212,6 +222,29 @@ describe("ensureKimiInjectAlias", () => {
     expect(text).toContain(`base_url = "http://127.0.0.1:8080/v1"`);
     expect(text).toContain(`model = "GLM-5.2-fp8"`);
   });
+
+  it("treats USERPROFILE as the same home for credentials and config", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-userprofile-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".kimi-code", "credentials"), { recursive: true });
+    writeFileSync(join(home, ".kimi-code", "credentials", "kimi-code.json"), "{}");
+    const instance = await KimiAgentDriver.create({
+      instanceId: "kimi-userprofile",
+      displayName: "Kimi",
+      environment: { HOME: undefined, USERPROFILE: home },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: false },
+    });
+    try {
+      const snap = await instance.snapshot();
+      expect(snap.state).toBe("available");
+      expect(snap.authenticated).toBe(true);
+      expect(ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: undefined, USERPROFILE: home })).toBe("omlx/GLM-5.2-fp8");
+      expect(readFileSync(join(home, ".kimi-code", "config.toml"), "utf8")).toContain("[providers.omlx]");
+    } finally {
+      await instance.dispose();
+    }
+  });
 });
 
 describe("ensureDroidInjectModel", () => {
@@ -236,6 +269,25 @@ describe("ensureDroidInjectModel", () => {
       baseUrl: "http://127.0.0.1:8080/v1",
       provider: "generic-chat-completion-api",
     });
+  });
+
+  it("persists a generated id onto a matching customModels row that has none", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-droid-inject-noid-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".factory"), { recursive: true });
+    writeFileSync(
+      join(home, ".factory", "settings.json"),
+      JSON.stringify({
+        customModels: [{ model: "MiniMax-M3-4bit", baseUrl: "http://127.0.0.1:8080/v1", displayName: "local" }],
+      }),
+    );
+    const id = ensureDroidInjectModel("omlx::MiniMax-M3-4bit", { HOME: home });
+    const settings = JSON.parse(readFileSync(join(home, ".factory", "settings.json"), "utf8")) as {
+      customModels: Array<{ id?: string; model: string }>;
+    };
+    expect(id).toBe("custom:openmausbot-omlx-MiniMax-M3-4bit");
+    expect(settings.customModels).toHaveLength(1);
+    expect(settings.customModels[0]?.id).toBe(id);
   });
 });
 
@@ -267,6 +319,19 @@ describe("ensureOpenCodeInjectModel", () => {
     expect(config.provider.omlx.models["GLM-5.2-fp8"]).toBeTruthy();
     expect(config.provider.omlx.options.baseURL).toBe("http://127.0.0.1:8080/v1");
   });
+
+  it("injects into a default object when opencode.json is malformed", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-opencode-bad-json-"));
+    scratchDirs.push(home);
+    const dir = join(home, ".config", "opencode");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "opencode.json"), "{not-json");
+    expect(ensureOpenCodeInjectModel("omlx::GLM-5.2-fp8", { HOME: home })).toBe("omlx/GLM-5.2-fp8");
+    const config = JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")) as {
+      provider: { omlx: { models: Record<string, unknown> } };
+    };
+    expect(config.provider.omlx.models["GLM-5.2-fp8"]).toBeTruthy();
+  });
 });
 
 describe("ensureHermesInjectProvider", () => {
@@ -285,6 +350,33 @@ describe("ensureHermesInjectProvider", () => {
     expect(text.match(/^  omlx:$/gm)?.length).toBe(1);
     expect(text).toContain("base_url: http://127.0.0.1:8080/v1");
     expect(text).toContain("api_key: omlx");
+  });
+
+  it("replaces a nested provider block without leaving orphan YAML lines", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-hermes-nested-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".hermes"), { recursive: true });
+    writeFileSync(
+      join(home, ".hermes", "config.yaml"),
+      [
+        "providers:",
+        "  omlx:",
+        "    base_url: http://old",
+        "    extras:",
+        "      nested: keep-sibling-not-this",
+        "    api_key: old",
+        "  other:",
+        "    base_url: http://other",
+        "",
+      ].join("\n"),
+    );
+    ensureHermesInjectProvider("omlx::gemma-4-31b-it-bf16", { HOME: home });
+    const text = readFileSync(join(home, ".hermes", "config.yaml"), "utf8");
+    expect(text).toContain("  other:\n    base_url: http://other");
+    expect(text).toContain("base_url: http://127.0.0.1:8080/v1");
+    expect(text).not.toContain("nested: keep-sibling-not-this");
+    expect(text).not.toContain("http://old");
+    expect(text.match(/^  omlx:$/gm)?.length).toBe(1);
   });
 });
 
@@ -309,6 +401,21 @@ describe("ensureQwenInjectModel", () => {
     };
     expect(settings.modelProviders.openai.map((row) => row.id)).toEqual(["keep-me", "GLM-5.2-fp8"]);
     expect(settings.env.OPENMAUSBOT_QWEN_OMLX_API_KEY).toBe("omlx");
+    if (process.platform !== "win32") {
+      expect(statSync(join(home, ".qwen", "settings.json")).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("injects into a default object when settings.json is malformed", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-qwen-bad-json-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".qwen"), { recursive: true });
+    writeFileSync(join(home, ".qwen", "settings.json"), "{not-json");
+    expect(ensureQwenInjectModel("omlx::GLM-5.2-fp8", { HOME: home })).toBe("GLM-5.2-fp8");
+    const settings = JSON.parse(readFileSync(join(home, ".qwen", "settings.json"), "utf8")) as {
+      modelProviders: { openai: Array<{ id: string }> };
+    };
+    expect(settings.modelProviders.openai.map((row) => row.id)).toEqual(["GLM-5.2-fp8"]);
   });
 });
 
@@ -324,30 +431,31 @@ describe("live Custom lists on every local CLI harness", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-all-inject-"));
     scratchDirs.push(home);
     const environment = { HOME: home, OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" };
-    const instances = [
-      await KimiAgentDriver.create({
-        instanceId: "kimi",
-        displayName: "Kimi",
-        environment,
-        enabled: true,
-        config: { cli: FAKE_ACP, fullAuto: false },
-      }),
-      await DroidAgentDriver.create({
-        instanceId: "droid",
-        displayName: "Droid",
-        environment,
-        enabled: true,
-        config: { cli: FAKE_ACP, fullAuto: false },
-      }),
-      await AntigravityDriver.create({
-        instanceId: "agy",
-        displayName: "Antigravity",
-        environment,
-        enabled: true,
-        config: { cli: FAKE_AGY, fullAuto: true },
-      }),
-    ];
+    const instances: Array<Awaited<ReturnType<typeof KimiAgentDriver.create>>> = [];
     try {
+      instances.push(
+        await KimiAgentDriver.create({
+          instanceId: "kimi",
+          displayName: "Kimi",
+          environment,
+          enabled: true,
+          config: { cli: FAKE_ACP, fullAuto: false },
+        }),
+        await DroidAgentDriver.create({
+          instanceId: "droid",
+          displayName: "Droid",
+          environment,
+          enabled: true,
+          config: { cli: FAKE_ACP, fullAuto: false },
+        }),
+        await AntigravityDriver.create({
+          instanceId: "agy",
+          displayName: "Antigravity",
+          environment,
+          enabled: true,
+          config: { cli: FAKE_AGY, fullAuto: true },
+        }),
+      );
       for (const instance of instances) {
         expect(instance.models.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(
           true,

@@ -14,11 +14,6 @@ import type { ModelCatalog } from "../../contracts.ts";
 import { decodeInjectId, hostApiKey, LOCAL_HOSTS, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
-function credentialsPath(env: Record<string, string | undefined>) {
-  const dataRoot = env.KIMI_CODE_HOME || join(env.HOME || homedir(), ".kimi-code");
-  return join(dataRoot, "credentials", "kimi-code.json");
-}
-
 const STATIC_KIMI_MODELS: ModelCatalog = {
   default: "kimi-code/k3",
   options: [
@@ -38,6 +33,10 @@ function isLocalInjectAlias(slug: string): boolean {
 
 function kimiDataRoot(env: Record<string, string | undefined>): string {
   return env.KIMI_CODE_HOME || join(env.HOME || env.USERPROFILE || homedir(), ".kimi-code");
+}
+
+function credentialsPath(env: Record<string, string | undefined>) {
+  return join(kimiDataRoot(env), "credentials", "kimi-code.json");
 }
 
 function quoteToml(value: string): string {

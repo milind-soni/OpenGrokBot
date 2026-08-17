@@ -875,24 +875,33 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
       </div>
     </>
   );
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    onMenu({ botId: bot.id, x: event.clientX, y: event.clientY });
+  };
+
+  // Keep the rename <input> out of role="button" — a button's descendants
+  // are presentational, which hides the field from assistive tech.
+  if (renaming) {
+    return (
+      <div className={rowClass} onContextMenu={onContextMenu}>
+        {body}
+      </div>
+    );
+  }
+
   return (
     <div
       role="button"
-      tabIndex={renaming ? -1 : 0}
-      onClick={() => {
-        if (!renaming) dispatch({ type: "select", id: bot.id });
-      }}
+      tabIndex={0}
+      onClick={() => dispatch({ type: "select", id: bot.id })}
       onKeyDown={(event) => {
-        if (renaming) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           dispatch({ type: "select", id: bot.id });
         }
       }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
-      }}
+      onContextMenu={onContextMenu}
       className={rowClass}
     >
       {body}

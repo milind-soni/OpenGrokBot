@@ -98,7 +98,11 @@ export function ensureDroidInjectModel(
       row.id === id || (row.model === inject.model && row.baseUrl === host.baseUrl),
   );
   if (match) {
-    match.id = match.id || id;
+    if (!match.id) {
+      match.id = id;
+      settings.customModels = custom;
+      writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+    }
     return match.id;
   }
   custom.push({

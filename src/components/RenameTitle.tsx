@@ -48,7 +48,7 @@ export function RenameTitle({
         onBlur={() => finish(true)}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
             event.preventDefault();
             event.stopPropagation();
             finish(true);
@@ -64,15 +64,25 @@ export function RenameTitle({
     );
   }
 
+  const startRename = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDraft(value);
+    setMode(true);
+  };
+
   return (
     <span
       className={cn("cursor-text", className)}
       title="Double-click to rename"
-      onDoubleClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setDraft(value);
-        setMode(true);
+      tabIndex={0}
+      role="button"
+      aria-label={`Rename ${value}`}
+      onDoubleClick={startRename}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          startRename(event);
+        }
       }}
     >
       {value}

@@ -107,6 +107,18 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(threadStart.params).toMatchObject({ model: "gpt-5.6-sol", modelProvider: "openai" });
   });
 
+  it("uses the instance environment for the Codex process", async () => {
+    const codexHome = join(scratch, "custom-codex-home");
+    await create({ environment: { CODEX_HOME: codexHome } });
+    const dump = join(scratch, "environment.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-environment", text: "hi" });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CODEX_HOME).toBe(codexHome);
+  });
+
   it("sends the local provider when the picker id is custom-encoded", async () => {
     await create({ environment: { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" } });
     const dump = join(scratch, "dump.json");
@@ -222,6 +234,38 @@ describe("CodexDriver turns (fake app-server)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false });
     expect(await instance.snapshot()).toMatchObject({ state: "unavailable" });
+  });
+
+  it("reports whether the installed Codex CLI is signed in", async () => {
+    await create();
+    await expect(instance.snapshot()).resolves.toMatchObject({
+      state: "available",
+      authenticated: true,
+    });
+
+    await instance.dispose();
+    recorder.stop();
+    await create({ mode: "logged-out" });
+    await expect(instance.snapshot()).resolves.toMatchObject({
+      state: "available",
+      authenticated: false,
+    });
+  });
+
+  it("marks a Codex 401 as setup so the UI offers sign-in instead of Retry", async () => {
+    await create({ mode: "unauthorized" });
+    await instance.adapter.sendTurn({ threadId: "t-unauthorized", text: "hi" });
+
+    const error = await recorder.until((event) => event.type === "runtime.error");
+    expect(error).toMatchObject({ setup: true });
+    await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({
+      ok: false,
+      stopReason: "auth_required",
+    });
+  });
+
+  it("uses the explicit login command from the official Codex flow", () => {
+    expect(CodexDriver.install?.signInCommand).toBe("codex login");
   });
 
   it("declares the effort levels the app-server accepts", async () => {

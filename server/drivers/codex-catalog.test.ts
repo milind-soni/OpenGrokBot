@@ -86,6 +86,32 @@ model = "GLM-5.2-mxfp4"
     expect(catalog.options.find((option) => option.id.endsWith("GLM-5.2-mxfp4"))?.label).toBe("GLM-5.2-mxfp4 (oMLX)");
   });
 
+  it("keeps an official-looking model slug bound to its configured local provider", async () => {
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "omlx"
+model = "gpt-5.4"
+
+[model_providers.omlx]
+name = "oMLX"
+`,
+    });
+
+    const catalog = await readCodexModelCatalog({ HOME: home });
+    const local = encodeCodexSelection("omlx", "gpt-5.4");
+
+    expect(catalog.default).toBe(local);
+    expect(catalog.options).toContainEqual({
+      id: local,
+      label: "gpt-5.4 (oMLX)",
+      custom: true,
+    });
+    expect(decodeCodexSelection(catalog.default)).toEqual({
+      model: "gpt-5.4",
+      modelProvider: "omlx",
+    });
+  });
+
   it("honors CODEX_HOME over HOME and merges live /v1/models", async () => {
     const ignored = scratchHome({
       "config.toml": `model_provider = "omlx"\nmodel = "ignored"\n`,

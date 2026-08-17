@@ -244,7 +244,13 @@ export async function readCodexModelCatalog(
   const remember = (provider: string | undefined, model: string | undefined) => {
     if (!provider || !model) return;
     if (!PROVIDER_ID.test(provider) || !MODEL_ID.test(model)) return;
-    if (STATIC_CODEX_MODELS.options.some((option) => option.id === model)) return;
+    // A local provider may expose the same slug as an official OpenAI model.
+    // Keep that provider-qualified row; otherwise selecting the configured
+    // default would decode the bare slug back to the OpenAI provider.
+    if (
+      provider === OFFICIAL_CODEX_PROVIDER &&
+      STATIC_CODEX_MODELS.options.some((option) => option.id === model)
+    ) return;
     extras.push({ provider, model });
   };
 
@@ -285,12 +291,14 @@ export async function readCodexModelCatalog(
     });
   }
 
-  const configured =
-    main.model && main.modelProvider && !STATIC_CODEX_MODELS.options.some((option) => option.id === main.model)
-      ? encodeCodexSelection(main.modelProvider, main.model)
-      : main.model && seen.has(main.model)
-        ? main.model
-        : null;
+  const configured = main.model && main.modelProvider
+    ? main.modelProvider === OFFICIAL_CODEX_PROVIDER &&
+      STATIC_CODEX_MODELS.options.some((option) => option.id === main.model)
+      ? main.model
+      : encodeCodexSelection(main.modelProvider, main.model)
+    : main.model && seen.has(main.model)
+      ? main.model
+      : null;
 
   return {
     default: configured && seen.has(configured) ? configured : STATIC_CODEX_MODELS.default,

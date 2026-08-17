@@ -5,7 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +60,22 @@ beforeAll(async () => {
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
 
-  boxStub = createServer((req, res) => {
+  boxStub = createServer(async (req, res) => {
+    if (req.url?.startsWith("/api/v3.1/tool_router/session")) {
+      if (req.headers["x-api-key"] !== "ak_good") {
+        res.writeHead(401, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: { message: "invalid project key" } }));
+      }
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const body = raw ? JSON.parse(raw) : {};
+      res.writeHead(201, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        session_id: "trs_config_test",
+        mcp: { type: "http", url: "https://app.composio.dev/tool_router/v3/trs_config_test/mcp" },
+        config: { user_id: body.user_id },
+      }));
+    }
     const ok = req.headers.authorization === "Bearer box_good";
     res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
     res.end(JSON.stringify(ok ? { ok: true, boxes: [] } : { ok: false, code: "unauthorized" }));
@@ -78,6 +93,7 @@ beforeAll(async () => {
       OMB_PORT: String(PORT),
       OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
+      OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -447,6 +463,30 @@ describe("harness HTTP API", () => {
 
     const nothing = await api("PUT", "/api/config", {});
     expect(nothing.status).toBe(400);
+  });
+
+  it("validates a Composio project key, creates a Session, and keeps externally stored secrets off disk", async () => {
+    const oldKey = await api("PUT", "/api/config", { composio: { apiKey: "old_key" } });
+    expect(oldKey.status).toBe(400);
+    expect(oldKey.body.error).toMatch(/start with ak_/i);
+
+    const rejected = await api("PUT", "/api/config", { composio: { apiKey: "ak_wrong" } });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/invalid project key/i);
+
+    const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.composio).toEqual({ configured: true });
+    expect(JSON.stringify(saved.body)).not.toContain("ak_good");
+
+    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    expect(disk.composio).toMatchObject({ apiKey: "", sessionId: "trs_config_test" });
+    expect(JSON.stringify(disk)).not.toContain("ak_good");
+
+    // A later ordinary setting save reloads config; the in-process secure-env
+    // override must keep Composio configured until the next app launch.
+    expect((await api("PUT", "/api/config", { profile: { name: "Grace" } })).status).toBe(200);
+    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true });
   });
 
   it.skipIf(process.platform === "win32")("stores the credentials file with owner-only permissions", () => {

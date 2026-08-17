@@ -59,17 +59,17 @@ describe("redactSecrets", () => {
       mcpServers: {
         composio: {
           type: "http",
-          url: "https://connect.composio.dev/mcp",
-          headers: { "x-consumer-api-key": "ck_live_supersecret" },
+          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+          headers: { "x-api-key": "ak_live_supersecret" },
         },
         computer: { env: { ELECTRON_RUN_AS_NODE: "1", OGB_BOX_TOKEN: "box_live_zzz" } },
       },
     };
 
     const out = flat(redactSecrets(config));
-    expect(out).not.toContain("ck_live_supersecret");
+    expect(out).not.toContain("ak_live_supersecret");
     expect(out).not.toContain("box_live_zzz");
-    expect(out).toContain("connect.composio.dev");
+    expect(out).toContain("app.composio.dev");
     expect(out).toContain("ELECTRON_RUN_AS_NODE");
     expect(out).toContain('"1"'); // a non-secret value is untouched
   });

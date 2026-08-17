@@ -1,83 +1,152 @@
-const CONNECT_URL = "https://connect.composio.dev/mcp";
-const BACKEND_URL = "https://backend.composio.dev/api/v3";
-function parseMcpResponse(text) {
-    // Streamable-HTTP servers answer JSON or SSE (`data: {...}` lines).
-    const line = text.startsWith("{")
-        ? text
-        : text.split("\n").find((l) => l.startsWith("data: "))?.slice(6);
-    if (!line)
-        throw new Error("empty MCP response");
-    const msg = JSON.parse(line);
-    if (msg.error)
-        throw new Error(msg.error.message || "MCP error");
-    const content = msg.result?.content?.find((c) => c.type === "text")?.text;
-    if (!content)
-        return msg.result ?? null;
+// A project API key (ak_…) creates/reuses one Composio Session. That
+// Session owns connection state, auth links and the MCP endpoint.
+import { saveConfig } from "./config.js";
+import { randomUUID } from "node:crypto";
+const DEFAULT_BACKEND_ORIGIN = "https://backend.composio.dev";
+function apiBase() {
+    return (process.env.OMB_COMPOSIO_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3.1`).replace(/\/$/, "");
+}
+function toolkitBase() {
+    return (process.env.OMB_COMPOSIO_TOOLKITS_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3`).replace(/\/$/, "");
+}
+function projectHeaders(apiKey, json = false) {
+    return {
+        "x-api-key": apiKey,
+        ...(json ? { "content-type": "application/json" } : {}),
+    };
+}
+async function responseError(res, fallback) {
+    const raw = await res.text().catch(() => "");
     try {
-        return JSON.parse(content);
+        const body = JSON.parse(raw);
+        return String(body?.message ?? body?.error?.message ?? body?.error ?? fallback);
     }
     catch {
-        return { text: content };
+        return raw.trim().slice(0, 300) || fallback;
     }
 }
-export async function composioTool(cfg, name, args) {
-    if (!cfg.composio?.key) {
-        throw new Error('no Composio key configured — add {"composio":{"key":"ck_…"}} to ~/.openmausbot/config.json');
+async function getProjectSession(apiKey, sessionId) {
+    const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(sessionId)}`, {
+        headers: projectHeaders(apiKey),
+        signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 404)
+        return null;
+    if (!res.ok)
+        throw new Error(await responseError(res, `Composio session: HTTP ${res.status}`));
+    return (await res.json());
+}
+/** Validate a project key and return one reusable Session for this install. */
+export async function prepareProjectSession(apiKey, current) {
+    const trimmed = apiKey.trim();
+    if (!trimmed)
+        throw new Error("Enter a Composio project API key");
+    if (!trimmed.startsWith("ak_"))
+        throw new Error("Composio project API keys start with ak_");
+    if (trimmed === current?.apiKey && current.sessionId) {
+        const existing = await getProjectSession(trimmed, current.sessionId);
+        if (existing) {
+            return {
+                apiKey: trimmed,
+                userId: existing.config?.user_id ?? current.userId ?? `openmausbot_${randomUUID()}`,
+                sessionId: existing.session_id,
+            };
+        }
     }
-    const res = await fetch(cfg.composio.url || CONNECT_URL, {
+    const userId = current?.userId ?? `openmausbot_${randomUUID()}`;
+    const res = await fetch(`${apiBase()}/tool_router/session`, {
         method: "POST",
-        headers: {
-            "content-type": "application/json",
-            accept: "application/json, text/event-stream",
-            "x-consumer-api-key": cfg.composio.key,
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+        headers: projectHeaders(trimmed, true),
+        body: JSON.stringify({ user_id: userId }),
         signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok)
-        throw new Error(`Composio MCP: HTTP ${res.status}`);
-    return parseMcpResponse(await res.text());
+        throw new Error(await responseError(res, `Composio rejected this key (HTTP ${res.status})`));
+    const session = (await res.json());
+    if (!session.session_id || !session.mcp?.url)
+        throw new Error("Composio created an incomplete Session");
+    return { apiKey: trimmed, userId, sessionId: session.session_id };
+}
+async function ensureProjectSession(cfg) {
+    const composio = cfg.composio;
+    if (!composio?.apiKey)
+        throw new Error("No Composio project key configured");
+    if (composio.sessionId) {
+        const existing = await getProjectSession(composio.apiKey, composio.sessionId);
+        if (existing)
+            return existing;
+    }
+    // A missing/deleted session is recreated and its non-secret identifiers are
+    // persisted so an edited config/env setup does not recreate it every launch.
+    const prepared = await prepareProjectSession(composio.apiKey, composio);
+    composio.userId = prepared.userId;
+    composio.sessionId = prepared.sessionId;
+    saveConfig({ composio: { userId: prepared.userId, sessionId: prepared.sessionId } });
+    const created = await getProjectSession(composio.apiKey, prepared.sessionId);
+    if (!created)
+        throw new Error("Composio Session disappeared after creation");
+    return created;
+}
+export async function mcpIntegration(cfg) {
+    if (!cfg.composio?.apiKey)
+        return null;
+    const session = await ensureProjectSession(cfg);
+    return { url: session.mcp.url, headers: { "x-api-key": cfg.composio.apiKey } };
 }
 /** Connection status per service slug: { slack: { connected, status } }. */
 export async function connectionStatus(cfg, slugs) {
-    const out = await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
-        toolkits: slugs.map((name) => ({ name, action: "list" })),
-    });
-    const results = out?.data?.results ?? {};
-    const status = {};
-    for (const slug of slugs) {
-        const r = results[slug];
-        const active = (r?.accounts ?? []).some((a) => /active/i.test(a.status ?? "")) || /^active$/i.test(r?.status ?? "");
-        status[slug] = { connected: active, status: r?.status ?? "unknown" };
-    }
-    return status;
+    if (!cfg.composio?.apiKey)
+        throw new Error("No Composio project key configured");
+    const session = await ensureProjectSession(cfg);
+    const params = new URLSearchParams({ limit: "50" });
+    if (slugs.length)
+        params.set("toolkits", slugs.join(","));
+    const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/toolkits?${params}`, { headers: projectHeaders(cfg.composio.apiKey), signal: AbortSignal.timeout(15_000) });
+    if (!res.ok)
+        throw new Error(await responseError(res, `Composio toolkits: HTTP ${res.status}`));
+    const body = (await res.json());
+    const bySlug = new Map((body.items ?? []).map((item) => [item.slug?.toLowerCase(), item]));
+    return Object.fromEntries(slugs.map((slug) => {
+        const item = bySlug.get(slug.toLowerCase());
+        const state = item?.connected_account?.status ?? (item?.is_no_auth ? "ACTIVE" : "not_connected");
+        return [slug, { connected: item?.is_no_auth === true || /^active$/i.test(state), status: state }];
+    }));
 }
 /** Disconnect a service: remove every connected account for the slug. */
 export async function removeService(cfg, slug) {
-    const out = await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
-        toolkits: [{ name: slug, action: "list" }],
-    });
-    const accounts = out?.data?.results?.[slug]?.accounts ?? [];
-    const ids = accounts.map((a) => a.id ?? a.account_id ?? a.nanoid).filter(Boolean);
-    for (const id of ids) {
-        await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
-            toolkits: [{ name: slug, action: "remove", account_id: id }],
-        });
-    }
-    return { removed: ids.length };
+    if (!cfg.composio?.apiKey)
+        throw new Error("No Composio project key configured");
+    const session = await ensureProjectSession(cfg);
+    const params = new URLSearchParams({ limit: "50", toolkits: slug });
+    const list = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/toolkits?${params}`, { headers: projectHeaders(cfg.composio.apiKey), signal: AbortSignal.timeout(15_000) });
+    if (!list.ok)
+        throw new Error(await responseError(list, `Composio toolkits: HTTP ${list.status}`));
+    const body = (await list.json());
+    const id = body.items?.find((item) => item.slug?.toLowerCase() === slug.toLowerCase())?.connected_account?.id;
+    if (!id)
+        return { removed: 0 };
+    const removed = await fetch(`${apiBase()}/connected_accounts/${encodeURIComponent(id)}?revoke_on_delete=true`, { method: "DELETE", headers: projectHeaders(cfg.composio.apiKey), signal: AbortSignal.timeout(30_000) });
+    if (!removed.ok)
+        throw new Error(await responseError(removed, `Composio disconnect: HTTP ${removed.status}`));
+    return { removed: 1 };
 }
 /** Mint a browser auth link for one service. Returns { url } or throws. */
 export async function authorizeService(cfg, slug) {
-    const out = await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
-        toolkits: [{ name: slug, action: "add" }],
+    if (!cfg.composio?.apiKey)
+        throw new Error("No Composio project key configured");
+    const session = await ensureProjectSession(cfg);
+    const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
+        method: "POST",
+        headers: projectHeaders(cfg.composio.apiKey, true),
+        body: JSON.stringify({ toolkit: slug }),
+        signal: AbortSignal.timeout(30_000),
     });
-    // be liberal: any https URL mentioning composio/auth wins, else the first
-    const raw = JSON.stringify(out);
-    const urls = raw.match(/https:\/\/[^"\\\s]+/g) ?? [];
-    const url = urls.find((u) => /composio|connect|auth/i.test(u)) ?? urls[0];
-    if (!url)
+    if (!res.ok)
+        throw new Error(await responseError(res, `Composio authorization: HTTP ${res.status}`));
+    const body = (await res.json());
+    if (!body.redirect_url)
         throw new Error(`Composio returned no auth link for ${slug}`);
-    return { url };
+    return { url: body.redirect_url };
 }
 // Curated fallback — the services agentcal's connectors page ships plus the
 // long marketplace tail. Logos resolve client-side:
@@ -117,10 +186,10 @@ export async function listToolkits(cfg) {
     if (toolkitCache && Date.now() - toolkitCache.at < 10 * 60_000) {
         return { cards: toolkitCache.cards, source: "api" };
     }
-    const backendKey = cfg.composio?.apiKey ?? cfg.composio?.key;
+    const backendKey = cfg.composio?.apiKey;
     if (backendKey) {
         try {
-            const res = await fetch(`${BACKEND_URL}/toolkits?limit=500&sort_by=usage`, {
+            const res = await fetch(`${toolkitBase()}/toolkits?limit=500&sort_by=usage`, {
                 headers: { "x-api-key": backendKey },
                 signal: AbortSignal.timeout(15_000),
             });

@@ -207,7 +207,6 @@ export function SettingsModal() {
               >
                 <div className="flex flex-col gap-4">
                   <ApiKeyRow section="composio" />
-                  <ApiKeyRow section="composioApi" />
                   <ApiKeyRow section="box" />
                   <ApiKeyRow section="opencodeGo" />
                 </div>

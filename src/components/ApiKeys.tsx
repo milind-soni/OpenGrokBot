@@ -6,16 +6,15 @@ import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box" | "opencodeGo";
+export type ConfigSection = "composio" | "box" | "opencodeGo";
 
 const SECTIONS: Record<
   ConfigSection,
   { body: (value: string) => unknown; flag: (config: ConfigStatus) => boolean }
 > = {
-  composio: { body: (v) => ({ composio: { key: v } }), flag: (c) => c.composio.configured },
-  composioApi: {
+  composio: {
     body: (v) => ({ composio: { apiKey: v } }),
-    flag: (c) => c.composio.apiKeyConfigured ?? false,
+    flag: (c) => c.composio.configured,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
@@ -34,19 +33,11 @@ const CREDENTIALS: Record<
   }
 > = {
   composio: {
-    label: "Composio Connect key",
-    placeholder: "ck_…",
-    description: "Connect Gmail, GitHub, Slack, Notion, and other apps to your bots.",
-    href: "https://docs.composio.dev/docs/composio-connect",
-    linkLabel: "Open Composio setup guide",
-    optional: true,
-  },
-  composioApi: {
-    label: "Composio API key",
+    label: "Composio project key",
     placeholder: "ak_…",
-    description: "Unlock the full app catalog with official names and logos.",
-    href: "https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions",
-    linkLabel: "Open Composio API key guide",
+    description: "Connect Gmail, GitHub, Slack, Notion, and other apps through your own Composio project.",
+    href: "https://dashboard.composio.dev",
+    linkLabel: "Create or copy a project key",
     optional: true,
   },
   box: {
@@ -159,10 +150,13 @@ export function ApiKeyRow({
     if (saving || (!value.trim() && !configured)) return;
     setSaving(true);
     setError(null);
-    api("/api/config", {
-      method: "PUT",
-      body: JSON.stringify(SECTIONS[section].body(value.trim())),
-    })
+    const request = section === "composio" && window.ogb?.setCredential
+      ? window.ogb.setCredential("composioApiKey", value.trim())
+      : api("/api/config", {
+          method: "PUT",
+          body: JSON.stringify(SECTIONS[section].body(value.trim())),
+        });
+    request
       .then((status: ConfigStatus) => {
         dispatch({ type: "configStatus", config: status });
         setValue("");

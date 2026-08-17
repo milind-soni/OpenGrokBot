@@ -1,4 +1,4 @@
-// Connected apps marketplace, backed by Composio Connect. Catalog comes
+// Connected apps marketplace, backed by Composio Sessions. Catalog comes
 // from /api/connectors/catalog — the full toolkit list with logos when a
 // Composio API key is configured, a curated set otherwise. Icons resolve
 // logo → favicon → monogram.
@@ -187,12 +187,12 @@ export function PluginsPanel() {
           </div>
         </div>
         <div className="mt-1 text-[13px] text-ink-secondary">
-          Apps your bots can use through Composio Connect.
+          Apps your bots can use through Composio.
         </div>
 
         {!configured && (
           <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">
-            No Composio Connect key yet —{" "}
+            Connect your own Composio project first —{" "}
             <button
               className="underline"
               onClick={() => {
@@ -200,7 +200,7 @@ export function PluginsPanel() {
                 dispatch({ type: "toggleAppSettings", open: true });
               }}
             >
-              add one in App Settings
+              add a project key in App Settings
             </button>{" "}
             to connect apps.
           </div>

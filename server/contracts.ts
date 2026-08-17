@@ -130,7 +130,7 @@ export interface SendTurnInput {
   system?: string;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
-    composio?: { url?: string; key: string };
+    composio?: { url: string; headers: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */

@@ -196,18 +196,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({
       threadId: "t-composio",
       text: "hi",
-      integrations: { composio: { key: "ck_test" } },
+      integrations: {
+        composio: {
+          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+          headers: { "x-api-key": "ak_test" },
+        },
+      },
     });
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.mcpConfig.mcpServers.composio).toMatchObject({
       type: "http",
-      url: "https://connect.composio.dev/mcp",
-      headers: { "x-consumer-api-key": "ck_test" },
+      url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+      headers: { "x-api-key": "ak_test" },
     });
     // the user's Composio key must not be readable via `ps`
-    expect(JSON.stringify(seen.argv)).not.toContain("ck_test");
+    expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
   });
 
@@ -222,7 +227,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
 
-    await instance.adapter.sendTurn({ threadId: "t-cleanup", text: "hi", integrations: { composio: { key: "ck_x" } } });
+    await instance.adapter.sendTurn({
+      threadId: "t-cleanup",
+      text: "hi",
+      integrations: {
+        composio: {
+          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+          headers: { "x-api-key": "ak_test" },
+        },
+      },
+    });
     await recorder.until((e) => e.type === "turn.completed");
 
     const configPath = (() => {

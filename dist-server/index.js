@@ -733,8 +733,10 @@ async function startTurn(botId, text, opts) {
             // the user's connected apps, but only to a driver that can mount
             // them — a key in the config says the connections exist, not that
             // this engine can reach them
-            if (cfg.composio?.key && instance.adapter.capabilities.composioMcp === true) {
-                integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
+            if (cfg.composio?.apiKey && instance.adapter.capabilities.composioMcp === true) {
+                const connection = await composio.mcpIntegration(cfg);
+                if (connection)
+                    integrations.composio = connection;
             }
             // dweb is opt-in: without an explicit daemon URL, do not advertise
             // tools that would fail on every call or spawn an unnecessary proxy.
@@ -1127,7 +1129,9 @@ function startGroupTurn(groupId, text) {
 function configStatus() {
     return {
         xai: { configured: Boolean(cfg.xai?.key) },
-        composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
+        composio: {
+            configured: Boolean(cfg.composio?.apiKey),
+        },
         box: { configured: Boolean(cfg.box?.token) },
         opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
         // the chosen voice is a setting, not a secret; the key is reported the
@@ -2124,6 +2128,19 @@ const server = createServer(async (req, res) => {
         }
         if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
             const body = await readBody(req);
+            const rawComposio = body.composio;
+            if (rawComposio !== undefined
+                && (rawComposio === null || typeof rawComposio !== "object" || Array.isArray(rawComposio))) {
+                return json(res, 400, { error: "composio must be an object" });
+            }
+            if (rawComposio) {
+                for (const field of ["apiKey"]) {
+                    if (Object.prototype.hasOwnProperty.call(rawComposio, field)
+                        && typeof rawComposio[field] !== "string") {
+                        return json(res, 400, { error: `composio.${field} must be a string` });
+                    }
+                }
+            }
             const rawOpenCode = body.opencodeGo;
             if (rawOpenCode !== undefined
                 && (rawOpenCode === null || typeof rawOpenCode !== "object" || Array.isArray(rawOpenCode))) {
@@ -2141,6 +2158,24 @@ const server = createServer(async (req, res) => {
             }
             if (!Object.keys(patch).length)
                 return json(res, 400, { error: "nothing to save" });
+            // A project key is useful only if it can create/reuse the Session that
+            // powers both the connections UI and the agent MCP. Validate it before
+            // persisting, and save the non-secret ids needed to reuse that Session.
+            const requestedComposioKey = patch.composio?.apiKey;
+            if (typeof requestedComposioKey === "string") {
+                if (requestedComposioKey.trim()) {
+                    try {
+                        const prepared = await composio.prepareProjectSession(requestedComposioKey, cfg.composio);
+                        patch.composio = { ...(patch.composio ?? {}), ...prepared };
+                    }
+                    catch (error) {
+                        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+                    }
+                }
+                else {
+                    patch.composio = { ...(patch.composio ?? {}), apiKey: "", sessionId: "" };
+                }
+            }
             // check a box token against the provider before storing it: a
             // rejected token used to save happily and only surface as a 401 in
             // another panel later, with nothing the user could act on
@@ -2159,8 +2194,22 @@ const server = createServer(async (req, res) => {
                 if (!check.ok)
                     return json(res, 400, { error: check.message });
             }
-            saveConfig(patch);
-            Object.assign(cfg, loadConfig());
+            const externalSecretStorage = url.searchParams.get("secretStorage") === "external";
+            if (externalSecretStorage && patch.composio) {
+                // Electron stores the project key with OS-backed encryption. Persist
+                // only the non-secret Session ids here, while keeping the supplied
+                // key live in this process until the next launch injects it by env.
+                const composioPatch = patch.composio;
+                const { apiKey: _secret, ...metadata } = composioPatch;
+                saveConfig({ composio: { ...metadata, apiKey: "" } });
+                cfg.composio = { ...cfg.composio, ...composioPatch };
+                if (typeof composioPatch.apiKey === "string")
+                    process.env.COMPOSIO_API_KEY = composioPatch.apiKey;
+            }
+            else {
+                saveConfig(patch);
+                Object.assign(cfg, loadConfig());
+            }
             // provider keys change the fleet; a profile or voice edit must not
             // kill in-flight turns with a pointless reload — no driver reads
             // either, and picking a voice mid-turn should be free
@@ -2220,12 +2269,13 @@ const server = createServer(async (req, res) => {
         // ── connectors (Composio) ──
         if (method === "GET" && path === "/api/connectors/catalog") {
             const { cards, source } = await composio.listToolkits(cfg);
-            return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards });
+            return json(res, 200, { configured: Boolean(cfg.composio?.apiKey), source, cards });
         }
         if (method === "GET" && path === "/api/connectors") {
             const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
-            if (!cfg.composio?.key)
+            if (!cfg.composio?.apiKey) {
                 return json(res, 200, { configured: false, services: {} });
+            }
             const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
             return json(res, 200, { configured: true, services: status });
         }

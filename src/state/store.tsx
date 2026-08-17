@@ -165,7 +165,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  composio: { configured: boolean; apiKeyConfigured?: boolean };
+  composio: { configured: boolean };
   box: { configured: boolean };
   opencodeGo?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND

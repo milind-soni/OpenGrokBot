@@ -51,7 +51,7 @@ already have:
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
-  live, or your own Mac — plus 500+ apps through Composio Connect.
+  live, or your own Mac — plus 500+ apps through Composio.
 
 ## Features
 
@@ -93,7 +93,7 @@ permission broker turns every risky action into a decision you make, for cloud a
 
 ### 🔌 Connected apps
 
-A one-click marketplace over Composio Connect: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
+A one-click marketplace over Composio Sessions: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
 OAuth once, and every bot can use them as tools.
 
 <img src="docs/screenshots/marketplace.png" alt="Connected apps marketplace" width="100%">
@@ -162,7 +162,7 @@ flowchart LR
     REG --> CL & CX & GR
     CL & CX & GR -- "permission requests" --> BROKER
     server -- "Box API" --> BOX[("Cloud computer<br/>box.ascii.dev")]
-    server -- "Composio Connect" --> APPS[("Gmail · Slack · GitHub · …")]
+    server -- "Composio Session" --> APPS[("Gmail · Slack · GitHub · …")]
 ```
 
 | Layer | Where | What it does |
@@ -228,8 +228,7 @@ in the sidebar footer) when you want to enable its integration:
 
 | Credential | What it enables | Where to get it |
 |---|---|---|
-| Composio Connect key (`ck_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [Composio Connect setup guide](https://docs.composio.dev/docs/composio-connect) |
-| Composio API key (`ak_…`) | Browse the full app catalog with official names and logos | [Composio project API key guide](https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions) |
+| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
 | Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
 | ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
 

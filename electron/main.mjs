@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,68 @@ if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.deskto
 // our API shape, not just a 200).
 let serverProc = null;
 let serverReady = true;
+let secureCredentials = {};
+
+const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
+
+async function loadSecureCredentials() {
+  try {
+    if (!fs.existsSync(CREDENTIALS_FILE) || !(await safeStorage.isAsyncEncryptionAvailable())) return {};
+    const decrypted = await safeStorage.decryptStringAsync(fs.readFileSync(CREDENTIALS_FILE));
+    return JSON.parse(decrypted.result);
+  } catch (error) {
+    slog(`credential load failed: ${error?.message ?? error}`);
+    return {};
+  }
+}
+
+async function saveSecureCredentials(credentials) {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
+    throw new Error("The operating-system credential store is unavailable");
+  }
+  fs.mkdirSync(path.dirname(CREDENTIALS_FILE), { recursive: true });
+  const encrypted = await safeStorage.encryptStringAsync(JSON.stringify(credentials));
+  const temporary = `${CREDENTIALS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, encrypted, { mode: 0o600 });
+  fs.renameSync(temporary, CREDENTIALS_FILE);
+}
+
+async function secureComposioConfig() {
+  const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  const configPath = path.join(dataDir, "config.json");
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (!config?.composio || typeof config.composio !== "object") return;
+    let changed = false;
+    const apiKey = config?.composio?.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim().startsWith("ak_")) {
+      if (!secureCredentials.composioApiKey) {
+        secureCredentials.composioApiKey = apiKey.trim();
+        await saveSecureCredentials(secureCredentials);
+      }
+      config.composio.apiKey = "";
+      changed = true;
+    } else if (typeof apiKey === "string" && apiKey.trim()) {
+      config.composio.apiKey = "";
+      changed = true;
+    }
+    // These were the old Connect credential and endpoint. They are no longer
+    // read; remove them during the upgrade so an unused secret is not left in
+    // plaintext indefinitely.
+    for (const field of ["key", "url"]) {
+      if (Object.hasOwn(config.composio, field)) {
+        delete config.composio[field];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const temporary = `${configPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, configPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") slog(`credential migration failed: ${error?.message ?? error}`);
+  }
+}
 
 // The packaged app has no terminal: everything about the server child's life
 // goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
@@ -58,6 +120,9 @@ async function startServerOn(port) {
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       OMB_PORT: String(port),
       OMB_USER_DATA: app.getPath("userData"),
+      ...(secureCredentials.composioApiKey
+        ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
+        : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -285,8 +350,38 @@ ipcMain.handle("desktop:capabilities", async () =>
   }),
 );
 
+ipcMain.handle("credential:set", async (_event, name, value) => {
+  if (name !== "composioApiKey" || typeof value !== "string") {
+    throw new Error("Unsupported credential");
+  }
+  if (app.isPackaged && !(await safeStorage.isAsyncEncryptionAvailable())) {
+    throw new Error("The operating-system credential store is unavailable");
+  }
+  // In development the server is a separately launched process, so it cannot
+  // receive credentials from Electron at boot. Keep its established local
+  // config path there; production always uses the encrypted external store.
+  const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
+  const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ composio: { apiKey: value.trim() } }),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
+  if (app.isPackaged) {
+    if (value.trim()) secureCredentials.composioApiKey = value.trim();
+    else delete secureCredentials.composioApiKey;
+    await saveSecureCredentials(secureCredentials);
+  }
+  return body;
+});
+
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
+  if (app.isPackaged) {
+    secureCredentials = await loadSecureCredentials();
+    await secureComposioConfig();
+  }
   // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
   // inside the app's own processes — the one capture path macOS reliably
   // attributes to the app (registers it in the Screen Recording pane and

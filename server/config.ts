@@ -1,5 +1,5 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
-//   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//   { "xai": {"key":"xai-…"}, "composio": {"apiKey":"ak_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,10 +10,13 @@ import type { InstanceConfigMap } from "./contracts.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
-  /** key = ck_… Connect consumer key (connections + agent tools);
-   * apiKey = ak_… project API key — optional, unlocks the full toolkit
-   * catalog with official logos in the plugins marketplace. */
-  composio?: { key?: string; apiKey?: string; url?: string };
+  /** Project key used for Sessions, catalog and agent tools. userId/sessionId
+   * are non-secret local identifiers used to reuse one Composio Session. */
+  composio?: {
+    apiKey?: string;
+    userId?: string;
+    sessionId?: string;
+  };
   box?: { token?: string };
   /** OpenCode Go key; persisted write-only and passed only to its child. */
   opencodeGo?: { apiKey?: string };
@@ -53,7 +56,10 @@ export function loadConfig(): AppConfig {
     /* first run — env fallbacks below */
   }
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
-  cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
+  cfg.composio = {
+    ...cfg.composio,
+    ...(process.env.COMPOSIO_API_KEY !== undefined ? { apiKey: process.env.COMPOSIO_API_KEY } : {}),
+  };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
   cfg.opencodeGo = { apiKey: process.env.OPENCODE_API_KEY, ...cfg.opencodeGo };
   cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };

@@ -401,11 +401,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         capabilities: { sessionModelSwitch: "in-session" },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
-        respondToRequest: async () => {
-          throw new Error(
-            "Antigravity has no interactive permission channel (run in fullAuto to auto-approve, or await the ACP v2)",
-          );
-        },
+        respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
           for (const { stop } of active.values()) stop();

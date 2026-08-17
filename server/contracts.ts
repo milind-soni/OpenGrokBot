@@ -104,7 +104,14 @@ export type RuntimeEvent = RuntimeEventBase &
         summary: string;
         choices?: string[];
       }
-    | { type: "request.resolved"; behavior: string; source: string }
+    | {
+        type: "request.resolved";
+        behavior: "allow" | "deny" | "answer";
+        /** who decided: a person, auto mode, the ask's own timeout, the
+         * harness (turn ended / settings changed), or nobody — the answerer
+         * was already gone and the action never ran */
+        source: "user" | "auto" | "timeout" | "system" | "unavailable" | "peer";
+      }
     | { type: "thread.token-usage.updated"; input: number; output: number }
     // `setup: true` marks a failure the user fixes by installing or
     // configuring something, not by retrying — the UI offers setup instead.
@@ -112,6 +119,12 @@ export type RuntimeEvent = RuntimeEventBase &
   );
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
+
+/** What became of an answer to an ask. `allowed-once` grants only the
+ * asked-about action — broadening ("always allow") stays a separate,
+ * explicit step. `unavailable` is the fail-closed default: no answerer,
+ * no action. */
+export type RequestOutcome = "allowed-once" | "rejected" | "answered" | "unavailable";
 
 // ── adapter contract (upstream ProviderAdapterShape, promise-flavored) ──
 // The conversation runtime every provider is flattened into. streamEvents
@@ -174,11 +187,16 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** Answer a pending ask. Resolves with what actually happened — never
+   * throws for an ask that is no longer there: `unavailable` means nobody
+   * could take the answer (the turn ended, the broker died, the driver
+   * has no asks), and the caller treats it as a deny. Callers branch on the
+   * outcome, not on prose. */
   respondToRequest(
     threadId: ThreadId,
     requestId: string,
     decision: { behavior: "allow" | "deny" | "answer"; message?: string },
-  ): Promise<void>;
+  ): Promise<RequestOutcome>;
   hasSession(threadId: ThreadId): boolean;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;

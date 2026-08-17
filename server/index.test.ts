@@ -5,12 +5,13 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -119,22 +120,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   boxStub?.close();
-  child?.kill("SIGTERM");
-  await new Promise<void>((resolve) => {
-    if (!child || child.exitCode !== null) return resolve();
-    child.on("close", () => resolve());
-    setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
-  });
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      rmSync(home, { recursive: true, force: true });
-      break;
-    } catch {
-      // Linux can still have the just-killed server holding the scratch dir.
-      if (attempt === 7) break;
-      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
-    }
-  }
+  // Upstream fixed this same Linux scratch-cleanup flake with an inline
+  // retry loop; these helpers are that fix plus the cause — the retry AND
+  // an exit that is actually waited for before the delete begins.
+  await waitForExit(child, { signal: "SIGTERM" });
+  await removeTempDir(home);
 });
 
 describe("harness HTTP API", () => {
@@ -461,6 +451,28 @@ describe("harness HTTP API", () => {
     const res = await api("PATCH", `/api/bots/${bot.id}/cards/${card.id}`, { answered: card.card.options[0] });
     expect(res.status).toBe(200);
     expect(res.body.message.card.answered).toBe(card.card.options[0]);
+  });
+
+  it("validates approval decisions and reports a request that is no longer open", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+
+    const invalid = await api("POST", `/api/bots/${bot.id}/respond`, {
+      requestId: "gone",
+      behavior: "approve-everything",
+    });
+    expect(invalid.status).toBe(400);
+
+    const unavailable = await api("POST", `/api/bots/${bot.id}/respond`, {
+      requestId: "gone",
+      behavior: "allow",
+    });
+    expect(unavailable.status).toBe(200);
+    expect(unavailable.body).toEqual({ ok: true, outcome: "unavailable" });
+
+    const reread = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    expect(reread.messages.at(-1).tool).toMatchObject({ ok: false });
+    expect(reread.messages.at(-1).tool.name).toContain("request is no longer open");
   });
 
   it("rejects an empty message and explains an unavailable provider", async () => {

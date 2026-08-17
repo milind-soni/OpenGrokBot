@@ -1,0 +1,508 @@
+// The app's one long-lived object: who we are paired with, what we know,
+// and the stream that keeps it current.
+//
+// The parsing and folding live in CompanionCore. What lives here is the
+// part that cannot be unit-tested and is the actual hard problem in a phone
+// client — lifecycle. A phone loses its connection constantly: it locks, it
+// backgrounds, it moves between wifi and cellular. So the stream is torn
+// down deliberately when the app leaves the screen, and on the way back the
+// server is asked what was missed rather than being asked for everything.
+import Foundation
+import OSLog
+import SwiftUI
+import CompanionCore
+
+/// Stream lifecycle, in Console.app and the Xcode console. A companion that
+/// is silently not connected looks exactly like one with nothing to say, so
+/// the transitions are worth being able to read.
+private let log = Logger(subsystem: "com.openmausbot.companion", category: "stream")
+
+@MainActor
+final class Session: ObservableObject {
+    enum Status: Equatable {
+        case unpaired
+        case connecting
+        case live
+        /// The token stopped working — revoked on the computer, most likely.
+        case unauthorized
+        case offline(String)
+    }
+
+    @Published private(set) var state = CompanionState()
+    @Published private(set) var connection: Connection?
+    @Published private(set) var status: Status = .unpaired
+    /// Transient, user-facing failures from an action they just took.
+    @Published var actionError: String?
+
+    private var client: CompanionClient?
+    private var streamTask: Task<Void, Never>?
+    /// Identifies the task currently stored in `streamTask`. A cancelled task
+    /// can finish after its replacement starts; its cleanup must not clear
+    /// the replacement's handle.
+    private var streamGeneration = 0
+    private var reconnectDelay: UInt64 = 0
+    /// How many computer panels are open. A count rather than a flag: the
+    /// panel can be pushed twice in a navigation stack, and the last one to
+    /// close is the one that should turn screens back off.
+    private var screenWatchers = 0
+    /// A saved connection exists, but its token could not be read yet. Keeps
+    /// "the keychain is locked" from being mistaken for "not paired".
+    private var restorePending = false
+
+    private static let connectionKey = "companion.connection"
+
+    // MARK: - Pairing
+
+    init() {
+        restore()
+    }
+
+    /// Rebuild the last connection at launch.
+    ///
+    /// Three outcomes, and keeping them apart is the whole point. No saved
+    /// connection: stay unpaired. A saved connection whose token reads back:
+    /// connect. A saved connection whose token cannot be read *yet* — the
+    /// locked keychain before a phone's first unlock after reboot, which is
+    /// when iOS is most likely to have launched us in the background — hold
+    /// on to it and try again. Only the middle case is a real pairing, and
+    /// only the first should ever send someone back to the pairing screen.
+    private func restore() {
+        restorePending = false
+        guard let data = UserDefaults.standard.data(forKey: Self.connectionKey),
+              let saved = try? JSONDecoder().decode(Connection.self, from: data)
+        else { return }
+
+        let stored: String?
+        do {
+            stored = try Keychain.token(for: saved.id)
+        } catch {
+            // Keep the connection and say why. `.offline` rather than
+            // `.unpaired` matters: the latter is what puts PairingView on
+            // screen, and asking for a new code is the one recovery that
+            // costs a walk to the computer.
+            connection = saved
+            restorePending = true
+            status = .offline(
+                (error as? KeychainError)?.isLocked == true
+                    ? "Unlock this phone to reach your computer."
+                    : error.localizedDescription
+            )
+            return
+        }
+        guard let stored else { return } // no token: genuinely not paired
+
+        connection = saved
+        client = CompanionClient(connection: saved, token: stored)
+        status = .connecting
+    }
+
+    /// Redeem a pairing code. On success the token goes to the keychain and
+    /// the connection to defaults — deliberately apart, so the thing that
+    /// gets backed up is never the credential.
+    func pair(with connection: Connection, code: String, deviceName: String) async throws {
+        let paired = try await CompanionClient.pair(connection: connection, code: code, deviceName: deviceName)
+        // prefer the name the computer calls itself over the Bonjour label
+        var stored = connection
+        if !paired.serverName.isEmpty { stored.name = paired.serverName }
+
+        try Keychain.save(paired.token, for: stored.id)
+        UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: Self.connectionKey)
+
+        self.connection = stored
+        self.client = CompanionClient(connection: stored, token: paired.token)
+        self.state = CompanionState()
+        // A fresh pairing settles any restore that was still waiting on the
+        // keychain — the token is in hand, so there is nothing left to retry.
+        restorePending = false
+        connect()
+    }
+
+    func signOut() {
+        streamTask?.cancel()
+        streamTask = nil
+        restorePending = false
+        if let id = connection?.id { Keychain.remove(id) }
+        UserDefaults.standard.removeObject(forKey: Self.connectionKey)
+        connection = nil
+        client = nil
+        state = CompanionState()
+        status = .unpaired
+    }
+
+    // MARK: - Lifecycle
+
+    /// Called when the app comes to the front, and once at launch.
+    func connect() {
+        // A restore that found the keychain locked left `client` nil on
+        // purpose. Coming to the front is the moment worth retrying on: the
+        // app is on screen, so the phone is in someone's hand and unlocked.
+        if client == nil, restorePending { restore() }
+        guard client != nil, streamTask == nil else { return }
+        reconnectDelay = 0
+        streamGeneration += 1
+        let generation = streamGeneration
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.run()
+            guard self.streamGeneration == generation else { return }
+            self.streamTask = nil
+        }
+    }
+
+    /// Pull-to-refresh: reopen the stream, and hold the control open until
+    /// the connection has actually settled one way or the other.
+    ///
+    /// `connect()` returns the moment the task is spawned, so a `refreshable`
+    /// that only calls it snaps the spinner shut before a single byte has
+    /// arrived — the gesture reads as "nothing happened", on precisely the
+    /// occasion it exists for. Waiting for `status` to leave `.connecting`
+    /// makes the spinner mean what it appears to mean; the deadline is there
+    /// so a network that never answers still gives the control back.
+    func refresh() async {
+        restartStream()
+        connect()
+        let deadline = Date().addingTimeInterval(10)
+        while status == .connecting, !Task.isCancelled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+    }
+
+    /// Ask the harness to include this bot's computer in the stream, for as
+    /// long as something is showing it.
+    ///
+    /// This costs a reconnect, which is the right trade: the alternative is
+    /// a base64 desktop capture arriving every few seconds for the whole
+    /// session, including on cellular, whether or not anyone is looking.
+    /// The reconnect resumes from the cursor, so nothing is missed.
+    func watchScreen(of botId: String) {
+        screenWatchers += 1
+        if screenWatchers == 1 { restartStream() }
+    }
+
+    func stopWatchingScreen(of botId: String) {
+        screenWatchers = max(0, screenWatchers - 1)
+        if screenWatchers == 0 {
+            state.clearScreen(botId)
+            restartStream()
+        }
+    }
+
+    /// Reopen the stream so its query string matches what we now want. The
+    /// cursor survives, so this is a gap, not a reset.
+    private func restartStream() {
+        guard streamTask != nil else { return }
+        streamTask?.cancel()
+        streamTask = nil
+        connect()
+    }
+
+    /// Called when the app leaves the screen. iOS will kill the connection
+    /// anyway; dropping it deliberately means the cursor is written down at
+    /// a known point instead of wherever the socket happened to die.
+    func disconnect() {
+        streamTask?.cancel()
+        streamTask = nil
+    }
+
+    private func run() async {
+        while !Task.isCancelled {
+            guard let client else { return }
+            status = .connecting
+            log.info("opening stream, cursor=\(self.state.cursor ?? "none", privacy: .public)")
+            do {
+                // The query is fixed when the connection opens, so changing
+                // it means a new connection — `restartStream()` cancels this
+                // task and starts another. Cancellation is the only exit;
+                // breaking out here instead would fall through to the "the
+                // harness went away" path and flash a lost-connection banner
+                // on what is actually a deliberate reconnect.
+                for try await frame in try client.events(since: state.cursor, screens: screenWatchers > 0) {
+                    if Task.isCancelled { return }
+                    reconnectDelay = 0
+
+                    if case let .hello(cursor, resumed) = frame.frame {
+                        log.info("stream live, resumed=\(resumed, privacy: .public)")
+                        // false means the server could not replay the gap —
+                        // the one case that costs a full hydrate. Commit the
+                        // hello cursor only after that hydrate succeeds: if
+                        // the request dies halfway through replay/hydration,
+                        // reconnecting must still ask for the missing gap.
+                        if !resumed {
+                            try await hydrate()
+                            state.resetCursor(cursor)
+                        }
+                        status = .live
+                        continue
+                    }
+                    state.apply(frame)
+                    state.advance(to: frame.seq)
+                }
+                // the stream ended without an error — the harness went away
+                log.notice("stream ended without an error")
+                status = .offline("Lost the connection.")
+            } catch let error as APIError where error.isUnauthorized {
+                log.error("stream refused: unauthorized")
+                status = .unauthorized
+                return
+            } catch {
+                // backgrounding cancels the stream on purpose; that is not a
+                // failure to report, and it must not be retried
+                if Task.isCancelled || error is CancellationError {
+                    log.info("stream closed by us")
+                    return
+                }
+                log.error("stream failed: \(error.localizedDescription, privacy: .public)")
+                status = .offline(error.localizedDescription)
+            }
+
+            if Task.isCancelled { return }
+            // 1s, 2s, 4s… to 15s. A phone that woke on a network which is
+            // not the laptop's should not hammer it.
+            reconnectDelay = reconnectDelay == 0 ? 1 : min(reconnectDelay * 2, 15)
+            try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+        }
+    }
+
+    private func hydrate() async throws {
+        guard let client else { return }
+        let fleet = try await client.fleet(messages: 50)
+        log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
+        state.hydrate(fleet)
+    }
+
+    // MARK: - Actions
+    //
+    // Each of these does the thing and lets the event stream deliver the
+    // result. Nothing here writes to `state` optimistically: the harness is
+    // the source of truth, and a phone that draws its own version of events
+    // is a phone that disagrees with the laptop.
+
+    func send(_ text: String, to chat: Chat) async {
+        await perform {
+            switch chat {
+            case let .bot(bot): try await $0.send(text: text, toBot: bot.id)
+            case let .room(room): try await $0.send(text: text, toRoom: room.id)
+            }
+        }
+    }
+
+    func answer(threadId: String, card: OptionCard, choice: String) async {
+        guard let requestId = card.requestId else { return }
+        await perform {
+            // Permission cards answer allow/deny; a question answers with
+            // the chosen text. The harness tells them apart by `behavior`.
+            if card.isPermission {
+                try await $0.respond(
+                    threadId: threadId,
+                    requestId: requestId,
+                    behavior: choice.lowercased() == "allow" ? "allow" : "deny"
+                )
+            } else {
+                try await $0.respond(threadId: threadId, requestId: requestId, behavior: "answer", message: choice)
+            }
+        }
+    }
+
+    /// "Always allow" — the grant key comes from the card, never from
+    /// anything derived here, so the phone and the harness cannot disagree
+    /// about what was just permitted.
+    func alwaysAllow(bot: Bot, card: OptionCard) async {
+        guard let key = card.allowKey else { return }
+        await perform { try await $0.alwaysAllow(botId: bot.id, key: key) }
+    }
+
+    /// Make a new bot. The harness chooses its name, colour and greeting, so
+    /// one made here is indistinguishable from one made on the desktop.
+    ///
+    /// Creating a bot does not broadcast — the desktop adds it optimistically
+    /// too — so the new bot is folded in here rather than waited for. Return
+    /// it so the caller can open it, which is the only reason anyone taps the
+    /// button.
+    @discardableResult
+    func createBot() async -> Bot? {
+        guard let client else { return nil }
+        do {
+            let bot = try await client.createBot()
+            state.apply(.bot(bot))
+            return bot
+        } catch {
+            actionError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func interrupt(bot: Bot) async {
+        await perform { try await $0.interrupt(botId: bot.id) }
+    }
+
+    func markRead(_ chat: Chat) async {
+        await perform(quietly: true) {
+            switch chat {
+            case let .bot(bot): try await $0.markRead(botId: bot.id)
+            case let .room(room): try await $0.markRead(roomId: room.id)
+            }
+        }
+    }
+
+    func loadOlder(threadId: String) async {
+        guard let client, let oldest = state.transcript(forThread: threadId).first else { return }
+        do {
+            let page = try await client.messages(threadId: threadId, before: oldest.id, limit: 50)
+            state.prepend(page, toThread: threadId)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    func image(threadId: String, messageId: String) async -> Data? {
+        try? await client?.image(threadId: threadId, messageId: messageId)
+    }
+
+    private func perform(quietly: Bool = false, _ body: (CompanionClient) async throws -> Void) async {
+        guard let client else { return }
+        do {
+            try await body(client)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+        } catch {
+            if !quietly { actionError = error.localizedDescription }
+        }
+    }
+}
+
+/// A chat is a bot or a room. They share a thread, which is what every
+/// message, approval and page is keyed by.
+enum Chat: Identifiable, Hashable {
+    case bot(Bot)
+    case room(Room)
+
+    var id: String {
+        switch self {
+        case let .bot(bot): return bot.id
+        case let .room(room): return room.id
+        }
+    }
+
+    static func == (left: Chat, right: Chat) -> Bool {
+        switch (left, right) {
+        case let (.bot(a), .bot(b)): return a.id == b.id
+        case let (.room(a), .room(b)): return a.id == b.id
+        default: return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case let .bot(bot):
+            hasher.combine(0)
+            hasher.combine(bot.id)
+        case let .room(room):
+            hasher.combine(1)
+            hasher.combine(room.id)
+        }
+    }
+
+    var threadId: String {
+        switch self {
+        case let .bot(bot): return bot.threadId
+        case let .room(room): return room.threadId
+        }
+    }
+
+    var name: String {
+        switch self {
+        case let .bot(bot): return bot.name
+        case let .room(room): return room.name
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case let .bot(bot): return bot.title
+        case let .room(room): return "\(room.memberIds.count) bots"
+        }
+    }
+
+    var unread: Bool {
+        switch self {
+        case let .bot(bot): return bot.unread
+        case let .room(room): return room.unread
+        }
+    }
+
+    var busy: Bool {
+        switch self {
+        case let .bot(bot): return bot.busy ?? false
+        case let .room(room): return room.busyBotId != nil
+        }
+    }
+
+    var color: String {
+        switch self {
+        case let .bot(bot): return bot.color
+        case .room: return "blue"
+        }
+    }
+}
+
+/// A chat plus the two things a roster row shows that the record itself does
+/// not carry: the preview line, and when the thread last moved. Both come out
+/// of the same message — the last one in the transcript.
+struct ChatSummary: Identifiable, Hashable {
+    let chat: Chat
+    let preview: String
+    let lastActivity: Double
+    let pinned: Bool
+
+    var id: String { chat.id }
+}
+
+extension CompanionState {
+    /// Everything worth showing in the chat list: pinned first, then unread,
+    /// then most recently active. Hidden bots stay hidden.
+    ///
+    /// The derived fields are computed once here rather than asked for as the
+    /// list is sorted and filtered. Each one walks a thread's messages to
+    /// reach the last of them, and a comparator is called O(n log n) times
+    /// while the search predicate runs over every chat on every keystroke —
+    /// so the same transcript was being traversed dozens of times per frame
+    /// to produce an answer that had not changed. One pass, then sort the
+    /// results.
+    var chatSummaries: [ChatSummary] {
+        let bots = self.bots.filter { $0.hidden != true }.map(Chat.bot)
+        let rooms = self.rooms.map(Chat.room)
+        return (bots + rooms)
+            .map { chat in
+                let last = visibleTranscript(forThread: chat.threadId).last
+                return ChatSummary(
+                    chat: chat,
+                    preview: Self.preview(of: last),
+                    lastActivity: last?.at ?? 0,
+                    pinned: Self.pinned(chat)
+                )
+            }
+            .sorted { left, right in
+                if left.pinned != right.pinned { return left.pinned }
+                if left.chat.unread != right.chat.unread { return left.chat.unread }
+                return left.lastActivity > right.lastActivity
+            }
+    }
+
+    private static func pinned(_ chat: Chat) -> Bool {
+        if case let .bot(bot) = chat { return bot.pinned ?? false }
+        return false
+    }
+
+    /// The one line a roster row shows under the name, from whichever kind of
+    /// message landed last.
+    private static func preview(of last: Message?) -> String {
+        guard let last else { return "" }
+        switch last.kind {
+        case .text: return last.text ?? ""
+        case .options: return last.card?.isPending == true ? "Waiting on you" : (last.card?.title ?? "")
+        case .activity: return last.tool?.name ?? ""
+        case .screen: return "Screenshot"
+        case .unknown: return last.text ?? ""
+        }
+    }
+}

@@ -6,7 +6,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
+import { removeTempDir } from "../../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -166,7 +167,7 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_USAGE_ROOT;
     recorder?.stop();
     await instance?.dispose();
-    rmSync(scratch, { recursive: true, force: true });
+    await removeTempDir(scratch);
   });
 
   it("normalizes a full turn into the canonical event sequence", async () => {
@@ -523,7 +524,7 @@ describe("ACP snapshot", () => {
       expect((await instance.snapshot()).authenticated).toBe(true);
     } finally {
       await instance.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 
@@ -586,7 +587,7 @@ describe("ACP snapshot", () => {
       expect((await neither.snapshot()).authenticated).toBe(false);
     } finally {
       for (const i of instances) await i.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 
@@ -622,7 +623,7 @@ describe("ACP snapshot", () => {
       expect(instance.models.default).toBe("custom:LMStudio-Qwen-0");
     } finally {
       await instance.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 
@@ -643,7 +644,7 @@ describe("ACP snapshot", () => {
       expect(instance.models.options.every((o) => !o.id.startsWith("custom:"))).toBe(true);
     } finally {
       await instance.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 
@@ -664,7 +665,7 @@ describe("ACP snapshot", () => {
       expect((await instance.snapshot()).authenticated).toBe(true);
     } finally {
       await instance.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 

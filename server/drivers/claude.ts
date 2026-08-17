@@ -174,6 +174,8 @@ interface Ask {
   input: Record<string, unknown>;
   at: number;
 }
+type AskBehavior = "allow" | "deny" | "answer";
+type AskResolutionSource = "user" | "timeout" | "system";
 
 const DENY_TIMEOUT_NOTE =
   "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
@@ -197,11 +199,14 @@ export function permissionSocketPath(threadId: string) {
 function createPermissionBroker(opts: {
   socketPath: string;
   onAsk: (ask: Ask) => void;
-  onResolve: (resolved: Ask & { behavior: string; source: string }) => void;
+  onResolve: (resolved: Ask & { behavior: AskBehavior; source: AskResolutionSource }) => void;
   timeoutMs?: number;
 }) {
   const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
-  const pending = new Map<string, { ask: Ask; finish: (behavior: string, message: string | undefined, source: string) => void }>();
+  const pending = new Map<
+    string,
+    { ask: Ask; finish: (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => void }
+  >();
   try {
     unlinkSync(opts.socketPath);
   } catch {}
@@ -224,7 +229,7 @@ function createPermissionBroker(opts: {
         const askId = String(msg.id ?? newId());
         const kind = msg.kind === "question" ? ("question" as const) : ("permission" as const);
         const ask: Ask = { id: askId, kind, tool: msg.tool ?? "tool", input: msg.input ?? {}, at: Date.now() };
-        const finish = (behavior: string, message: string | undefined, source: string) => {
+        const finish = (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => {
           if (!pending.delete(askId)) return;
           clearTimeout(timer);
           try {
@@ -253,18 +258,17 @@ function createPermissionBroker(opts: {
   });
   server.listen(opts.socketPath);
   return {
-    answer(askId: string, behavior: string, message?: string): boolean {
+    answer(askId: string, behavior: AskBehavior, message?: string): boolean {
       const p = pending.get(askId);
       if (!p) return false;
-      const valid = p.ask.kind === "question" ? ["answer"] : ["allow", "deny"];
-      if (!valid.includes(behavior)) return false;
+      if (p.ask.kind === "question" ? behavior !== "answer" : behavior === "answer") return false;
       p.finish(behavior, message, "user");
       return true;
     },
     close() {
       for (const p of [...pending.values()]) {
-        if (p.ask.kind === "question") p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "shutdown");
-        else p.finish("deny", "OpenMausBot: the turn ended", "shutdown");
+        if (p.ask.kind === "question") p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "system");
+        else p.finish("deny", "OpenMausBot: the turn ended", "system");
       }
       try {
         server.close();
@@ -644,12 +648,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
+          // fail-closed by construction: no broker, or an ask that already
+          // timed out / settled, is `unavailable` — the caller denies
           const broker = active.get(threadId)?.broker;
-          if (!broker) throw new Error("no active turn with a permission broker on this thread");
+          if (!broker) return "unavailable";
           const behavior = decision.behavior === "answer" ? "answer" : decision.behavior;
-          if (!broker.answer(requestId, behavior, decision.message)) {
-            throw new Error("no such pending request (it may have timed out)");
-          }
+          if (!broker.answer(requestId, behavior, decision.message)) return "unavailable";
+          return behavior === "allow" ? "allowed-once" : behavior === "answer" ? "answered" : "rejected";
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {

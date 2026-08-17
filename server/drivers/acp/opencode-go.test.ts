@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { removeTempDir } from "../../testing/cleanup.ts";
 import {
   classifyOpenCodeGoError,
   createOpenCodeGoDriver,
@@ -99,7 +100,7 @@ describe("OpenCode Go catalog", () => {
       expect((await instance.snapshot()).authenticated).toBe(true);
     } finally {
       await instance.dispose();
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 
@@ -131,7 +132,7 @@ describe("OpenCode Go catalog", () => {
       expect(child.env.ANTHROPIC_API_KEY).toBeUndefined();
       await instance.dispose();
     } finally {
-      rmSync(scratch, { recursive: true, force: true });
+      await removeTempDir(scratch);
     }
   });
 });

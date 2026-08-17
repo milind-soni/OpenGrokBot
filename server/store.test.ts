@@ -451,6 +451,35 @@ describe("Store bot activity state", () => {
   });
 });
 
+describe("Store redacts bot-authored secrets on write", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("masks a key in a bot reply, a tool title and a card summary — but never in what the user typed", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const key = `sk-ant-api03-${"abcdefghijklmnopqrstuvwxyz0123456789"}`;
+    const reply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `Your key is ${key}` });
+    expect(reply.text).not.toContain(key);
+    expect(reply.text).toContain("«redacted");
+    const chip = store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `Bash: export TOKEN=${key}`, ok: true } });
+    expect(chip.tool?.name).not.toContain(key);
+    const card = store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "options",
+      card: { title: "Run this?", summary: `curl -H "Authorization: Bearer ${key}"`, options: [], requestId: "r1", tool: "Bash" } as never,
+    });
+    expect((card.card as { summary?: string }).summary).not.toContain(key);
+    // the user's own words are theirs
+    const mine = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: `use ${key} for the api` });
+    expect(mine.text).toContain(key);
+    // and the stored copy is what was masked, not just the returned one
+    const again = new Store(selection);
+    expect(again.messagesFor(bot.threadId).find((m) => m.id === reply.id)?.text).not.toContain(key);
+  });
+});
+
 describe("Store task working folder", () => {
   beforeEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });

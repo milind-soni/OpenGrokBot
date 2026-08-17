@@ -106,6 +106,9 @@ export interface Task {
   /** folder this task's turns run in, pinned on its first turn; null =
    * legacy home-folder session; absent = not pinned yet */
   cwd?: string | null;
+  /** cumulative token spend across this task's settled turns, as the
+   * server tallies it; absent until the first turn completes */
+  usage?: { input: number; output: number; turns: number };
 }
 
 export interface Bot {
@@ -232,7 +235,13 @@ export interface InstanceInfo {
   cliCandidates?: string[];
 }
 
-export type AppSettingsSection = "general" | "connections" | "engines" | "voice" | "computer";
+export type AppSettingsSection =
+  | "general"
+  | "connections"
+  | "engines"
+  | "companion"
+  | "voice"
+  | "computer";
 
 interface AppState {
   bots: Bot[];

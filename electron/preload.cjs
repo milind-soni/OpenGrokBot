@@ -6,6 +6,17 @@ contextBridge.exposeInMainWorld("ogb", {
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
   platform: process.platform,
   getCapabilities: () => ipcRenderer.invoke("desktop:capabilities"),
+  /** The companion sidecar: the one part of this app that listens off the
+   * machine, so it runs as its own process and is off until switched on.
+   * Every call answers with the whole state, so the panel never has to
+   * stitch two round-trips together. */
+  companion: {
+    state: () => ipcRenderer.invoke("companion:state"),
+    start: () => ipcRenderer.invoke("companion:start"),
+    stop: () => ipcRenderer.invoke("companion:stop"),
+    pairing: (open) => ipcRenderer.invoke("companion:pairing", open),
+    revoke: (deviceId) => ipcRenderer.invoke("companion:revoke", deviceId),
+  },
   /** One frame of this computer's screen as a data: URL when supported. */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
   speechStart: (options) => ipcRenderer.invoke("speech:start", options),

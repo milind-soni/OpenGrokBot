@@ -254,9 +254,7 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
         capabilities: { sessionModelSwitch: "in-session" },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.cancel(),
-        respondToRequest: async () => {
-          throw new Error("box agent asks are not wired yet");
-        },
+        respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
           for (const { cancel } of active.values()) cancel();

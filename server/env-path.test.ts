@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { augmentedPath, resetPathCache, resetPathCacheForTests, splitCliString } from "./env-path.ts";
 import { resolveCli } from "./procs.ts";
+import { removeTempDir } from "./testing/cleanup.ts";
 
 const posixIt = it.skipIf(process.platform === "win32");
 
@@ -187,10 +188,12 @@ winOnly("resolveCli (Windows)", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "omb-shim-"));
   });
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env.OMB_EXTRA_PATH;
     resetPathCacheForTests();
-    rmSync(dir, { recursive: true, force: true });
+    // These tests spawn the shims out of this directory; a just-exited one can
+    // still be holding it for a beat after the call returns.
+    await removeTempDir(dir);
   });
 
   it("parses an npm .cmd shim down to the .exe it wraps", () => {

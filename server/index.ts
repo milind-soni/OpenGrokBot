@@ -35,12 +35,12 @@ import {
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
-import { discardDelegations, drainDelegations, queueDelegation, type QueueResult } from "./delegations.ts";
+import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -59,6 +59,7 @@ import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
+import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
@@ -342,6 +343,47 @@ function broadcast(payload: Record<string, unknown>) {
 // once can collide on a bare id and patch each other's messages.
 const toolMessageByItem = new Map<string, string>(); // threadId:itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
+
+/** Deliver a person's answer to the engine that asked, and tell the truth
+ * about what happened. `unavailable` — the turn ended, the ask timed out,
+ * the engine has no asks — is fail-closed: the action was never run. The
+ * card is settled and a chip says so, instead of the answer vanishing into
+ * a 500 while the card sits open forever. */
+async function answerRequest(
+  threadId: string,
+  instanceId: string,
+  requestId: string,
+  behavior: "allow" | "deny" | "answer",
+  message?: string,
+): Promise<RequestOutcome> {
+  const instance = registry.get(instanceId);
+  let outcome: RequestOutcome = "unavailable";
+  if (instance) {
+    try {
+      outcome = await instance.adapter.respondToRequest(threadId, requestId, { behavior, message });
+    } catch {
+      outcome = "unavailable";
+    }
+  }
+  if (outcome === "unavailable") {
+    const messageId = askMessageByRequest.get(`${threadId}:${requestId}`);
+    const existing = messageId ? store.messagesFor(threadId).find((m) => m.id === messageId) : undefined;
+    if (existing?.card && !existing.card.answered) {
+      store.patchMessage(threadId, existing.id, { card: { ...existing.card, answered: "unavailable", dismissed: true } });
+    }
+    if (messageId) askMessageByRequest.delete(`${threadId}:${requestId}`);
+    store.appendMessage(threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: "Couldn't deliver that answer — the request is no longer open, so the action was not run", ok: false },
+    });
+  }
+  return outcome;
+}
+
+function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
+  return value === "allow" || value === "deny" || value === "answer" ? value : null;
+}
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, string>();
@@ -363,6 +405,11 @@ const groupSpeakers = new Map<string, { botId: string; name: string; color: stri
 // into the task's tally when the turn settles.
 const turnUsage = new Map<string, { input: number; output: number }>();
 
+// Bounded per active turn. OpenHands uses a bounded recent-event scan for
+// the same class of stuck-loop detection; retaining an unlimited set of
+// unique arguments would let one pathological turn grow the server forever.
+const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 256 });
+
 // ── stall watchdog ─────────────────────────────────────────────────────
 // ask_bot has a 4-minute ceiling and room turns a 5-minute one; the main
 // 1:1 path had none, so a wedged CLI left its bot busy forever. The
@@ -374,6 +421,7 @@ const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
   checkMs: 60_000,
   onStall: (turn) => {
+    repeats.settle(turn.threadId);
     const bot = store.bot(turn.botId);
     const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
@@ -581,7 +629,8 @@ bus.subscribe((event: RuntimeEvent) => {
         void (async () => {
           try {
             if (!instance) throw new Error("provider unavailable");
-            await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+            const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "allow" });
+            if (outcome === "unavailable") throw new Error("the ask is no longer open");
             pushMessage({
               role: "bot",
               kind: "activity",
@@ -746,17 +795,41 @@ function finalizeDelegationWatch(
   return true;
 }
 
+// A bot going in circles — the same call with the same arguments, over and
+// over in one turn — gets a chip at 5, 10 and 20 repeats. Observe and say
+// so; the human has Stop. Keyed on tool + arguments, so a bare tool name
+// (Claude's item.started carries only that) is never counted: five "Bash"
+// may be five different commands. Arguments come from ACP item titles and
+// from every permission ask's summary (the command being approved).
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed" || event.type === "session.exited") return void repeats.settle(event.threadId);
+  let key: string | null = null;
+  if (event.type === "item.started" && event.itemType === "tool") {
+    // a title with more than a bare identifier is a call with arguments
+    // (ACP: "echo hi", "Read src/x.ts"); a bare "Bash" is not countable
+    const title = event.title ?? "";
+    if (/\s|\//.test(title.trim())) key = callKey("tool", title);
+  } else if (event.type === "request.opened" && event.requestType === "permission") key = callKey(event.tool, event.summary);
+  if (!key) return;
+  const { threshold } = repeats.record(event.threadId, key);
+  if (!threshold) return;
+  const [tool, ...rest] = key.split(":");
+  const args = rest.join(":");
+  store.appendMessage(event.threadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: `Same call repeated ${threshold}× — ${tool}: ${args.slice(0, 80)}${args.length > 80 ? "…" : ""} — it may be stuck`, ok: false },
+  });
+});
+
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
 // fold (which has its own switch/case noise) and its approval + startTurn
 // calls never have to share locals with the fold's state machine.
-bus.subscribe((event: RuntimeEvent) => {
-  if (event.type !== "turn.completed") return;
-  // A turn that failed or was interrupted drops its queue rather than
-  // firing it later: the user who hit Stop does not expect the delegations
-  // that turn queued to run anyway, minutes later, on an unrelated turn.
-  if (!event.ok) return void discardDelegations(commsBus, event.threadId);
-  drainDelegations(commsBus, approvalBus, event.threadId, (toBotId, text, commsDepth, sourceThreadId, channel) => {
+/** How a drained delegation becomes a real turn on the target. Shared by
+ * the settle-time drain and the boot-time drain of what a previous process
+ * left queued. */
+const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
@@ -795,8 +868,17 @@ bus.subscribe((event: RuntimeEvent) => {
     }).catch((err) => {
       reportStartFailure(err);
     });
-  });
+};
+
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed") return;
+  // A turn that failed or was interrupted drops its queue rather than
+  // firing it later: the user who hit Stop does not expect the delegations
+  // that turn queued to run anyway, minutes later, on an unrelated turn.
+  if (!event.ok) return void discardDelegations(commsBus, event.threadId);
+  drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
 });
+
 
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
@@ -1322,6 +1404,17 @@ const approvalBus: ApprovalBus = { store, broadcast };
 {
   const stale = dismissStalePeerCards(approvalBus);
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
+}
+
+// Handoffs a previous process queued but never ran: the source turn is
+// dead (no turn survives a restart) so they would otherwise wait forever.
+// Run them now, through the same drain — target and approvePeerComms are
+// re-checked there as always; a source bot that no longer exists is skipped.
+_loadPending();
+{
+  const leftover = pendingThreads();
+  if (leftover.length) console.log(`delegations: ${leftover.length} thread(s) with queued handoffs from a previous run — draining`);
+  for (const threadId of leftover) drainDelegations(commsBus, approvalBus, threadId, runDelegatedTurn);
 }
 
 async function runGroupMemberTurn(
@@ -2268,6 +2361,13 @@ const server = createServer(async (req, res) => {
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group });
     }
+    m = path.match(/^\/api\/groups\/([\w-]+)\/read$/);
+    if (m && method === "POST") {
+      const group = store.patchGroup(m[1], { unread: false });
+      if (!group) return json(res, 404, { error: "no such room" });
+      broadcast({ kind: "group", group });
+      return json(res, 200, { group });
+    }
     m = path.match(/^\/api\/groups\/([\w-]+)$/);
     if (m && method === "DELETE") {
       const group = store.group(m[1]);
@@ -2319,6 +2419,37 @@ const server = createServer(async (req, res) => {
           activeLeafId: store.activeLeaf(bot.threadId),
         },
       });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/read$/);
+    if (m && method === "POST") {
+      const bot = store.patchBot(m[1], { unread: false });
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const visible = wireBot(bot);
+      broadcast({ kind: "bot", bot: visible });
+      return json(res, 200, { bot: visible });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/always-allow$/);
+    if (m && method === "POST") {
+      const body = await readBody(req);
+      const allowKey = typeof body.allowKey === "string" ? body.allowKey : "";
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (!allowKey) return json(res, 400, { error: "allowKey required" });
+      const pending = store.messagesFor(bot.threadId).some((message) =>
+        message.card?.requestId &&
+        !message.card.answered &&
+        message.card.dismissed !== true &&
+        message.card.allowKey === allowKey
+      );
+      if (!pending) {
+        return json(res, 409, { error: "that grant is not on a pending approval for this bot" });
+      }
+      const updated = store.patchBot(bot.id, {
+        alwaysAllow: [...new Set([...(bot.alwaysAllow ?? []), allowKey])].slice(0, 200),
+      })!;
+      const visible = wireBot(updated);
+      broadcast({ kind: "bot", bot: visible });
+      return json(res, 200, { bot: visible });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -2520,19 +2651,16 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      const behavior = requestBehavior(body.behavior);
+      if (!behavior) return json(res, 400, { error: "behavior must be allow, deny, or answer" });
       // peer-approval intercept: harness-native cards carry a requestId
       // that lives in peer-approval's pending map. Resolve them here so
       // the provider adapter never sees a request it didn't raise.
-      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
-        return json(res, 200, { ok: true });
+      if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const instance = registry.get(bot.modelSelection.instanceId);
-      if (!instance) return json(res, 409, { error: "provider unavailable" });
-      await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
-      return json(res, 200, { ok: true });
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message);
+      return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
     // too: a member's turn runs on the room's thread, and the bot that
@@ -2541,20 +2669,17 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const threadId = m[1];
       const body = await readBody(req);
+      const behavior = requestBehavior(body.behavior);
+      if (!behavior) return json(res, 400, { error: "behavior must be allow, deny, or answer" });
       const group = store.groupByThread(threadId);
       const owner = group ? (group.busyBotId ? store.bot(group.busyBotId) : undefined) : store.botByThread(threadId);
       if (!owner) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
       // peer-approval intercept (see /api/bots/:id/respond above).
-      if (resolvePeerComms(approvalBus, String(body.requestId), body.behavior)) {
-        return json(res, 200, { ok: true });
+      if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
+        return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const instance = registry.get(owner.modelSelection.instanceId);
-      if (!instance) return json(res, 409, { error: "provider unavailable" });
-      await instance.adapter.respondToRequest(threadId, String(body.requestId), {
-        behavior: body.behavior,
-        message: body.message,
-      });
-      return json(res, 200, { ok: true });
+      const outcome = await answerRequest(threadId, owner.modelSelection.instanceId, String(body.requestId), behavior, body.message);
+      return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {

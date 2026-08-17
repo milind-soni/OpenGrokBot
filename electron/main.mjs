@@ -99,6 +99,14 @@ async function secureComposioConfig() {
 // parent's stdio leads nowhere and a failed boot is otherwise undiagnosable.
 const LOG_DIR = app.getPath("logs");
 let logStream = null;
+import {
+  companionPairing,
+  companionRevoke,
+  companionState,
+  startCompanion,
+  stopCompanion,
+} from "./companion.mjs";
+
 function slog(line) {
   try {
     if (!logStream) {
@@ -372,6 +380,18 @@ ipcMain.handle("speech:finish", () => {
   if (process.platform === "darwin") finishSpeech();
 });
 
+// ── companion sidecar ──────────────────────────────────────────────────
+// The renderer gets these five and nothing else: it can turn the companion
+// on and off, look at it, open or cancel a pairing window, and remove a
+// device. It cannot reach the sidecar's control port itself.
+ipcMain.handle("companion:state", () => companionState());
+ipcMain.handle("companion:start", () =>
+  startCompanion({ resourcesPath: process.resourcesPath, harnessPort: SERVER_PORT, log: slog }),
+);
+ipcMain.handle("companion:stop", () => stopCompanion());
+ipcMain.handle("companion:pairing", (_event, open) => companionPairing(Boolean(open)));
+ipcMain.handle("companion:revoke", (_event, deviceId) => companionRevoke(deviceId));
+
 ipcMain.handle("desktop:capabilities", async () =>
   desktopCapabilities({
     platform: process.platform,
@@ -465,6 +485,9 @@ app.on("before-quit", (e) => {
   try {
     serverProc?.kill();
   } catch {}
+  // the sidecar holds a socket that is reachable from off this machine —
+  // it should not outlive the window by even a moment
+  void stopCompanion();
   // a live dictation session runs its own helper child that holds the mic —
   // stop it here so quitting never orphans a recording process
   stopSpeech();

@@ -3,6 +3,7 @@ node_modules
 dist
 dist-electron
 dist-native
+dist-server
 *.local
 .DS_Store
 *.tsbuildinfo
@@ -10,3 +11,4 @@ electron/resources/speech-helper
 electron/resources/OpenMausBot Speech.app
 release
 .omb-scratch
+.claude/worktrees/

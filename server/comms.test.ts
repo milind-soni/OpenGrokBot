@@ -141,16 +141,17 @@ describe("comms e2e (fake ACP fleet)", () => {
       }),
     );
 
+    const env: NodeJS.ProcessEnv = {
+      HOME: home,
+      USERPROFILE: home,
+      OMB_PORT: String(PORT),
+    };
+    if (process.env.PATH) env.PATH = process.env.PATH;
+    // Without SystemRoot, winsock fails to initialize in the child.
+    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
-      env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        // without SystemRoot, winsock fails to initialize in the child
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-        HOME: home,
-        USERPROFILE: home,
-        OMB_PORT: String(PORT),
-      },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr!.on("data", (c) => (stderr += c));

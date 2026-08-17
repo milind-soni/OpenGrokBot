@@ -14,7 +14,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
-import { CursorAvatar, SHAPE, type CursorAvatarHandle, type CursorShape } from "./CursorAvatar";
+import {
+  CursorAvatar,
+  DEFAULT_SILHOUETTE,
+  type CursorAvatarHandle,
+  type CursorSilhouette,
+} from "./CursorAvatar";
 
 /**
  * The pack's baked-in silhouette was exported with the body fill hardcoded
@@ -22,9 +27,9 @@ import { CursorAvatar, SHAPE, type CursorAvatarHandle, type CursorShape } from "
  * substitutes, which painted every bot the same. Restore the slot so the
  * per-bot gradient actually lands on the body.
  */
-const GRADIENT_SHAPE: CursorShape = {
-  ...SHAPE,
-  body: SHAPE.body.replace(/fill="#000000"/g, 'fill="{{GRADIENT}}"'),
+const GRADIENT_SILHOUETTE: CursorSilhouette = {
+  ...DEFAULT_SILHOUETTE,
+  body: DEFAULT_SILHOUETTE.body.replace(/fill="#000000"/g, 'fill="{{GRADIENT}}"'),
 };
 
 /**
@@ -48,9 +53,12 @@ const POINTER_GAZE = { forward: 1, authored: 0.25 };
  * What a one-shot motion does while it plays: CursorAvatar animates the body
  * per state, so borrowing the state for a beat moves body and face together.
  */
-const MOTION_FACE: Partial<
-  Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
-> = {
+interface MotionFaces
+  extends Partial<
+    Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+  > {}
+
+const MOTION_FACE: MotionFaces = {
   arrive: { state: "spawning", spin: 900 },
   switch: { state: "waking", spin: 620 },
   customize: { state: "proud", blink: true },
@@ -193,7 +201,7 @@ function MausAvatarComponent(
         state={motionState ?? state}
         expression={expression}
         size={size}
-        shape={GRADIENT_SHAPE}
+        silhouette={GRADIENT_SILHOUETTE}
         gradient={gradientFor(color)}
         title={label ?? null}
         lookAround={forward ? 0 : 1}

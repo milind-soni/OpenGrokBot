@@ -382,7 +382,7 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain("cua_driver-0.20.0-py3-none-manylinux_2_31_aarch64.whl");
     expect(dockerfile).not.toContain("/tmp/cua-driver.whl");
     expect(dockerfile).toContain("sha256sum -c -");
-    expect(dockerfile).toContain(`install -D -m 0755 \"$driver_bin\" ${CUA_EXECUTABLE}`);
+    expect(dockerfile).toContain(`install -D -m 0755 "$driver_bin" ${CUA_EXECUTABLE}`);
     expect(dockerfile).toContain(`cua-driver ${CUA_DRIVER_VERSION}`);
     expect(dockerfile).toContain(`serve --socket ${CUA_SOCKET} --permission-mode standard`);
     expect(dockerfile).toContain("CUA_DRIVER_RS_TELEMETRY_ENABLED=0");
@@ -390,7 +390,7 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain("migrate_profile google-chrome");
     expect(dockerfile).toContain("migrate_profile chromium");
     expect(dockerfile).toContain("SingletonLock");
-    expect(dockerfile).toContain(`${IMAGE_LAYER_LABEL}=\"${IMAGE_LAYER_VERSION}\"`);
+    expect(dockerfile).toContain(`${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"`);
     expect(dockerfile).toContain("did not become ready within 45 seconds");
     expect(dockerfile).not.toContain("while ! DISPLAY=:1 xset q");
   });

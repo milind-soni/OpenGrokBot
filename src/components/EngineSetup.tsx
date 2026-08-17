@@ -10,7 +10,7 @@
 // Installing is only half the job: most CLIs then need an interactive
 // sign-in, which is why the terminal is the destination rather than a
 // background `npm install` the user never sees.
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy, ExternalLink, TerminalSquare } from "lucide-react";
 import type { EngineInstall, InstanceInfo } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -40,7 +40,17 @@ export function needsSignIn(instance: InstanceInfo | undefined): boolean {
   return instance?.snapshot.state === "available" && instance.snapshot.authenticated === false;
 }
 
-function CommandRow({ command }: { command: string }) {
+function CommandRow({
+  command,
+  trailing,
+  iconCopy = false,
+}: {
+  command: string;
+  trailing?: ReactNode;
+  /** Copy as an icon-only button — for rows where a text label would push
+   * the trailing content off the edge. */
+  iconCopy?: boolean;
+}) {
   const [done, setDone] = useState<"copied" | "opened" | null>(null);
   const canOpen = Boolean(window.ogb?.openInstallTerminal);
 
@@ -64,28 +74,34 @@ function CommandRow({ command }: { command: string }) {
 
   return (
     <div className="mt-2 flex flex-col gap-1.5">
-      <code className="block overflow-x-auto rounded-lg bg-app px-2.5 py-2 font-mono text-[12px] leading-relaxed text-ink-secondary">
+      <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-app px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-ink [scrollbar-width:none]">
         {command}
       </code>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1">
         {canOpen && (
           <button
             onClick={openTerminal}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[12.5px] font-medium text-white"
+            title="Copies the command and opens a terminal"
+            className="flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-2 text-[11.5px] font-medium text-white hover:bg-accent-border"
           >
-            <TerminalSquare size={13} /> Copy &amp; Open Terminal
+            <TerminalSquare size={12} /> Open Terminal
           </button>
         )}
         <button
           onClick={copy}
+          title={iconCopy ? (done ? "Copied" : "Copy command") : undefined}
           className={cn(
-            "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px]",
-            canOpen ? "text-ink-secondary hover:bg-raised hover:text-ink" : "bg-raised text-ink hover:bg-raised-hover",
+            "flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md text-[11.5px]",
+            iconCopy && canOpen ? "w-6 justify-center" : "px-2",
+            canOpen
+              ? "text-ink-secondary hover:bg-raised hover:text-ink"
+              : "bg-raised font-medium text-ink hover:bg-raised-hover",
           )}
         >
-          {done ? <Check size={13} /> : <Copy size={13} />}
-          {done === "copied" ? "Copied" : done === "opened" ? "Copied — paste" : "Copy"}
+          {done ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+          {(!iconCopy || !canOpen) && (done ? "Copied" : "Copy")}
         </button>
+        {trailing && <span className="ml-auto flex items-center">{trailing}</span>}
       </div>
     </div>
   );
@@ -94,9 +110,14 @@ function CommandRow({ command }: { command: string }) {
 export function EngineSetup({
   instance,
   className,
+  compact = false,
 }: {
   instance: InstanceInfo;
   className?: string;
+  /** Tight variant for the model picker: no explanatory sentence (the
+   * picker header already states the problem), docs link inline with the
+   * actions, and the sign-in / Node caveats collapsed into one small line. */
+  compact?: boolean;
 }) {
   const install = instance.install;
   const command = installCommandFor(install);
@@ -111,6 +132,44 @@ export function EngineSetup({
     return (
       <div className={cn("text-[12.5px] leading-relaxed text-ink-secondary", className)}>
         {instance.snapshot.reason ?? "Not available on this machine."}
+      </div>
+    );
+  }
+
+  if (compact) {
+    const guide = install.docsUrl ? (
+      <a
+        href={install.docsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center gap-1 whitespace-nowrap pl-1 pr-2 text-[11.5px] text-ink-secondary hover:text-ink"
+      >
+        Setup guide <ExternalLink size={11} />
+      </a>
+    ) : undefined;
+    const hints: string[] = [];
+    if (!signInOnly && signIn) hints.push(`then \`${signIn}\` to sign in`);
+    if (!signInOnly && install.needsNode) hints.push("needs Node.js");
+    const shown = signInOnly ? signIn : command;
+    return (
+      <div className={cn("text-[12px] leading-relaxed text-ink-secondary", className)}>
+        {shown ? (
+          <CommandRow command={shown} trailing={guide} iconCopy />
+        ) : (
+          <div className="mt-2 flex items-center justify-between gap-2 pl-2">
+            <span className="text-[11.5px]">
+              {signInOnly
+                ? "Sign in through the provider, then reopen this menu."
+                : "No one-line installer for this platform."}
+            </span>
+            {guide}
+          </div>
+        )}
+        {hints.length > 0 && (
+          <p className="mt-1.5 px-2 text-[11px] text-ink-secondary/70">
+            {hints.join(" · ").replace(/^./, (c) => c.toUpperCase())}
+          </p>
+        )}
       </div>
     );
   }

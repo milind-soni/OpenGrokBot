@@ -23,20 +23,13 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { augmentedPath } from "../env-path.ts";
 import { appendNative } from "./native.ts";
 
-const DRIVER_KIND = "codex";
+export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
-// catalog ported from upstream packages/contracts/src/model.ts
-const MODELS = {
-  default: "gpt-5.6-sol",
-  options: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { id: "gpt-5.4", label: "GPT-5.4" },
-  ],
-};
+const DRIVER_KIND = "codex";
 
 export interface CodexConfig {
   cli: string;
@@ -68,12 +61,23 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     docsUrl: "https://github.com/openai/codex",
     signInCommand: "codex",
   },
-  models: MODELS,
+  models: STATIC_CODEX_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
   async create(input: DriverCreateInput<CodexConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
+    const catalogEnv: Record<string, string | undefined> = { ...process.env, ...input.environment };
+    let models = STATIC_CODEX_MODELS;
+    const refreshModels = async () => {
+      try {
+        const resolved = await readCodexModelCatalog(catalogEnv);
+        if (resolved.options.length) models = resolved;
+      } catch {
+        // Keep the last usable catalog when a local provider is down.
+      }
+    };
+    await refreshModels();
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
@@ -375,9 +379,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             }
           }
           if (!codexThreadId) {
+            const selection = decodeCodexSelection(turn.model);
             const started = await request("thread/start", {
               cwd: turn.cwd ?? homedir(),
-              model: turn.model || null,
+              model: selection.model,
+              ...(selection.modelProvider ? { modelProvider: selection.modelProvider } : {}),
               sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
               approvalPolicy: config.fullAuto ? "never" : "on-request",
               ephemeral: false,
@@ -426,7 +432,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: MODELS,
+      get models() {
+        return models;
+      },
+      refreshModels,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,

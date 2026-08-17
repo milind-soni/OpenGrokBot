@@ -49,10 +49,15 @@ export async function fetchOpenCodeGoModels(fetcher: typeof fetch = fetch): Prom
         .map((record) => record && typeof record === "object" ? (record as { id?: unknown }).id : undefined)
         .filter((id): id is string => typeof id === "string" && /^[a-z0-9][a-z0-9._-]*$/i.test(id));
       if (!ids.length) throw new Error("catalog contained no valid models");
-      const catalog = {
-        default: `opencode-go/${ids[0]}`,
-        options: ids.map((id) => ({ id: `opencode-go/${id}`, label: labelForModel(id) })),
-      } satisfies ModelCatalog;
+      const options = STATIC_MODELS.options.map((option) => ({ ...option }));
+      const seen = new Set(options.map((option) => option.id));
+      for (const id of ids) {
+        const full = `opencode-go/${id}`;
+        if (seen.has(full)) continue;
+        seen.add(full);
+        options.push({ id: full, label: labelForModel(id), custom: true });
+      }
+      const catalog = { default: STATIC_MODELS.default, options } satisfies ModelCatalog;
       lastSuccessfulCatalog = catalog;
       return catalog;
     } finally {

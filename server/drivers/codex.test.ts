@@ -68,6 +68,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       threadId: "t-happy",
       text: "list files",
       system: "You are Testy.",
+      model: "gpt-5.6-sol",
     });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -100,6 +101,25 @@ describe("CodexDriver turns (fake app-server)", () => {
     // persona rides in front of the prompt text — codex has no system slot
     const turnStart = seen.calls.at(-1);
     expect(turnStart.params.input[0].text).toBe("You are Testy.\n\nlist files");
+    const threadStart = seen.calls.find((c: { method: string }) => c.method === "thread/start");
+    expect(threadStart.params).toMatchObject({ model: "gpt-5.6-sol", modelProvider: "openai" });
+  });
+
+  it("sends the local provider when the picker id is custom-encoded", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-local",
+      text: "hi",
+      model: "omlx::Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const threadStart = JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === "thread/start");
+    expect(threadStart.params).toMatchObject({
+      model: "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
+      modelProvider: "omlx",
+    });
   });
 
   it("streams agentMessage deltas without re-emitting the settled text", async () => {

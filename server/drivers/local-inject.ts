@@ -75,6 +75,33 @@ export function hostApiKey(host: LocalHost, env: Record<string, string | undefin
   return "local";
 }
 
+const CODEX_RESERVED_PROVIDERS = new Set(["openai", "ollama", "lmstudio"]);
+
+/**
+ * Configure the custom local providers on the Codex app-server without
+ * rewriting the user's config.toml. Provider secrets ride in the child
+ * environment; argv only contains the corresponding environment key name.
+ */
+export function codexLocalProviderArgs(
+  env: Record<string, string | undefined>,
+  modelId: string | null | undefined,
+): string[] {
+  const inject = decodeInjectId(modelId);
+  if (!inject || CODEX_RESERVED_PROVIDERS.has(inject.host)) return [];
+  const host = localHost(inject.host);
+  if (!host) return [];
+  const envKey = `OPENMAUSBOT_LOCAL_${host.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
+  env[envKey] = hostApiKey(host, env);
+  return [
+    "-c",
+    `model_providers.${host.id}.name=${JSON.stringify(host.label)}`,
+    "-c",
+    `model_providers.${host.id}.base_url=${JSON.stringify(host.baseUrl)}`,
+    "-c",
+    `model_providers.${host.id}.env_key=${JSON.stringify(envKey)}`,
+  ];
+}
+
 function readUnslothKey(env: Record<string, string | undefined>): string | null {
   const home = env.HOME || env.USERPROFILE || homedir();
   try {

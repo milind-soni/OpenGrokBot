@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ensureGrokInjectSlug } from "./acp/grok.ts";
 import {
   applyClaudeInject,
+  codexLocalProviderArgs,
   decodeInjectId,
   encodeInjectId,
   mergeLocalInject,
@@ -60,6 +61,20 @@ describe("applyClaudeInject", () => {
   });
 });
 
+describe("codexLocalProviderArgs", () => {
+  it("configures custom providers through env keys without putting credentials on argv", () => {
+    const env: Record<string, string | undefined> = { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" };
+    const args = codexLocalProviderArgs(env, "unsloth::local-model");
+    const rendered = JSON.stringify(args);
+    expect(rendered).toContain("model_providers.unsloth.base_url");
+    expect(rendered).toContain("OPENMAUSBOT_LOCAL_UNSLOTH_API_KEY");
+    expect(rendered).not.toContain("unsloth-secret");
+    expect(rendered).not.toContain("model_providers.ollama.base_url");
+    expect(rendered).not.toContain("model_providers.lmstudio.base_url");
+    expect(env.OPENMAUSBOT_LOCAL_UNSLOTH_API_KEY).toBe("unsloth-secret");
+  });
+});
+
 describe("ensureGrokInjectSlug", () => {
   it("writes a config block the first time and reuses it after", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-grok-inject-"));
@@ -72,5 +87,17 @@ describe("ensureGrokInjectSlug", () => {
     const text = readFileSync(join(home, ".grok", "config.toml"), "utf8");
     expect(text).toContain(`model = "GLM-5.2-fp8"`);
     expect(text).toContain(`base_url = "http://127.0.0.1:8080/v1"`);
+  });
+
+  it("writes the resolved Unsloth credential instead of a placeholder", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-grok-unsloth-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    ensureGrokInjectSlug("unsloth::local-model", {
+      HOME: home,
+      UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret",
+    });
+    const text = readFileSync(join(home, ".grok", "config.toml"), "utf8");
+    expect(text).toContain(`api_key = "unsloth-secret"`);
   });
 });

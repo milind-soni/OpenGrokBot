@@ -32,12 +32,14 @@ describe("CodexDriver turns (fake app-server)", () => {
   let recorder: EventRecorder;
   let scratch: string;
 
-  const create = async (opts: { mode?: string; fullAuto?: boolean } = {}) => {
+  const create = async (
+    opts: { mode?: string; fullAuto?: boolean; environment?: Record<string, string> } = {},
+  ) => {
     if (opts.mode) process.env.FAKE_CODEX_MODE = opts.mode;
     instance = await CodexDriver.create({
       instanceId: "codex-test",
       displayName: "Codex Test",
-      environment: {},
+      environment: opts.environment ?? {},
       enabled: true,
       config: { cli: FAKE_CLI, fullAuto: opts.fullAuto ?? false },
     });
@@ -106,20 +108,24 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("sends the local provider when the picker id is custom-encoded", async () => {
-    await create();
+    await create({ environment: { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" } });
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-local",
       text: "hi",
-      model: "omlx::Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
+      model: "unsloth::Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
     });
     await recorder.until((e) => e.type === "turn.completed");
     const threadStart = JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === "thread/start");
     expect(threadStart.params).toMatchObject({
       model: "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
-      modelProvider: "omlx",
+      modelProvider: "unsloth",
     });
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("model_providers.unsloth.base_url=\"http://127.0.0.1:8888/v1\"");
+    expect(JSON.stringify(seen.argv)).not.toContain("unsloth-secret");
+    expect(seen.env.OPENMAUSBOT_LOCAL_UNSLOTH_API_KEY).toBe("unsloth-secret");
   });
 
   it("streams agentMessage deltas without re-emitting the settled text", async () => {

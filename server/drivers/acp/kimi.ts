@@ -11,7 +11,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ModelCatalog } from "../../contracts.ts";
-import { injectedApiModel, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 function credentialsPath(env: Record<string, string | undefined>) {
@@ -81,7 +80,7 @@ const support: AcpSupport = {
   // Aliases from the CLI's own catalog (~/.kimi-code/config.toml
   // [models."kimi-code/…"] — `kimi provider list` reports the same four).
   models: STATIC_KIMI_MODELS,
-  resolveModels: (env) => mergeLocalInject(readKimiModelCatalog(env), env),
+  resolveModels: (env) => readKimiModelCatalog(env),
   defaultCli: "kimi",
   nativeSource: "kimi.acp",
   loginNote: "Kimi Code CLI is not signed in — run `kimi login` in a terminal",
@@ -102,7 +101,7 @@ const support: AcpSupport = {
   // -m is a global commander option and must precede the `acp` subcommand
   // (verified against 0.29.1).
   spawnArgs: (_config, turn) => {
-    const model = injectedApiModel(turn.model) ?? turn.model;
+    const model = turn.model;
     return [...(model ? ["-m", model] : []), "acp"];
   },
 

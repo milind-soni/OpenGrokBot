@@ -66,8 +66,11 @@ export function claudeSignedIn(
  * Keeping the probe and turn environments identical prevents setup from
  * claiming an API-key login that the turn itself would deliberately remove.
  */
-function claudeEnvironment(model?: string | null): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
+function claudeEnvironment(
+  model?: string | null,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...source, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   const applied = applyClaudeInject(env, model);
@@ -362,7 +365,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       ];
       if (sessionId) args.push("--resume", sessionId);
       else args.push("--session-id", newSessionId!);
-      const injected = applyClaudeInject({}, turn.model);
+      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
+      const injected = applyClaudeInject({ ...turnEnvironment }, turn.model);
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.system) args.push("--append-system-prompt", turn.system);
@@ -459,7 +463,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--allowedTools", allowed.join(","));
       }
 
-      const env = claudeEnvironment(turn.model);
+      const env = claudeEnvironment(turn.model, turnEnvironment);
 
       const child = spawnCli(config.cli, args, {
         cwd: turn.cwd ?? homedir(),
@@ -607,7 +611,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
-      const env = claudeEnvironment();
+      const env = claudeEnvironment(undefined, { ...process.env, ...input.environment });
       const version = await new Promise<string | null>((resolve) => {
         execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),

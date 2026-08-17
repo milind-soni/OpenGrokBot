@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ModelCatalog } from "../../contracts.ts";
-import { decodeInjectId, localHost, mergeLocalInject } from "../local-inject.ts";
+import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 export const STATIC_GROK_MODELS: ModelCatalog = {
@@ -172,7 +172,7 @@ export function ensureGrokInjectSlug(
     `base_url = ${quoteToml(host.baseUrl)}`,
     `name = ${quoteToml(`${inject.model} (${host.label})`)}`,
     `api_backend = "chat_completions"`,
-    `api_key = ${quoteToml(host.apiKey ?? "local")}`,
+    `api_key = ${quoteToml(hostApiKey(host, env))}`,
     "",
   ].join("\n");
   const next = text && !text.endsWith("\n") ? `${text}\n\n${block}` : `${text}${text ? "\n" : ""}${block}`;

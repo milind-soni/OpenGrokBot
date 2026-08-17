@@ -24,6 +24,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
+import { codexLocalProviderArgs } from "./local-inject.ts";
 import { augmentedPath } from "../env-path.ts";
 import { appendNative } from "./native.ts";
 
@@ -102,12 +103,17 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
 
-      const env: Record<string, string | undefined> = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        ...input.environment,
+        PATH: augmentedPath(),
+        NPM_CONFIG_LOGLEVEL: "error",
+      };
       // the CLI owns its own ChatGPT login; a leaked API key silently flips
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const child = spawnCli(config.cli, ["app-server"], {
+      const child = spawnCli(config.cli, ["app-server", ...codexLocalProviderArgs(env, turn.model)], {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],

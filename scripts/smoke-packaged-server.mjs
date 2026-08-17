@@ -39,10 +39,20 @@ let output = "";
 child.stdout.on("data", (chunk) => (output += chunk));
 child.stderr.on("data", (chunk) => (output += chunk));
 
+// Best-effort by design. Windows holds file handles open a little longer than
+// the process that owned them, so removing the scratch dir immediately after
+// the kill raises EPERM; Linux runners can raise EACCES the same way. Scratch
+// cleanup must never decide whether the build is good — it failed a green run
+// on Windows once already, and see f66d30f for the same lesson on Linux.
 const cleanup = () => {
   child.kill("SIGKILL");
-  rmSync(staging, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
+  for (const dir of [staging, home]) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      /* the OS will reap it; the assertion below is what matters */
+    }
+  }
 };
 
 const deadline = Date.now() + 45_000;

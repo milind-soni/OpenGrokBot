@@ -50,6 +50,13 @@ describe("augmentedPath", () => {
     expect(v24).toBeLessThan(v9);
   });
 
+  posixIt("includes a user npm prefix at ~/.npm-global/bin", () => {
+    const npmGlobal = join(homedir(), ".npm-global", "bin");
+    mkdirSync(npmGlobal, { recursive: true });
+    resetPathCacheForTests();
+    expect(augmentedPath().split(delimiter)).toContain(npmGlobal);
+  });
+
   posixIt("makes a CLI in a known install dir spawnable despite a bare PATH", async () => {
     const bin = join(homedir(), ".local", "bin");
     mkdirSync(bin, { recursive: true });

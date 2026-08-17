@@ -31,6 +31,7 @@ import {
 import { EngineSetup } from "./EngineSetup";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
+import { showWorkingDots } from "@/lib/turn-tail";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
@@ -830,7 +831,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           {streaming ? (
             <StreamingBubble text={streaming} />
           ) : (
-            bot.busy && (
+            showWorkingDots(bot.busy, streaming, messages.at(-1)) && (
               <div className="flex justify-start">
                 <div className="flex items-center gap-2.5 rounded-2xl bg-raised px-4 py-3">
                   <span className="flex items-center gap-1.5">

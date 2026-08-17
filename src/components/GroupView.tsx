@@ -22,6 +22,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
 import { cn } from "@/lib/cn";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
+import { showWorkingDots } from "@/lib/turn-tail";
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -367,7 +368,7 @@ export function GroupView({ group }: { group: Group }) {
             </div>
           )}
           <Transcript group={group} members={members} />
-          {speaker && !streaming && (
+          {speaker && showWorkingDots(true, streaming, group.messages.at(-1), speaker.id) && (
             <>
               <ClusterLabel bot={speaker} name={speaker.name} color={speaker.color} />
               <div className="flex justify-start">

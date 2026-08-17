@@ -28,7 +28,7 @@
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
-    "test": "vitest run && pnpm test:updater",
+    "test": "vitest run && pnpm test:updater && pnpm test:packaged-server",
     "test:updater": "node --test electron/updater-coordinator.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",
@@ -36,7 +36,7 @@
     "test:cua-container": "node scripts/smoke-cua-container.mjs",
     "check:electron": "node --check electron/main.mjs && node --check electron/terminal-launch.mjs && node --check electron/preload.cjs && node --check electron/capabilities.cjs && node --check electron/cua-connection.cjs && node --check electron/cua.mjs && node --check electron/speech.mjs",
     "preview": "vite preview",
-    "build:server": "tsc -p tsconfig.server.build.json",
+    "build:server": "tsc -p tsconfig.server.build.json && node scripts/bundle-server.mjs",
     "build:speech": "node electron/build-speech-helper.mjs",
     "build:cua": "node scripts/prepare-cua.mjs",
     "build:updater": "node scripts/bundle-updater.mjs",
@@ -45,7 +45,8 @@
     "package:win": "pnpm package:prepare && electron-builder --win --publish never",
     "package:linux": "pnpm package:prepare && electron-builder --linux --x64 --publish never",
     "package:linux:dir": "pnpm package:prepare && electron-builder --linux dir --x64 --publish never",
-    "package": "pnpm package:mac"
+    "package": "pnpm package:mac",
+    "test:packaged-server": "node scripts/smoke-packaged-server.mjs"
   },
   "dependencies": {
     "@trycua/cua-driver": "0.20.0",

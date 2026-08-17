@@ -699,6 +699,121 @@ describe("harness HTTP API", () => {
   });
 });
 
+// The memory routes expose plain files in the bot's workspace. The
+// traversal cases matter more than the happy path here: a topic name in a
+// URL is hostile-adjacent input, and the only defensible answer to "../"
+// in any coat of encoding is a rejection before the filesystem is touched.
+describe("bot memory API", () => {
+  /** raw-path GET: fetch() normalizes "../" segments away client-side, and
+   * the traversal tests need the wire to carry exactly the bytes shown */
+  const rawGet = (rawPath: string): Promise<{ status: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const req = request({ hostname: "127.0.0.1", port: PORT, path: rawPath }, (res) => {
+        let text = "";
+        res.on("data", (c) => (text += c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  const workspaceOf = (botId: string) => join(home, ".openmausbot", "workspaces", botId);
+
+  it("reads empty memory for a fresh bot and 404s a bot that does not exist", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const fresh = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(fresh.status).toBe(200);
+      expect(fresh.body).toEqual({ text: "", truncated: false, topics: [] });
+      expect((await api("GET", "/api/bots/does-not-exist/memory")).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("round-trips a MEMORY.md edit and rejects non-string or oversized text", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const saved = await api("PUT", `/api/bots/${bot.id}/memory`, { text: "# Memory\n- prefers pnpm\n" });
+      expect(saved.status).toBe(200);
+      expect(saved.body.truncated).toBe(false);
+      const read = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(read.body.text).toBe("# Memory\n- prefers pnpm\n");
+      // the write lands in the same file the bot's own tools read
+      expect(readFileSync(join(workspaceOf(bot.id), "MEMORY.md"), "utf8")).toContain("prefers pnpm");
+
+      expect((await api("PUT", `/api/bots/${bot.id}/memory`, { text: 7 })).status).toBe(400);
+      expect((await api("PUT", `/api/bots/${bot.id}/memory`, {})).status).toBe(400);
+      const big = await api("PUT", `/api/bots/${bot.id}/memory`, { text: "x".repeat(256 * 1024 + 1) });
+      expect(big.status).toBe(400);
+      expect(big.body.error).toContain("256KB");
+      // a rejected write must leave the file exactly as it was
+      expect((await api("GET", `/api/bots/${bot.id}/memory`)).body.text).toBe("# Memory\n- prefers pnpm\n");
+      expect((await api("PUT", "/api/bots/does-not-exist/memory", { text: "x" })).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("lists memory/ topic files and serves one by (possibly encoded) name", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const memDir = join(workspaceOf(bot.id), "memory");
+      mkdirSync(memDir, { recursive: true });
+      writeFileSync(join(memDir, "deploys.md"), "- deploy = pnpm ship\n");
+      writeFileSync(join(memDir, "my notes.md"), "spaced");
+      writeFileSync(join(memDir, "notes.txt"), "not a topic");
+      const listed = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(listed.body.topics).toEqual([
+        { name: "deploys.md", bytes: 21 },
+        { name: "my notes.md", bytes: 6 },
+      ]);
+
+      const topic = await api("GET", `/api/bots/${bot.id}/memory/topics/deploys.md`);
+      expect(topic.status).toBe(200);
+      expect(topic.body).toEqual({ name: "deploys.md", text: "- deploy = pnpm ship\n" });
+      // a UI-sent name arrives percent-encoded and must resolve to the same file
+      expect((await api("GET", `/api/bots/${bot.id}/memory/topics/my%20notes.md`)).body.text).toBe("spaced");
+      expect((await api("GET", `/api/bots/${bot.id}/memory/topics/missing.md`)).status).toBe(404);
+      expect((await api("GET", "/api/bots/does-not-exist/memory/topics/deploys.md")).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("refuses every coat of path traversal without reading the target", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      // plant real files where a traversal would land, so a hole would show
+      // as leaked content and not depend on what happens to exist
+      mkdirSync(workspaceOf(bot.id), { recursive: true });
+      writeFileSync(join(workspaceOf(bot.id), "MEMORY.md"), "TOP-SECRET-MARKER memory");
+      writeFileSync(join(home, ".openmausbot", "secret.md"), "TOP-SECRET-MARKER sibling");
+
+      for (const name of [
+        "..%2F..%2Fsecret.md", // encoded slashes
+        "%2e%2e%2fsecret.md", // dots encoded too
+        "..%2FMEMORY.md", // one level up, inside the workspace
+        "..%5C..%5Csecret.md", // encoded backslashes (Windows separators)
+        "secret%00.md", // null byte
+      ]) {
+        const res = await rawGet(`/api/bots/${bot.id}/memory/topics/${name}`);
+        expect(res.status, name).toBe(400);
+        expect(res.text, name).not.toContain("TOP-SECRET");
+      }
+      // a raw ../ segment is normalized away by URL parsing before routing —
+      // it can only miss the route, never reach a file
+      const raw = await rawGet(`/api/bots/${bot.id}/memory/topics/../../secret.md`);
+      expect(raw.status).toBe(404);
+      expect(raw.text).not.toContain("TOP-SECRET");
+      // malformed percent-encoding is a clean 400, not a crash
+      expect((await rawGet(`/api/bots/${bot.id}/memory/topics/%zz.md`)).status).toBe(400);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+});
+
 // Hydration is one call that returns every bot's entire transcript. Over
 // loopback that is right; over a phone network it is the whole problem.
 describe("message pages", () => {

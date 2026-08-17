@@ -8,7 +8,7 @@
 // memory/ holds topic files the bot reads on demand with its ordinary
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
@@ -69,6 +69,82 @@ export function loadMemory(botId: string): { text: string; truncated: boolean } 
     truncated = true;
   }
   return { text, truncated };
+}
+
+/** Cap on what the memory API will write to MEMORY.md. Far above the load
+ * budget on purpose — the file may hold more than a turn loads — but bounded,
+ * because this endpoint accepts pasted text and a runaway write should fail
+ * with an explanation, not fill the disk. */
+export const MEMORY_FILE_MAX_BYTES = 256 * 1024;
+
+/** MEMORY.md as an editor should see it: the whole file, not the load
+ * budget's cut — the user must be able to read and fix everything the bot
+ * wrote, including the part that no longer rides into the prompt. The
+ * `truncated` flag says whether loadMemory would cut it, so the UI can warn.
+ * Seed-only reads as empty for the same reason loadMemory treats it so:
+ * the seed is instructions, not memory. */
+export function readMemoryFile(botId: string) {
+  let raw: string;
+  try {
+    raw = readFileSync(join(workspaceDir(botId), "MEMORY.md"), "utf8");
+  } catch {
+    return { text: "", truncated: false };
+  }
+  if (!raw.trim() || raw === MEMORY_SEED) return { text: "", truncated: false };
+  const truncated =
+    raw.split("\n").length > MEMORY_MAX_LINES || Buffer.byteLength(raw, "utf8") > MEMORY_MAX_BYTES;
+  return { text: raw, truncated };
+}
+
+/** ensureWorkspace first: the user may edit memory before the bot has ever
+ * run a turn, and the write must not depend on that ordering. */
+export function writeMemoryFile(botId: string, text: string): void {
+  ensureWorkspace(botId);
+  writeFileSync(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+}
+
+// One path segment, starts with a word character, plain characters only,
+// ends in .md. No slashes or backslashes means no traversal; no leading dot
+// means no dotfiles and no bare "..". This is the single gate every topic
+// name passes — listing and reading agree on it by construction.
+const TOPIC_NAME = /^[\w][\w .-]{0,199}\.md$/;
+
+export function isMemoryTopicName(name: string): boolean {
+  return TOPIC_NAME.test(name);
+}
+
+/** The bot's memory/ topic files, name + size only — contents are fetched
+ * one at a time so listing stays cheap however large the notes grow. */
+export function listMemoryTopics(botId: string): Array<{ name: string; bytes: number }> {
+  let entries: string[];
+  try {
+    entries = readdirSync(join(workspaceDir(botId), "memory"));
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(isMemoryTopicName)
+    .flatMap((name) => {
+      try {
+        const stat = statSync(join(workspaceDir(botId), "memory", name));
+        return stat.isFile() ? [{ name, bytes: stat.size }] : [];
+      } catch {
+        return [];
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Read one topic file. The name gate runs here too, not only in the HTTP
+ * route — a future caller must not be able to turn this into a read of an
+ * arbitrary path. Null for anything invalid or unreadable. */
+export function readMemoryTopic(botId: string, name: string): string | null {
+  if (!isMemoryTopicName(name)) return null;
+  try {
+    return readFileSync(join(workspaceDir(botId), "memory", name), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /** The memory block appended to a bot's system prompt. Always present for

@@ -8,6 +8,8 @@ import { isIP } from "node:net";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { z } from "zod";
+
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import * as box from "./box.ts";
@@ -54,7 +56,16 @@ import {
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
-import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
+import {
+  ensureWorkspace,
+  listMemoryTopics,
+  isMemoryTopicName,
+  memorySystemPrompt,
+  readMemoryFile,
+  readMemoryTopic,
+  writeMemoryFile,
+  MEMORY_FILE_MAX_BYTES,
+} from "./workspace.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
@@ -2429,6 +2440,49 @@ const server = createServer(async (req, res) => {
         } catch {}
       }
       return json(res, 200, { ok: true });
+    }
+
+    // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
+    // The files already belong to the user (plain markdown in the bot's
+    // workspace); these routes only make them visible without a trip to
+    // the filesystem. Reads never create the workspace — a bot that has
+    // not run yet simply has nothing to show.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { ...readMemoryFile(m[1]), topics: listMemoryTopics(m[1]) });
+    }
+    if (m && method === "PUT") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req));
+      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
+      if (Buffer.byteLength(parsed.data.text, "utf8") > MEMORY_FILE_MAX_BYTES) {
+        return json(res, 400, {
+          error: `memory is capped at ${MEMORY_FILE_MAX_BYTES / 1024}KB — move longer notes into memory/<topic>.md files`,
+        });
+      }
+      writeMemoryFile(m[1], parsed.data.text);
+      // truncated echoes back so the editor can warn about the load budget
+      return json(res, 200, { ok: true, truncated: readMemoryFile(m[1]).truncated });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      // Decode before validating: a UI-sent name arrives percent-encoded
+      // ("my notes.md" → "my%20notes.md"), and an encoded traversal
+      // ("..%2F..") must be judged by what it decodes TO, not slip through
+      // as an opaque token. The name gate then rejects anything that is not
+      // a single plain-markdown path segment.
+      let name: string;
+      try {
+        name = decodeURIComponent(m[2]);
+      } catch {
+        return json(res, 400, { error: "invalid topic name" });
+      }
+      if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
+      const text = readMemoryTopic(m[1], name);
+      if (text === null) return json(res, 404, { error: "no such topic file" });
+      return json(res, 200, { name, text });
     }
 
     // onboarding/ask cards persist their answered/dismissed state

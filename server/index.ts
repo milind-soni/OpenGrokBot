@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import { groupTurnCwd } from "./room-cwd.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
@@ -1385,8 +1386,15 @@ async function runGroupMemberTurn(
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
   const worksInWorkspace = instance.driverKind !== "grok" && instance.driverKind !== "boxAgent";
-  const cwd = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
-  const roomSystem = cwd ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
+  const workspace = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
+  // The room's folder pins here — on the first turn that actually
+  // dispatches, not at PATCH time — so a folder set on a never-used room
+  // still takes effect, while a room that already worked somewhere never
+  // has its folder moved underneath it. Off-host members skip the folder
+  // but must not decide the pin: the room's desk is a property of the
+  // room, not of whichever member happened to speak first.
+  const cwd = groupTurnCwd(store.pinGroupCwd(group.id), workspace);
+  const roomSystem = workspace ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
@@ -2250,6 +2258,11 @@ const server = createServer(async (req, res) => {
         }
         if (!responder) return json(res, 400, { error: "invalid default responder" });
         patch.defaultResponder = responder;
+      }
+      if (body.cwd !== undefined) {
+        const checked = validateBotCwd(body.cwd);
+        if (!checked.ok) return json(res, 400, { error: checked.error });
+        patch.cwd = checked.cwd ?? undefined;
       }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });

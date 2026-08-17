@@ -82,6 +82,12 @@ export interface Group {
   /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
   dm?: boolean;
   busyBotId?: string | null;
+  /** the room's shared desk — where member turns run their shell tools,
+   * overriding each member's own folder; absent = each member's own */
+  cwd?: string;
+  /** folder the room's turns actually run in, pinned on the first turn;
+   * null = each member's own default; absent = not pinned yet */
+  pinnedCwd?: string | null;
   messages: Message[];
 }
 

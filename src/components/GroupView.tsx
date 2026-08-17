@@ -3,8 +3,9 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ChevronDown, Pin } from "lucide-react";
+import { ArrowDown, ChevronDown, Folder, FolderOpen, Pin } from "lucide-react";
 import {
+  api,
   useStore,
   useStreaming,
   formatTime,
@@ -20,7 +21,9 @@ import { Composer } from "./Composer";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
+import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
+import { shortPath } from "@/lib/short-path";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
 
@@ -189,6 +192,117 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
   );
 }
 
+/** The room's shared desk: where every member's shell and file tools run,
+ * overriding each bot's own folder for room turns. The room pins its own
+ * copy on its first turn (the server does the pinning — engines key their
+ * sessions to the folder a thread starts in, so a folder must not move
+ * under a room that already worked somewhere). The PATCH is made directly
+ * rather than through patchGroup: the server validates the path and a
+ * rejected folder must not stick in local state. */
+function RoomWorkingFolder({ group }: { group: Group }) {
+  const { capabilities } = useDesktopCapabilities();
+  const home = capabilities.host.homeDir;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const canPick = Boolean(window.ogb?.pickFolder);
+  const pinned = group.pinnedCwd; // undefined = not yet, null = each bot's own, string = folder
+  const pinnedElsewhere = pinned !== undefined && (pinned ?? undefined) !== group.cwd;
+
+  const save = async (cwd: string | null) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api(`/api/groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ cwd }) });
+      setDraft(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const pick = async () => {
+    const chosen = await window.ogb?.pickFolder?.(group.cwd);
+    if (chosen) void save(chosen);
+  };
+
+  return (
+    <div className="rounded-xl bg-card p-4">
+      <div className="text-[15px] font-medium text-ink">Working folder</div>
+      <div className="mt-0.5 text-[13px] text-ink-secondary">Where every bot in this room runs its shell and file tools.</div>
+      {canPick ? (
+        <div className="mt-3 flex items-center gap-2">
+          <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={group.cwd}>
+            {group.cwd ? shortPath(group.cwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
+          </div>
+          <button onClick={() => void pick()} disabled={saving} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
+            <FolderOpen size={14} /> Choose…
+          </button>
+          {group.cwd && (
+            <button onClick={() => void save(null)} disabled={saving} className="shrink-0 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50">
+              Clear
+            </button>
+          )}
+        </div>
+      ) : (
+        <form
+          className="mt-3 flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            // an emptied field clears the folder — the server wants null
+            void save((draft ?? group.cwd ?? "").trim() || null);
+          }}
+        >
+          <input
+            className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 font-mono text-[12.5px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
+            placeholder="Each bot's own folder — or an absolute path"
+            value={draft ?? group.cwd ?? ""}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button type="submit" disabled={saving || draft === null} className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
+            Save
+          </button>
+        </form>
+      )}
+      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+      {pinnedElsewhere && (
+        <div className="mt-2 text-[12px] text-ink-secondary">
+          New rooms start here. This room is pinned to {pinned ? <span className="font-mono">{shortPath(pinned, home)}</span> : "each bot's own folder"} — make a new room to use the new folder.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The folder this room's turns run in — the pinned folder once a turn ran,
+ * else the room folder a first turn would pin. Always present so the desk
+ * is settable before any folder exists; quiet (icon only) until then. */
+function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: () => void }) {
+  const folder = group.pinnedCwd === undefined ? group.cwd : (group.pinnedCwd ?? undefined);
+  if (!folder) {
+    return (
+      <button
+        onClick={onToggle}
+        className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+        title="Room working folder"
+      >
+        <Folder size={14} />
+      </button>
+    );
+  }
+  const name = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+  return (
+    <button
+      onClick={onToggle}
+      className="flex max-w-[180px] items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+      title={`Working folder: ${folder}`}
+    >
+      <Folder size={12} />
+      <span className="truncate font-mono">{name}</span>
+    </button>
+  );
+}
+
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
   const stream = useStreaming();
@@ -200,6 +314,7 @@ export function GroupView({ group }: { group: Group }) {
   const touchY = useRef(0);
   const [bulletinOpen, setBulletinOpen] = useState(false);
   const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
+  const [folderOpen, setFolderOpen] = useState(false);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -214,6 +329,8 @@ export function GroupView({ group }: { group: Group }) {
 
   useEffect(() => setBottomFollow(true), [group.id, setBottomFollow]);
   useEffect(() => setBulletinDraft(group.bulletin), [group.id, group.bulletin]);
+  // an open folder editor belongs to the room it was opened in
+  useEffect(() => setFolderOpen(false), [group.id]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
@@ -253,6 +370,7 @@ export function GroupView({ group }: { group: Group }) {
         <span className="text-[15px] font-semibold text-ink">{group.name}</span>
         <div className="flex items-center gap-1.5" style={noDrag}>
           <GroupCallButton group={group} members={members} />
+          {!group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
           {!group.dm && <DefaultResponderSelect group={group} members={members} />}
           {members.map((b) => (
             <span
@@ -311,6 +429,15 @@ export function GroupView({ group }: { group: Group }) {
           </button>
         )}
       </div>
+
+      {/* Working folder card — the chip in the header toggles it */}
+      {folderOpen && !group.dm && (
+        <div className="mx-auto w-full max-w-[900px] px-5">
+          <div className="mb-1">
+            <RoomWorkingFolder group={group} />
+          </div>
+        </div>
+      )}
 
       {/* Transcript */}
       <div

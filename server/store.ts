@@ -101,6 +101,14 @@ export interface GroupRecord {
   dm?: boolean;
   /** transient: the member currently running a turn (never persisted) */
   busyBotId?: string | null;
+  /** the room's shared desk: where member turns run their shell tools,
+   * overriding each member's own folder. The room pins its own copy on its
+   * first turn (pinnedCwd). Absent = each member's own default. */
+  cwd?: string;
+  /** the folder this room's turns actually run in, pinned on the first
+   * turn that dispatches. null = each member's own default; absent = not
+   * pinned yet. See pinGroupCwd for why it never moves. */
+  pinnedCwd?: string | null;
 }
 
 /** One task = one conversation with its own context.
@@ -482,7 +490,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     Object.assign(group, patch);
@@ -801,6 +809,25 @@ export class Store {
       this.emit({ type: "bot", botId });
     }
     return task.cwd;
+  }
+
+  /** The folder a room's member turns run in. Pins on the first turn that
+   * dispatches, from the room's `cwd` at that moment. Pinned, not read
+   * live, for the same reason tasks pin (see pinTaskCwd): engines key
+   * their sessions and files to the folder a thread starts in, and a room
+   * lives on ONE thread forever — so changing the room's folder applies to
+   * future rooms, never under a room that already started working
+   * somewhere. Returns the pinned value: a path, or null = each member's
+   * own default. */
+  pinGroupCwd(groupId: string): string | null {
+    const group = this.group(groupId);
+    if (!group) return null;
+    if (group.pinnedCwd === undefined) {
+      group.pinnedCwd = group.cwd ?? null;
+      this.saveGroups();
+      this.emit({ type: "group", groupId: group.id });
+    }
+    return group.pinnedCwd;
   }
 
   // ── tasks ─────────────────────────────────────────────────────────────

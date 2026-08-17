@@ -60,7 +60,11 @@ export function createAcpDriver(support) {
     const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
     return {
         driverKind: DRIVER_KIND,
-        metadata: { displayName: support.displayName, supportsMultipleInstances: true },
+        metadata: {
+            displayName: support.displayName,
+            supportsMultipleInstances: true,
+            access: support.access ?? "subscription",
+        },
         install: support.install,
         models: support.models,
         decodeConfig,
@@ -149,8 +153,12 @@ export function createAcpDriver(support) {
                 const turnId = newId();
                 const cwd = turn.cwd ?? config.workspace ?? homedir();
                 const env = childEnv();
+                const resolvedModel = support.resolveTurnModel?.(turn.model, env);
+                const cliTurn = resolvedModel !== undefined && resolvedModel !== turn.model
+                    ? { ...turn, model: resolvedModel }
+                    : turn;
                 const mcpServers = acpMcpServers(turn);
-                const child = spawnCli(config.cli, support.spawnArgs(config, turn), {
+                const child = spawnCli(config.cli, support.spawnArgs(config, cliTurn), {
                     cwd,
                     env,
                     stdio: ["pipe", "pipe", "pipe"],
@@ -439,7 +447,7 @@ export function createAcpDriver(support) {
                                 ...base(threadId, turnId),
                                 type: "session.started",
                                 sessionId,
-                                model: selectedModel ?? init?._meta?.modelState?.currentModelId ?? turn.model ?? null,
+                                model: selectedModel ?? init?._meta?.modelState?.currentModelId ?? cliTurn.model ?? null,
                             });
                         };
                         try {
@@ -448,12 +456,12 @@ export function createAcpDriver(support) {
                                 const currentOf = (r) => (Array.isArray(r?.configOptions) ? r.configOptions : []).find((o) => o?.id === configId)
                                     ?.currentValue ?? null;
                                 selectedModel = currentOf(sessionResult);
-                                if (turn.model && turn.model !== selectedModel) {
-                                    selectedModel = currentOf(await request("session/set_config_option", { sessionId, configId, value: turn.model }, INIT_TIMEOUT));
+                                if (cliTurn.model && cliTurn.model !== selectedModel) {
+                                    selectedModel = currentOf(await request("session/set_config_option", { sessionId, configId, value: cliTurn.model }, INIT_TIMEOUT));
                                     // an agent that answers OK but keeps its old model is worse than
                                     // one that errors: it burns a paid turn on the wrong thing
-                                    if (selectedModel !== turn.model) {
-                                        throw new Error(`${DRIVER_KIND} did not switch to ${turn.model} (still ${selectedModel ?? "unknown"})`);
+                                    if (selectedModel !== cliTurn.model) {
+                                        throw new Error(`${DRIVER_KIND} did not switch to ${cliTurn.model} (still ${selectedModel ?? "unknown"})`);
                                     }
                                 }
                             }
@@ -462,7 +470,7 @@ export function createAcpDriver(support) {
                                     request: (method, params, timeoutMs) => request(method, params, timeoutMs ?? SESSION_CONFIG_TIMEOUT),
                                     sessionId,
                                     config,
-                                    turn,
+                                    turn: cliTurn,
                                 });
                             }
                         }

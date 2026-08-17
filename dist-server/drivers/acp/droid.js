@@ -15,9 +15,10 @@
 // ~/.factory/settings.json selected. Model and autonomy are session config
 // options set over the wire (session/set_model, session/set_mode), which is
 // why both live in configureSession() below and NOT in spawnArgs.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.js";
 import { createAcpDriver } from "./core.js";
 // FACTORY_HOME_OVERRIDE replaces the HOME the CLI resolves, NOT the data root:
 // droid builds every path as <home>/.factory/… (verified against 0.196.0 —
@@ -36,27 +37,89 @@ function authFilePaths(env) {
     const home = env.FACTORY_HOME_OVERRIDE || env.HOME || homedir();
     return AUTH_FILES.map((name) => join(home, ".factory", name));
 }
-function readSettings(env) {
-    const home = env.FACTORY_HOME_OVERRIDE || env.HOME || homedir();
-    return JSON.parse(readFileSync(join(home, ".factory", "settings.json"), "utf8"));
+const INJECT_ID_PREFIX = "custom:openmausbot-";
+export function droidInjectId(host, model) {
+    const safe = `${host}-${model}`.replace(/[^a-zA-Z0-9._+-]+/g, "-").replace(/-+/g, "-");
+    return `${INJECT_ID_PREFIX}${safe}`;
 }
-function resolveModels(env) {
-    let settings;
+function factoryHome(env) {
+    return env.FACTORY_HOME_OVERRIDE || env.HOME || env.USERPROFILE || homedir();
+}
+/** Upsert a BYOK custom model so session/set_model can reach the local host. */
+export function ensureDroidInjectModel(modelId, env = process.env) {
+    const inject = decodeInjectId(modelId);
+    if (!inject)
+        return modelId;
+    const host = localHost(inject.host);
+    if (!host)
+        return modelId;
+    const id = droidInjectId(inject.host, inject.model);
+    const dir = join(factoryHome(env), ".factory");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "settings.json");
+    let settings = {};
     try {
-        settings = readSettings(env);
+        settings = JSON.parse(readFileSync(path, "utf8"));
+    }
+    catch (error) {
+        if (existsSync(path))
+            throw error;
+    }
+    const custom = Array.isArray(settings.customModels) ? [...settings.customModels] : [];
+    const match = custom.find((row) => row.id === id || (row.model === inject.model && row.baseUrl === host.baseUrl));
+    if (match) {
+        if (!match.id) {
+            match.id = id;
+            settings.customModels = custom;
+            writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+        }
+        return match.id;
+    }
+    custom.push({
+        id,
+        model: inject.model,
+        displayName: `${inject.model} (${host.label})`,
+        baseUrl: host.baseUrl,
+        apiKey: hostApiKey(host, env),
+        provider: "generic-chat-completion-api",
+    });
+    settings.customModels = custom;
+    writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+    return id;
+}
+function readSettings(env) {
+    return JSON.parse(readFileSync(join(factoryHome(env), ".factory", "settings.json"), "utf8"));
+}
+async function resolveModels(env) {
+    let catalog = MODELS;
+    try {
+        const settings = readSettings(env);
+        const custom = (settings.customModels ?? []).flatMap((m) => {
+            // Live inject rows come from mergeLocalInject as host::model. Skip the
+            // BYOK copies we wrote so the picker does not list the same model twice.
+            if (m.id?.startsWith(INJECT_ID_PREFIX))
+                return [];
+            const id = m.id || (m.model ? `custom:${m.model}` : "");
+            if (!id)
+                return [];
+            return [{ id, label: m.displayName || m.model || id, custom: true }];
+        });
+        const merged = [...custom, ...MODELS.options.filter((o) => !custom.some((c) => c.id === o.id))];
+        // Favourites first, in the user's own order; everything else keeps its
+        // existing order (Array.prototype.sort is stable).
+        const rank = new Map((settings.modelFavorites ?? []).map((id, i) => [id, i]));
+        const options = merged.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+        const configured = settings.sessionDefaultSettings?.model;
+        const fallback = options[0]?.id ?? MODELS.default;
+        catalog = {
+            default: configured && options.some((o) => o.id === configured) ? configured : fallback,
+            options,
+        };
     }
     catch {
-        return MODELS; // no settings file yet, or unreadable: ship the built-ins
+        // no settings file yet, or unreadable: ship the built-ins
     }
-    const custom = (settings.customModels ?? []).flatMap((m) => m.id ? [{ id: m.id, label: m.displayName || m.id }] : []);
-    const merged = [...custom, ...MODELS.options.filter((o) => !custom.some((c) => c.id === o.id))];
-    // Favourites first, in the user's own order; everything else keeps its
-    // existing order (Array.prototype.sort is stable).
-    const rank = new Map((settings.modelFavorites ?? []).map((id, i) => [id, i]));
-    const options = merged.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
-    const configured = settings.sessionDefaultSettings?.model;
-    const fallback = options[0]?.id ?? MODELS.default;
-    return { default: configured && options.some((o) => o.id === configured) ? configured : fallback, options };
+    return mergeLocalInject(catalog, env);
 }
 // droid answers a rejected setting with a bare JSON-RPC message ("Model not
 // recognized", "Method not found") that reaches the error card verbatim,
@@ -125,13 +188,14 @@ const support = {
     // never be what makes an otherwise logged-out instance look ready.
     isAuthenticated: (env) => authFilePaths(env).some(existsSync) || Boolean(env.FACTORY_API_KEY),
     resolveModels,
+    resolveTurnModel: (model, env) => (model ? ensureDroidInjectModel(model, env) : model),
     async configureSession({ request, sessionId, config, turn }) {
         const modeId = config.fullAuto ? MODE_FULL_AUTO : MODE_DEFAULT;
         await applySetting(request, "session/set_mode", { sessionId, modeId }, `autonomy mode "${modeId}"`);
         // Pin the model for the same reason as the mode: with no set_model the
         // session runs whatever ~/.factory/settings.json selected, which can be a
         // `custom:` provider pointing at its own endpoint and key.
-        const modelId = turn.model || MODELS.default;
+        const modelId = turn.model ?? MODELS.default;
         await applySetting(request, "session/set_model", { sessionId, modelId }, `model "${modelId}"`);
     },
     // House convention for ACP harnesses (grok, gemini, kimi all do this): the

@@ -8,6 +8,8 @@ import { GeminiAgentDriver } from "./acp/gemini.js";
 import { KimiAgentDriver } from "./acp/kimi.js";
 import { DroidAgentDriver } from "./acp/droid.js";
 import { OpenCodeGoDriver } from "./acp/opencode-go.js";
+import { QwenAgentDriver } from "./acp/qwen.js";
+import { HermesAgentDriver } from "./acp/hermes.js";
 export const BUILT_IN_DRIVERS = [
     GrokDriver,
     GrokAgentDriver,
@@ -15,6 +17,8 @@ export const BUILT_IN_DRIVERS = [
     KimiAgentDriver,
     DroidAgentDriver,
     OpenCodeGoDriver,
+    QwenAgentDriver,
+    HermesAgentDriver,
     ClaudeDriver,
     CodexDriver,
     AntigravityDriver,

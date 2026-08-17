@@ -32,6 +32,7 @@ import { LocalVmLease } from "./local-vm-lease.js";
 import { RoutineManager } from "./routines.js";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.js";
 import { listenWebhookIngress, webhookCredential } from "./webhook-ingress.js";
+import { memberTurnSelection } from "./member-turn.js";
 import { WebhookManager } from "./webhooks.js";
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -1117,7 +1118,12 @@ spoken = new Set()) {
         });
         const timer = setTimeout(finish, 5 * 60_000);
         instance.adapter
-            .sendTurn({ threadId: group.threadId, text, system })
+            .sendTurn({
+            threadId: group.threadId,
+            text,
+            system,
+            ...memberTurnSelection(bot.modelSelection),
+        })
             .catch((err) => {
             const failure = store.appendMessage(group.threadId, {
                 role: "bot",

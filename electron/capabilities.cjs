@@ -32,6 +32,7 @@ function desktopCapabilities({
   env = process.env,
   packaged = false,
   localConnection = null,
+  homeDir = require("node:os").homedir(),
 } = {}) {
   const hostPlatform = normalizedPlatform(platform);
   const isMac = hostPlatform === "darwin";
@@ -50,6 +51,9 @@ function desktopCapabilities({
               : "Desktop",
       session: linuxSession(hostPlatform, env),
       packaged: Boolean(packaged),
+      // so the renderer can show paths as ~/… without a Node builtin in
+      // the sandboxed preload
+      homeDir,
     },
     windowChrome: isMac ? "mac-inset" : "native",
     screenPreview: {

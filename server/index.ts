@@ -9,6 +9,7 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
+import { validateBotCwd } from "./bot-cwd.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
@@ -1006,6 +1007,9 @@ async function startTurn(
                 .join(" and ")} in their message — bring them in with ask_bot and fold their reply into your answer.`
             : ""),
         integrations,
+        // pinned per task on its first turn — see TaskRecord.cwd. A cloud
+        // run happens on the box, where a host folder means nothing.
+        cwd: opts?.runOn === "cloud" ? undefined : (store.pinTaskCwd(bot.id, threadId) ?? undefined),
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
@@ -2022,6 +2026,11 @@ const server = createServer(async (req, res) => {
       }
       if (body.chiefOfStaff !== undefined && typeof body.chiefOfStaff !== "boolean") {
         return json(res, 400, { error: "chiefOfStaff must be true or false" });
+      }
+      if (body.cwd !== undefined) {
+        const checked = validateBotCwd(body.cwd);
+        if (!checked.ok) return json(res, 400, { error: checked.error });
+        patch.cwd = checked.cwd ?? undefined;
       }
       if (body.hidden === true && existing?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });

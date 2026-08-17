@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Copy,
   Crown,
+  Folder,
   Loader2,
   Monitor,
   Pencil,
@@ -720,6 +721,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
+          <WorkingFolderChip bot={bot} />
           <ModelPicker bot={bot} />
           <CallButton bot={bot} />
           <button
@@ -831,5 +833,26 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+  );
+}
+
+/** The folder this task's tools run in — quiet unless it's somewhere other
+ * than home. Shows the pinned task folder when there is one, else the bot's
+ * folder a first turn would pin. Click opens bot settings to change it. */
+function WorkingFolderChip({ bot }: { bot: Bot }) {
+  const { dispatch } = useStore();
+  const task = bot.tasks?.find((t) => t.threadId === bot.threadId);
+  const folder = task?.cwd === undefined ? bot.cwd : (task.cwd ?? undefined);
+  if (!folder) return null;
+  const name = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
+  return (
+    <button
+      onClick={() => dispatch({ type: "toggleSettings", open: true })}
+      className="flex max-w-[180px] items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+      title={`Working folder: ${folder}`}
+    >
+      <Folder size={12} />
+      <span className="truncate font-mono">{name}</span>
+    </button>
   );
 }

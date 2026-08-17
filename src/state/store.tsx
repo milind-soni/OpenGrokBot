@@ -97,6 +97,9 @@ export interface Task {
   threadId: string;
   title: string;
   createdAt: number;
+  /** folder this task's turns run in, pinned on its first turn; null =
+   * the default (home); absent = not pinned yet */
+  cwd?: string | null;
 }
 
 export interface Bot {
@@ -115,6 +118,8 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "off";
+  /** where new tasks run their shell tools; absent = the home folder */
+  cwd?: string;
   /** auto mode: the bot approves its own tool permissions */
   autoApprove?: boolean;
   /** tools this bot may always use without asking */

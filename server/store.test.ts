@@ -273,3 +273,45 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.busy).toBe(false);
   });
 });
+
+describe("Store task working folder", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("pins the bot's folder onto a task on its first turn, and never again", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, { cwd: "/tmp/project-a" });
+
+    // first turn: nothing pinned yet → takes the bot's folder
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBe("/tmp/project-a");
+    expect(store.taskByThread(bot.id, bot.threadId)?.cwd).toBe("/tmp/project-a");
+
+    // the bot's folder moves on; this task stays where its session started
+    store.patchBot(bot.id, { cwd: "/tmp/project-b" });
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBe("/tmp/project-a");
+
+    // a new task starts in the bot's current folder
+    const next = store.createTask(bot.id, "second")!;
+    expect(store.pinTaskCwd(bot.id, next.threadId)).toBe("/tmp/project-b");
+  });
+
+  it("pins the default (null) when the bot has no folder, so a later folder can't move a live session", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBeNull();
+    store.patchBot(bot.id, { cwd: "/tmp/project-a" });
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBeNull();
+    expect(store.taskByThread(bot.id, bot.threadId)?.cwd).toBeNull();
+  });
+
+  it("a legacy task that already has a session pins to the default, not the bot's new folder", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    // an older build ran turns here before folders existed
+    store.setResumeCursor(bot.id, "claude", "sess-1", bot.threadId);
+    store.patchBot(bot.id, { cwd: "/tmp/project-a" });
+    expect(store.pinTaskCwd(bot.id, bot.threadId)).toBeNull();
+  });
+});

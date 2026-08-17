@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -299,6 +299,18 @@ ipcMain.handle("engine:open-terminal", async (_event, command) => {
 // click gesture has ended. Opening them through window.open can therefore be
 // rejected as a popup before setWindowOpenHandler ever sees the URL. Keep the
 // renderer sandboxed and let the main process open only ordinary web links.
+// A bot's working folder: the native picker, so the path is real and the
+// user never types one. Returns null when they cancel.
+ipcMain.handle("desktop:pick-folder", async (event, current) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const result = await dialog.showOpenDialog(win, {
+    title: "Choose a working folder",
+    properties: ["openDirectory", "createDirectory"],
+    ...(typeof current === "string" && current ? { defaultPath: current } : {}),
+  });
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+});
+
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
   let url;

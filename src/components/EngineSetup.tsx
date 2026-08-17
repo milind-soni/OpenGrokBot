@@ -157,7 +157,11 @@ export function EngineSetup({
           <CommandRow command={shown} trailing={guide} iconCopy />
         ) : (
           <div className="mt-2 flex items-center justify-between gap-2 pl-2">
-            <span className="text-[11.5px]">No one-line installer for this platform.</span>
+            <span className="text-[11.5px]">
+              {signInOnly
+                ? "Sign in through the provider, then reopen this menu."
+                : "No one-line installer for this platform."}
+            </span>
             {guide}
           </div>
         )}

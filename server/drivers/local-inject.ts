@@ -176,15 +176,21 @@ export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra:
       models?: unknown;
       data?: unknown;
     };
-    if (typeof rec.default_model === "string") add(rec.default_model);
     const running = Array.isArray(rec.models)
       ? rec.models
       : Array.isArray(rec.data)
         ? rec.data
         : [];
+    // oMLX /v1/models/status lists every model with loaded:true/false.
+    // /health only has default_model, which is the configured default — not
+    // necessarily what is in memory. Prefer explicit flags when present.
+    const hasLoadedFlags = running.some(
+      (row) => row && typeof row === "object" && ("loaded" in row || "state" in row),
+    );
+    if (!hasLoadedFlags && typeof rec.default_model === "string") add(rec.default_model);
     for (const row of running) {
       if (typeof row === "string") {
-        add(row);
+        if (!hasLoadedFlags) add(row);
         continue;
       }
       if (!row || typeof row !== "object") continue;
@@ -197,7 +203,7 @@ export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra:
       if (!id) continue;
       const state = typeof item.state === "string" ? item.state.toLowerCase() : "";
       if (item.loaded === false || state === "not-loaded" || state === "unloaded") continue;
-      if (item.loaded === true || state === "loaded" || state === "idle" || !("state" in item || "loaded" in item)) {
+      if (item.loaded === true || state === "loaded" || state === "idle" || !hasLoadedFlags) {
         add(id);
       }
     }
@@ -221,7 +227,7 @@ export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra:
 
 function loadedProbeUrl(host: LocalHost): string | null {
   const origin = anthropicBaseUrl(host);
-  if (host.id === "omlx") return `${origin}/health`;
+  if (host.id === "omlx") return `${origin}/v1/models/status`;
   if (host.id === "ollama" || host.id === "local_ollama") return `${origin}/api/ps`;
   if (host.id === "lmstudio") return `${origin}/api/v0/models`;
   return null;
@@ -248,8 +254,10 @@ export async function probeLocalInjects(
         timedJson(catalogUrl, env, host, fetchImpl),
         extraUrl ? timedJson(extraUrl, env, host, fetchImpl) : Promise.resolve(null),
       ]);
-      const ids = catalog ? idsFromModelsPayload(catalog) : [];
-      const loaded = loadedIdsFromPayloads(host, catalog, extra);
+      const catalogIds = catalog ? idsFromModelsPayload(catalog) : [];
+      const extraIds = extra ? idsFromModelsPayload(extra) : [];
+      const loaded = loadedIdsFromPayloads(host, catalog ?? extra, extra);
+      const ids = [...new Set([...catalogIds, ...extraIds, ...loaded])];
       return { host, ids, loaded };
     }),
   );
@@ -281,7 +289,11 @@ export async function mergeLocalInject(
   const options = catalog.options.map((option) => ({ ...option }));
   const seen = new Set(options.map((option) => option.id));
   for (const extra of extras) {
-    if (seen.has(extra.id)) continue;
+    const existing = options.find((option) => option.id === extra.id);
+    if (existing) {
+      if (extra.loaded) existing.loaded = true;
+      continue;
+    }
     seen.add(extra.id);
     options.push({ id: extra.id, label: extra.label, custom: true, ...(extra.loaded ? { loaded: true } : {}) });
   }

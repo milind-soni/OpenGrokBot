@@ -332,21 +332,36 @@ describe("probe payload dialects", () => {
 });
 
 describe("loaded host probes", () => {
-  it("pins oMLX /health default_model, Ollama /api/ps, and LM Studio state=loaded", async () => {
+  it("pins every host's actually-loaded models in one Custom list", async () => {
     const catalog = await mergeLocalInject(
       { default: "keep", options: [{ id: "keep", label: "Keep" }] },
       { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
       async (url) => {
         const href = String(url);
-        if (href.includes(":8080/v1/models")) {
-          return new Response(JSON.stringify({ data: [{ id: "gemma-4-31b-it-bf16" }, { id: "GLM-5.2-fp8" }] }), {
-            status: 200,
-          });
+        if (href.includes("/v1/models/status")) {
+          return new Response(
+            JSON.stringify({
+              default_model: "Qwen3.8-27B-Abliterated-MLX-BF16",
+              models: [
+                { id: "Qwen3.8-27B-Abliterated-MLX-BF16", loaded: false },
+                { id: "gemma-4-31b-it-bf16", loaded: true },
+                { id: "GLM-5.2-fp8", loaded: true },
+              ],
+            }),
+            { status: 200 },
+          );
         }
-        if (href.includes(":8080/health")) {
-          return new Response(JSON.stringify({ default_model: "gemma-4-31b-it-bf16", engine_pool: { loaded_count: 1 } }), {
-            status: 200,
-          });
+        if (href.includes(":8080/v1/models")) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: "Qwen3.8-27B-Abliterated-MLX-BF16" },
+                { id: "gemma-4-31b-it-bf16" },
+                { id: "GLM-5.2-fp8" },
+              ],
+            }),
+            { status: 200 },
+          );
         }
         if (href.includes(":11434/v1/models")) {
           return new Response(JSON.stringify({ data: [{ id: "llama3.2:latest" }, { id: "mistral:latest" }] }), {
@@ -369,7 +384,8 @@ describe("loaded host probes", () => {
       },
     );
     expect(catalog.options.find((o) => o.id === "omlx::gemma-4-31b-it-bf16")?.loaded).toBe(true);
-    expect(catalog.options.find((o) => o.id === "omlx::GLM-5.2-fp8")?.loaded).toBeUndefined();
+    expect(catalog.options.find((o) => o.id === "omlx::GLM-5.2-fp8")?.loaded).toBe(true);
+    expect(catalog.options.find((o) => o.id === "omlx::Qwen3.8-27B-Abliterated-MLX-BF16")?.loaded).toBeUndefined();
     expect(catalog.options.find((o) => o.id === "ollama::llama3.2:latest")?.loaded).toBe(true);
     expect(catalog.options.find((o) => o.id === "ollama::mistral:latest")?.loaded).toBeUndefined();
     expect(catalog.options.find((o) => o.id === "lmstudio::qwen")?.loaded).toBe(true);

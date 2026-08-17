@@ -50,13 +50,36 @@ describe("loadedIdsFromPayloads", () => {
   const ollama = LOCAL_HOSTS.find((host) => host.id === "ollama")!;
   const lmstudio = LOCAL_HOSTS.find((host) => host.id === "lmstudio")!;
 
-  it("uses oMLX /health default_model as the loaded pin", () => {
+  it("uses oMLX /health default_model when no per-model loaded flags exist", () => {
     const loaded = loadedIdsFromPayloads(
       omlx,
       { data: [{ id: "gemma-4-31b-it-bf16" }, { id: "GLM-5.2-fp8" }] },
       { default_model: "gemma-4-31b-it-bf16", engine_pool: { loaded_count: 1 } },
     );
     expect([...loaded]).toEqual(["gemma-4-31b-it-bf16"]);
+  });
+
+  it("pins every oMLX /v1/models/status loaded row, not the default_model", () => {
+    const loaded = loadedIdsFromPayloads(
+      omlx,
+      {
+        data: [
+          { id: "Qwen3.8-27B-Abliterated-MLX-BF16" },
+          { id: "gemma-4-31b-it-bf16" },
+          { id: "GLM-5.2-fp8" },
+        ],
+      },
+      {
+        default_model: "Qwen3.8-27B-Abliterated-MLX-BF16",
+        loaded_count: 2,
+        models: [
+          { id: "Qwen3.8-27B-Abliterated-MLX-BF16", loaded: false },
+          { id: "gemma-4-31b-it-bf16", loaded: true },
+          { id: "GLM-5.2-fp8", loaded: true },
+        ],
+      },
+    );
+    expect([...loaded].sort()).toEqual(["GLM-5.2-fp8", "gemma-4-31b-it-bf16"]);
   });
 
   it("uses Ollama /api/ps running models", () => {
@@ -98,21 +121,34 @@ describe("loadedIdsFromPayloads", () => {
 });
 
 describe("mergeLocalInject", () => {
-  it("marks the oMLX /health default_model as loaded on the custom row", async () => {
+  it("marks oMLX /v1/models/status loaded rows, not the default_model", async () => {
     const catalog = await mergeLocalInject(
       { default: "keep", options: [{ id: "keep", label: "Keep" }] },
       { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
       async (url) => {
         const href = String(url);
-        if (href.includes(":8080/v1/models")) {
+        if (href.includes("/v1/models/status")) {
           return new Response(
-            JSON.stringify({ data: [{ id: "gemma-4-31b-it-bf16" }, { id: "GLM-5.2-fp8" }] }),
+            JSON.stringify({
+              default_model: "Qwen3.8-27B-Abliterated-MLX-BF16",
+              models: [
+                { id: "Qwen3.8-27B-Abliterated-MLX-BF16", loaded: false },
+                { id: "gemma-4-31b-it-bf16", loaded: true },
+                { id: "GLM-5.2-fp8", loaded: true },
+              ],
+            }),
             { status: 200 },
           );
         }
-        if (href.includes(":8080/health")) {
+        if (href.includes(":8080/v1/models")) {
           return new Response(
-            JSON.stringify({ default_model: "gemma-4-31b-it-bf16", engine_pool: { loaded_count: 1 } }),
+            JSON.stringify({
+              data: [
+                { id: "Qwen3.8-27B-Abliterated-MLX-BF16" },
+                { id: "gemma-4-31b-it-bf16" },
+                { id: "GLM-5.2-fp8" },
+              ],
+            }),
             { status: 200 },
           );
         }
@@ -123,7 +159,11 @@ describe("mergeLocalInject", () => {
       custom: true,
       loaded: true,
     });
-    expect(catalog.options.find((option) => option.id === "omlx::GLM-5.2-fp8")?.loaded).toBeUndefined();
+    expect(catalog.options.find((option) => option.id === "omlx::GLM-5.2-fp8")).toMatchObject({
+      custom: true,
+      loaded: true,
+    });
+    expect(catalog.options.find((option) => option.id === "omlx::Qwen3.8-27B-Abliterated-MLX-BF16")?.loaded).toBeUndefined();
   });
 
   it("appends live host models as custom without touching official rows", async () => {

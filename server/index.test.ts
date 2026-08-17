@@ -125,7 +125,16 @@ afterAll(async () => {
     child.on("close", () => resolve());
     setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
   });
-  rmSync(home, { recursive: true, force: true });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      rmSync(home, { recursive: true, force: true });
+      break;
+    } catch {
+      // Linux can still have the just-killed server holding the scratch dir.
+      if (attempt === 7) break;
+      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+    }
+  }
 });
 
 describe("harness HTTP API", () => {

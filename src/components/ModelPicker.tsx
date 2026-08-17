@@ -14,6 +14,20 @@ function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((o) => o.id === model)?.label ?? model;
 }
 
+type Readiness = "ready" | "signIn" | "unavailable";
+
+function readinessOf(instance: InstanceInfo): Readiness {
+  if (instance.snapshot.state !== "available") return "unavailable";
+  if (needsSignIn(instance)) return "signIn";
+  return "ready";
+}
+
+const DOT: Record<Readiness, string> = {
+  ready: "bg-success",
+  signIn: "bg-warning",
+  unavailable: "bg-danger/80",
+};
+
 export function ModelPicker({ bot, className }: { bot: Bot; className?: string }) {
   const { state, dispatch, refreshInstances } = useStore();
   const [open, setOpen] = useState(false);
@@ -130,13 +144,27 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   <div className="text-[13px] font-semibold text-ink">
                     {pane === "custom" ? "Custom" : railInstance.displayName}
                   </div>
-                  <div className="truncate text-[11px] text-ink-secondary">
-                    {pane === "custom"
-                      ? "Inject a local model into this agent"
-                      : (railInstance.snapshot.version ??
-                        (railInstance.snapshot.state === "available"
-                          ? "ready"
-                          : (railInstance.snapshot.reason ?? "ready")))}
+                  {/* status dot hangs in the gutter so the text keeps the
+                      same left edge as the name and everything below */}
+                  <div className="relative mt-0.5 text-[11px] text-ink-secondary">
+                    {pane === "main" && (
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "absolute -left-2.5 top-1/2 size-1.5 -translate-y-1/2 rounded-full",
+                          DOT[readinessOf(railInstance)],
+                        )}
+                      />
+                    )}
+                    <span className="block truncate">
+                      {pane === "custom"
+                        ? "Inject a local model into this agent"
+                        : readinessOf(railInstance) === "ready"
+                          ? `Ready${railInstance.snapshot.version ? ` · ${railInstance.snapshot.version}` : ""}`
+                          : readinessOf(railInstance) === "signIn"
+                            ? "Sign in required"
+                            : (railInstance.snapshot.reason ?? "Not installed")}
+                    </span>
                   </div>
                 </div>
                 {/* Official-pane setup only. Custom is the inject list and
@@ -144,8 +172,8 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     or the packaged app has not found it on PATH yet. */}
                 {pane === "main" &&
                   (railInstance.snapshot.state !== "available" || needsSignIn(railInstance)) && (
-                  <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
-                    <EngineSetup instance={railInstance} />
+                  <div className="mb-1 shrink-0 border-b border-hairline/40 pb-2">
+                    <EngineSetup instance={railInstance} compact />
                   </div>
                 )}
                 {(() => {
@@ -168,20 +196,20 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                         disabled={disabled}
                         onClick={() => pick(railInstance, option.id)}
                         className={cn(
-                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
+                          "flex w-full items-center justify-between gap-2 rounded-md px-2 py-[5px] text-left text-[12.5px]",
                           disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
-                          current && "bg-raised",
+                          current && "bg-accent/10 hover:bg-accent/15",
                         )}
                       >
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="truncate">{option.label}</span>
                           {option.id === railInstance.models.default && (
-                            <span className="shrink-0 rounded bg-inset px-1 py-px text-[10px] text-ink-secondary">
+                            <span className="shrink-0 rounded border border-hairline px-1 py-px text-[9.5px] leading-tight text-ink-secondary/80">
                               default
                             </span>
                           )}
                         </span>
-                        {current && <Check size={14} className="shrink-0 text-accent" />}
+                        {current && <Check size={13} className="shrink-0 text-accent" />}
                       </button>
                     );
                   };

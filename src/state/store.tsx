@@ -167,7 +167,7 @@ export interface ConfigStatus {
   xai?: { configured: boolean };
   composio: { configured: boolean };
   box: { configured: boolean };
-  opencodeGo?: { configured: boolean };
+  opencode?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */

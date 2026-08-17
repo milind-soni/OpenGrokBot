@@ -2,13 +2,18 @@
 // Routing is by exact instanceId only — an entry is never inferred from a
 // driver kind. Missing a cloud login does not grey an engine out: a local
 // model on that CLI is still a valid pick, so every icon stays clickable
-// and Custom is always at the bottom of the list.
-import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+// and Custom is always at the bottom of the list. An instance that is
+// genuinely unavailable renders disabled, with the reason in the open.
+import { Fragment, useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
 import { EngineSetup, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
+
+/** Above this many models a flat list stops being usable. Claude, Codex, Grok
+ *  and Kimi all sit well under it and render exactly as before. */
+const SEARCH_THRESHOLD = 15;
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((o) => o.id === model)?.label ?? model;
@@ -19,6 +24,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   const [open, setOpen] = useState(false);
   const [railId, setRailId] = useState<string | null>(null);
   const [pane, setPane] = useState<"main" | "custom">("main");
+  const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const selection = bot.modelSelection;
@@ -33,6 +39,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   useEffect(() => {
     if (open) void refreshInstances();
   }, [open, refreshInstances]);
+
+  // A query left over from another engine, or from the last time the picker
+  // was open, would silently hide most of the list.
+  useEffect(() => setQuery(""), [open, railInstance?.instanceId]);
 
   useEffect(() => {
     if (!open) return;
@@ -70,6 +80,26 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
     });
     setOpen(false);
   };
+
+  // OpenCode discovers hundreds of models from whatever providers the user has
+  // configured, so a long catalog gets a filter and provider headers. A short
+  // one renders exactly as it always has. The filter follows the pane in view,
+  // because a discovered catalog lands in Custom and that is the pane that
+  // actually gets long.
+  const allOptions = railInstance?.models.options ?? [];
+  const official = allOptions.filter((o) => !o.custom);
+  const custom = allOptions.filter((o) => o.custom);
+  const options = pane === "custom" ? custom : official;
+  const customCurrent =
+    selection.instanceId === railInstance?.instanceId && custom.some((o) => o.id === selection.model);
+  const needle = query.trim().toLowerCase();
+  const matches =
+    options.length > SEARCH_THRESHOLD && needle
+      ? options.filter((o) => o.label.toLowerCase().includes(needle) || o.id.toLowerCase().includes(needle))
+      : options;
+  const providerOf = (id: string) => (id.includes("/") ? id.slice(0, id.indexOf("/")) : "");
+  // one provider means the header would say the same thing on every row
+  const grouped = new Set(matches.map((o) => providerOf(o.id))).size > 1;
 
   return (
     <div ref={rootRef} className={cn("relative", className)}>
@@ -148,83 +178,116 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     <EngineSetup instance={railInstance} />
                   </div>
                 )}
-                {(() => {
-                  const official = railInstance.models.options.filter((o) => !o.custom);
-                  const custom = railInstance.models.options.filter((o) => o.custom);
-                  const rows = pane === "custom" ? custom : official;
-                  const customCurrent =
-                    selection.instanceId === railInstance.instanceId &&
-                    custom.some((o) => o.id === selection.model);
-
-                  const row = (option: (typeof official)[number]) => {
+                {options.length > SEARCH_THRESHOLD && (
+                  <div className="relative px-2 pb-2 pt-1">
+                    <Search
+                      size={13}
+                      className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-secondary"
+                    />
+                    <input
+                      autoFocus
+                      // the placeholder carries the model count, so it changes
+                      // per engine and cannot double as the accessible name
+                      aria-label="Search models"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder={`Search ${options.length} models`}
+                      className="w-full rounded-lg border border-hairline/40 bg-inset py-1 pl-7 pr-2 text-[13px] text-ink placeholder:text-ink-secondary/70 focus:border-hairline focus:outline-none"
+                    />
+                  </div>
+                )}
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  {pane === "custom" && (
+                    <button
+                      onClick={() => {
+                        setPane("main");
+                        setQuery("");
+                      }}
+                      className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
+                    >
+                      <ChevronLeft size={14} />
+                      <span>Back</span>
+                    </button>
+                  )}
+                  {matches.length === 0 && (
+                    <div className="px-2 py-3 text-[13px] text-ink-secondary">
+                      {/* An empty list is not a failed search. Every shadow
+                          instance gets {default:"",options:[]} from the
+                          registry, and so does opencode when discovery fails —
+                          telling someone who never typed anything that nothing
+                          matches their empty query is a non-sequitur, and it
+                          points them at the search box instead of at the
+                          EngineSetup card right above that can actually fix
+                          it. An empty Custom pane is a third case: nothing is
+                          broken, there is just no local runtime up yet. */}
+                      {needle ? (
+                        <>No model matches “{query}”.</>
+                      ) : pane === "custom" ? (
+                        "Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here"
+                      ) : (
+                        "No models available."
+                      )}
+                    </div>
+                  )}
+                  {matches.map((option, i) => {
+                    const provider = providerOf(option.id);
+                    const header = grouped && provider !== providerOf(matches[i - 1]?.id ?? "") ? provider : null;
                     const current =
                       selection.instanceId === railInstance.instanceId && selection.model === option.id;
                     const disabled =
                       !option.custom &&
                       (railInstance.snapshot.state !== "available" || needsSignIn(railInstance));
                     return (
-                      <button
-                        key={option.id}
-                        disabled={disabled}
-                        onClick={() => pick(railInstance, option.id)}
-                        className={cn(
-                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
-                          disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
-                          current && "bg-raised",
-                        )}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate">{option.label}</span>
-                          {option.id === railInstance.models.default && (
-                            <span className="shrink-0 rounded bg-inset px-1 py-px text-[10px] text-ink-secondary">
-                              default
-                            </span>
-                          )}
-                        </span>
-                        {current && <Check size={14} className="shrink-0 text-accent" />}
-                      </button>
-                    );
-                  };
-
-                  return (
-                    <>
-                      <div className="min-h-0 flex-1 overflow-y-auto">
-                        {pane === "custom" && (
-                          <button
-                            onClick={() => setPane("main")}
-                            className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
-                          >
-                            <ChevronLeft size={14} />
-                            <span>Back</span>
-                          </button>
-                        )}
-                        {rows.map(row)}
-                        {pane === "custom" && custom.length === 0 && (
-                          <div className="px-2 py-3 text-[13px] text-ink-secondary">
-                            Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here
+                      <Fragment key={option.id}>
+                        {header && (
+                          <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-secondary/70">
+                            {header}
                           </div>
                         )}
-                      </div>
-                      {pane === "main" && (
                         <button
-                          onClick={() => setPane("custom")}
+                          disabled={disabled}
+                          onClick={() => pick(railInstance, option.id)}
+                          title={option.id}
                           className={cn(
-                            "mt-1 flex w-full shrink-0 items-center justify-between gap-2 border-t border-hairline/40 px-2 pb-0.5 pt-1.5 text-left text-[13px] text-ink hover:bg-raised/60",
-                            customCurrent && "bg-raised",
+                            "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
+                            disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
+                            current && "bg-raised",
                           )}
                         >
-                          <span>
-                            Custom
-                            {custom.length > 0 && (
-                              <span className="ml-1.5 text-[11px] text-ink-secondary">{custom.length}</span>
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="truncate">{option.label}</span>
+                            {option.id === railInstance.models.default && (
+                              <span className="shrink-0 rounded bg-inset px-1 py-px text-[10px] text-ink-secondary">
+                                default
+                              </span>
                             )}
                           </span>
-                          <ChevronRight size={14} className="shrink-0 text-ink-secondary" />
+                          {current && <Check size={14} className="shrink-0 text-accent" />}
                         </button>
+                      </Fragment>
+                    );
+                  })}
+                </div>
+                {pane === "main" && (
+                  <button
+                    onClick={() => {
+                      setPane("custom");
+                      setQuery("");
+                    }}
+                    className={cn(
+                      "mt-1 flex w-full shrink-0 items-center justify-between gap-2 border-t border-hairline/40 px-2 pb-0.5 pt-1.5 text-left text-[13px] text-ink hover:bg-raised/60",
+                      customCurrent && "bg-raised",
+                    )}
+                  >
+                    <span>
+                      Custom
+                      {custom.length > 0 && (
+                        <span className="ml-1.5 text-[11px] text-ink-secondary">{custom.length}</span>
                       )}
-                    </>
-                  );
-                })()}
+                    </span>
+                    <ChevronRight size={14} className="shrink-0 text-ink-secondary" />
+                  </button>
+                )}
               </>
             ) : (
               <div className="px-2 py-3 text-[13px] text-ink-secondary">

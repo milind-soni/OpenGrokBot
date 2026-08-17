@@ -18,7 +18,12 @@ export interface AppConfig {
     sessionId?: string;
   };
   box?: { token?: string };
-  /** OpenCode Go key; persisted write-only and passed only to its child. */
+  /** OpenCode key; persisted write-only and passed only to its child. It
+   * unlocks the OpenCode Zen provider — the user's own providers authenticate
+   * through opencode's own auth.json and need nothing from us. */
+  opencode?: { apiKey?: string };
+  /** Pre-rename spelling of `opencode`, still read so a key saved by an older
+   * build is not silently dropped. Never written. */
   opencodeGo?: { apiKey?: string };
   /** Voice (ElevenLabs). `key` is the credential and is never echoed back;
    * `voice` is the chosen voice id, which is a setting, not a secret. */
@@ -61,7 +66,7 @@ export function loadConfig(): AppConfig {
     ...(process.env.COMPOSIO_API_KEY !== undefined ? { apiKey: process.env.COMPOSIO_API_KEY } : {}),
   };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-  cfg.opencodeGo = { apiKey: process.env.OPENCODE_API_KEY, ...cfg.opencodeGo };
+  cfg.opencode = { apiKey: process.env.OPENCODE_API_KEY, ...cfg.opencodeGo, ...cfg.opencode };
   cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
   return cfg;
 }
@@ -76,7 +81,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "opencode", "tts", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
@@ -159,6 +164,12 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // CLI"), so a default `gemini` instance could only ever show unavailable.
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
+  //
+  // `opencode` needs no credential from us to be useful: unlike the others it
+  // runs with no login at all (the free OpenCode Zen models), and its model
+  // list is discovered from whatever providers the user has configured. A
+  // saved OPENCODE_API_KEY is optional on top — it unlocks the paid Zen
+  // catalog, and nothing else.
   const map: InstanceConfigMap =
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances
@@ -166,18 +177,18 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           grok: { driver: "grokAgent" },
           kimi: { driver: "kimiAgent" },
           droid: { driver: "droidAgent" },
+          opencode: { driver: "opencodeAgent" },
           claude: { driver: "claudeAgent" },
           codex: { driver: "codex" },
           antigravity: { driver: "antigravityAgent" },
-          opencodeGo: { driver: "opencodeGo" },
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
       ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
-      ...(entry.driver === "opencodeGo" && cfg.opencodeGo?.apiKey
-        ? { OPENCODE_API_KEY: cfg.opencodeGo.apiKey }
+      ...(entry.driver === "opencodeAgent" && (cfg.opencode?.apiKey ?? cfg.opencodeGo?.apiKey)
+        ? { OPENCODE_API_KEY: (cfg.opencode?.apiKey ?? cfg.opencodeGo?.apiKey)! }
         : {}),
       ...entry.environment,
     };

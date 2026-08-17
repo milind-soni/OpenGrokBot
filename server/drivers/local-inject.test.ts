@@ -231,7 +231,7 @@ describe("ensureKimiInjectAlias", () => {
     const instance = await KimiAgentDriver.create({
       instanceId: "kimi-userprofile",
       displayName: "Kimi",
-      environment: { HOME: undefined, USERPROFILE: home },
+      environment: { HOME: "", USERPROFILE: home },
       enabled: true,
       config: { cli: FAKE_ACP, fullAuto: false },
     });

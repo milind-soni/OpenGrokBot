@@ -47,6 +47,7 @@ import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
+import { readThreadEvents } from "./thread-events.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { WebhookManager } from "./webhooks.ts";
 
@@ -2311,6 +2312,20 @@ const server = createServer(async (req, res) => {
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
       return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+    }
+
+    // ── inspector: a thread's runtime events + native protocol tee ──
+    // Both logs already exist on disk; this only reads them back. Threads
+    // belong to bots or rooms — anything else is not a thread we know.
+    m = path.match(/^\/api\/threads\/([\w-]+)\/events$/);
+    if (m && method === "GET") {
+      const threadId = m[1];
+      const known =
+        store.bots.some((b) => store.tasks(b.id).some((t) => t.threadId === threadId)) ||
+        Boolean(store.groupByThread(threadId));
+      if (!known) return json(res, 404, { error: "no such thread" });
+      const limit = Number(url.searchParams.get("limit")) || undefined;
+      return json(res, 200, readThreadEvents({ eventsDir: EVENTS_DIR, nativeDir: NATIVE_DIR, threadId, limit }));
     }
 
     // ── provider instances (model picker) ──

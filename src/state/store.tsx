@@ -227,6 +227,8 @@ interface AppState {
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
+  /** the per-thread event inspector (runtime stream + native protocol tee) */
+  inspectorOpen: boolean;
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
   /** latest live frame of a bot's computer, per botId */
@@ -313,6 +315,7 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
+  | { type: "toggleInspector"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
   | {
       type: "updateBot";
@@ -381,6 +384,7 @@ function reducer(state: AppState, action: Action): AppState {
         activeView: "routines",
         settingsOpen: false,
         computerOpen: false,
+        inspectorOpen: false,
         appSettingsOpen: false,
         pluginsOpen: false,
       };
@@ -630,6 +634,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         settingsOpen: open,
         computerOpen: open ? false : state.computerOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
@@ -641,6 +646,17 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         computerOpen: open,
         settingsOpen: open ? false : state.settingsOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
+        appSettingsOpen: open ? false : state.appSettingsOpen,
+      };
+    }
+    case "toggleInspector": {
+      const open = action.open ?? !state.inspectorOpen;
+      return {
+        ...state,
+        inspectorOpen: open,
+        settingsOpen: open ? false : state.settingsOpen,
+        computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
@@ -652,6 +668,7 @@ function reducer(state: AppState, action: Action): AppState {
         appSettingsSection: action.section ?? state.appSettingsSection,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
       };
     }
@@ -762,6 +779,7 @@ const initialState: AppState = {
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
+  inspectorOpen: false,
   appSettingsOpen: false,
   appSettingsSection: "general",
   screens: {},

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Bug,
   Copy,
   Crown,
   Loader2,
@@ -731,6 +732,16 @@ export function ChatView({ bot }: { bot: Bot }) {
             title="Bot's computer"
           >
             <Monitor size={18} />
+          </button>
+          <button
+            onClick={() => dispatch({ type: "toggleInspector" })}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-raised",
+              state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+            )}
+            title="Inspector — runtime events and raw protocol for this thread"
+          >
+            <Bug size={18} />
           </button>
         </div>
       </div>

@@ -43,28 +43,52 @@ function StatusRow({
   );
 }
 
-/** One engine's onboarding row. Ready states get a sentence; anything the
- * user has to act on gets the shared setup UI, so the instructions come from
- * the driver and are correct for this platform. */
-function EngineRow({
-  instance,
-  label,
-  readyNote,
-}: {
+/** One engine on the setup screen: what it's called, what the harness
+ * found, and the one-liner to show when it's good to go. Ready states get
+ * a sentence; anything the user has to act on gets the shared setup UI, so
+ * the instructions come from the driver and are correct for this platform. */
+interface EngineEntry {
   instance: InstanceRow | undefined;
   label: string;
   readyNote: string;
-}) {
-  const ready = instance?.snapshot.state === "available" && instance.snapshot.authenticated !== false;
+}
+
+function engineReady(instance: InstanceRow | undefined): boolean {
+  return instance?.snapshot.state === "available" && instance.snapshot.authenticated !== false;
+}
+
+function engineTitle({ instance, label }: EngineEntry): string {
   const version = instance?.snapshot.version ? ` · ${instance.snapshot.version.split(" ")[0]}` : "";
+  return `${label}${version}`;
+}
+
+/** A ready engine needs no attention: a small tile in the grid, so five
+ * engines don't read as one long list where the good news and the setup
+ * work look the same. */
+function ReadyTile(entry: EngineEntry) {
   return (
-    <StatusRow ok={ready} warn title={`${label}${version}`} detail={ready ? readyNote : undefined}>
-      {!ready &&
-        (instance ? (
-          <EngineSetup instance={instance} className="mt-0.5" />
-        ) : (
-          <div className="mt-0.5 text-[12.5px] text-ink-secondary">Not configured on this machine.</div>
-        ))}
+    <div className="flex items-start gap-2.5 rounded-xl bg-card p-3">
+      <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[#00c97222] text-[#38d591]">
+        <Check size={12} />
+      </span>
+      <div className="min-w-0">
+        <div className="truncate text-[13.5px] font-medium text-ink">{engineTitle(entry)}</div>
+        <div className="mt-0.5 text-[12px] leading-snug text-ink-secondary">{entry.readyNote}</div>
+      </div>
+    </div>
+  );
+}
+
+/** An engine that still needs installing or signing in keeps the full-width
+ * row: the command box and terminal button need the room. */
+function SetupRow(entry: EngineEntry) {
+  return (
+    <StatusRow ok={false} warn title={engineTitle(entry)}>
+      {entry.instance ? (
+        <EngineSetup instance={entry.instance} className="mt-0.5" />
+      ) : (
+        <div className="mt-0.5 text-[12.5px] text-ink-secondary">Not configured on this machine.</div>
+      )}
     </StatusRow>
   );
 }
@@ -133,15 +157,25 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   };
 
   const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
-  const claude = byKind("claudeAgent");
-  const codex = byKind("codex");
-  const grok = byKind("grokAgent");
-  const antigravity = byKind("antigravityAgent");
-  const opencodeGo = byKind("opencodeGo");
+  const engines: EngineEntry[] = [
+    { instance: byKind("claudeAgent"), label: "Claude Code", readyNote: "Installed and signed in — ready to power bots." },
+    { instance: byKind("codex"), label: "Codex", readyNote: "Installed — bots can run on Codex too." },
+    { instance: byKind("grokAgent"), label: "Grok Build", readyNote: "Installed and signed in — bots can run on Grok too." },
+    { instance: byKind("antigravityAgent"), label: "Antigravity", readyNote: "Installed — bots can run on Antigravity too." },
+    { instance: byKind("opencodeGo"), label: "OpenCode Go", readyNote: "Installed and configured." },
+  ];
+  const readyEngines = engines.filter((e) => engineReady(e.instance));
+  const setupEngines = engines.filter((e) => !engineReady(e.instance));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
-      <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app p-8">
+      {/* the engines step lays tiles out two across, so it gets more room —
+          but never more than the window: the panel caps at the viewport and
+          the engine list scrolls inside it, so the header and Continue stay
+          put and nothing runs into the edges */}
+      <div
+        className={`flex max-h-full w-full flex-col rounded-2xl border border-hairline/40 bg-panel p-8 ${step === 1 ? "max-w-[680px]" : "max-w-[460px]"}`}
+      >
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" state="happy" size={72} />
@@ -186,41 +220,44 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         )}
 
         {step === 1 && (
-          <div className="flex flex-col">
+          <div className="flex min-h-0 flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
               Bots run on AI tools installed on this computer — here&rsquo;s what we found.
             </p>
-            <div className="mt-4 flex flex-col gap-2.5">
+            <div className="mt-4 flex min-h-0 flex-col gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]">
               {!instances ? (
                 <div className="flex items-center gap-2 py-6 text-ink-secondary">
                   <Loader2 size={16} className="animate-spin" /> Checking…
                 </div>
               ) : (
                 <>
-                  <EngineRow
-                    instance={claude}
-                    label="Claude Code"
-                    readyNote="Installed and signed in — ready to power bots."
-                  />
-                  <EngineRow instance={codex} label="Codex" readyNote="Installed — bots can run on Codex too." />
-                  <EngineRow
-                    instance={grok}
-                    label="Grok Build"
-                    readyNote="Installed and signed in — bots can run on Grok too."
-                  />
-                  <EngineRow
-                    instance={antigravity}
-                    label="Antigravity"
-                    readyNote="Installed — bots can run on Antigravity too."
-                  />
-                  <EngineRow instance={opencodeGo} label="OpenCode Go" readyNote="Installed and configured." />
+                  {readyEngines.length > 0 && (
+                    <>
+                      <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">Ready</div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {readyEngines.map((e) => (
+                          <ReadyTile key={e.label} {...e} />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {setupEngines.length > 0 && (
+                    <>
+                      <div className={`text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary ${readyEngines.length ? "mt-2" : ""}`}>
+                        Needs setup
+                      </div>
+                      {setupEngines.map((e) => (
+                        <SetupRow key={e.label} {...e} />
+                      ))}
+                    </>
+                  )}
                 </>
               )}
             </div>
             <button
               onClick={() => (capabilities.dictation.available ? setStep(2) : finish())}
-              className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
+              className="mt-5 w-full shrink-0 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue
             </button>

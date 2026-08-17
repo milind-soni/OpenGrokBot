@@ -116,6 +116,14 @@ describe("comms e2e (fake ACP fleet)", () => {
             environment: { FAKE_ACP_MODE: "delegate-peer" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
+          // a peer whose agent crashes at initialize — the delegated turn
+          // ends with ok=false, so the channel must show a failed terminal
+          // chip, not silence.
+          helperCrash: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "exit-early" },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
         },
       }),
     );
@@ -318,10 +326,14 @@ describe("comms e2e (fake ACP fleet)", () => {
       expect(channel.memberIds).toContain(asker.id);
       expect(channel.memberIds).toContain(helper.id);
       // A's outgoing task is mirrored into the channel attributed to A.
-      // The peer's reply is intentionally NOT mirrored (delegate_bot is
-      // fire-and-forget — the user opens B's thread to see what B did).
       expect(
         channel.messages.some((m: any) => m.from?.botId === asker.id && m.text?.includes("delegated task")),
+      ).toBe(true);
+      // B's reply IS mirrored too: the channel is the full record of the
+      // handoff — every terminal state of an async delegation is visible
+      // where the human is looking, not just the request.
+      expect(
+        channel.messages.some((m: any) => m.from?.botId === helper.id && m.text?.includes("hello from fake acp")),
       ).toBe(true);
 
       // B's receive-side chip points at the same channel
@@ -331,6 +343,116 @@ describe("comms e2e (fake ACP fleet)", () => {
       expect(helperNote?.comm?.groupId).toBe(note.comm.groupId);
       expect(helperBot.busy).toBeFalsy();
       expect(askerBot.busy).toBeFalsy();
+    },
+    45_000,
+  );
+
+  // ── delegation terminal-state mirroring ─────────────────────────────
+  // A delegated turn is fire-and-forget: nobody waits for B, so the ONLY
+  // place a human would ever see how it ended is the A⇄B channel. These
+  // two tests pin the non-happy terminal states: the delegated turn
+  // crashed, and the delegated turn never started.
+  it(
+    "mirrors a crashed delegated turn into the channel as a failed terminal chip",
+    async () => {
+      const seeded = (await api("GET", "/api/bots")).body.bots[0];
+      await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
+      const helper = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${helper.id}`, {
+        name: "Helper",
+        modelSelection: { instanceId: "helperCrash", model: "fake-model" },
+      });
+      const asker = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${asker.id}`, {
+        name: "Asker",
+        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+      });
+
+      const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
+      expect(send.status).toBe(202);
+
+      // settle = the channel exists (request mirrored) and carries the
+      // failed terminal chip (B's turn started and crashed at initialize)
+      const deadline = Date.now() + 30_000;
+      let channel: any;
+      for (;;) {
+        const state = (await api("GET", "/api/bots")).body;
+        const askerBot = state.bots.find((b: any) => b.id === asker.id);
+        const note = askerBot.messages.find(
+          (m: any) => m.kind === "activity" && m.tool?.name === "Messaged @Helper",
+        );
+        channel = note?.comm?.groupId
+          ? state.groups.find((g: any) => g.id === note.comm.groupId)
+          : undefined;
+        const terminal = channel?.messages.some(
+          (m: any) => m.kind === "activity" && m.tool?.ok === false && m.tool?.name?.includes("did not finish"),
+        );
+        if (terminal) break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `no failed terminal chip in channel. channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\n` +
+              `stderr: ${stderr.slice(-2000)}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      // the request side of the exchange is still there, attributed to A —
+      // the channel reads as a complete (if unsuccessful) handoff
+      expect(
+        channel.messages.some((m: any) => m.from?.botId === asker.id && m.text?.includes("delegated task")),
+      ).toBe(true);
+    },
+    45_000,
+  );
+
+  it(
+    "mirrors a delegation that could not start into the channel",
+    async () => {
+      const seeded = (await api("GET", "/api/bots")).body.bots[0];
+      await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
+      const helper = (await api("POST", "/api/bots")).body.bot;
+      // no such instance — startTurn rejects, so B's turn never starts
+      await api("PATCH", `/api/bots/${helper.id}`, {
+        name: "Helper",
+        modelSelection: { instanceId: "missing-instance", model: "fake-model" },
+      });
+      const asker = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${asker.id}`, {
+        name: "Asker",
+        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+      });
+
+      const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
+      expect(send.status).toBe(202);
+
+      const deadline = Date.now() + 30_000;
+      let channel: any;
+      let sourceChip: any;
+      for (;;) {
+        const state = (await api("GET", "/api/bots")).body;
+        const askerBot = state.bots.find((b: any) => b.id === asker.id);
+        const note = askerBot.messages.find(
+          (m: any) => m.kind === "activity" && m.tool?.name === "Messaged @Helper",
+        );
+        sourceChip = askerBot.messages.find(
+          (m: any) => m.kind === "activity" && m.tool?.ok === false && m.tool?.name?.includes("could not start"),
+        );
+        channel = note?.comm?.groupId
+          ? state.groups.find((g: any) => g.id === note.comm.groupId)
+          : undefined;
+        const terminal = channel?.messages.some(
+          (m: any) => m.kind === "activity" && m.tool?.ok === false && m.tool?.name?.includes("could not start"),
+        );
+        if (sourceChip && terminal) break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `could-not-start not mirrored. sourceChip=${JSON.stringify(sourceChip)}\n` +
+              `channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\nstderr: ${stderr.slice(-2000)}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
     },
     45_000,
   );

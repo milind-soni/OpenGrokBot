@@ -26,7 +26,7 @@ import { buildNotification, type Notification } from "./notify.ts";
 import { isEffortLevel, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
-import { getOrCreateChannel, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
+import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { discardDelegations, drainDelegations, queueDelegation, type QueueResult } from "./delegations.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
@@ -558,12 +558,36 @@ bus.subscribe((event: RuntimeEvent) => {
           });
         }
       }
+      // A delegated turn's terminal state belongs in the A⇄B channel:
+      // the request was mirrored there when the delegation drained, and a
+      // channel that only ever shows requests is half a record. Mirror the
+      // reply on success; mirror a failed/stopped terminal chip otherwise.
+      const watched = delegationWatch.get(event.threadId);
+      if (watched) {
+        delegationWatch.delete(event.threadId);
+        const target = store.bot(watched.toBotId);
+        const channel = watched.channelId ? store.group(watched.channelId) : undefined;
+        if (target && channel) {
+          if (event.ok) {
+            mirrorReply(commsBus, target, reply, channel);
+          } else {
+            mirrorActivity(commsBus, target, channel, "Delegated turn did not finish", false);
+          }
+        }
+      }
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
     }
   }
 });
+
+// Delegated turns are fire-and-forget, so the drain cannot hand the
+// peer's reply back to the caller the way ask_bot does. This watch map
+// (target threadId → channel) lets the main fold mirror the delegated
+// turn's TERMINAL state into the A⇄B channel when it completes — the
+// channel stays the full record of the handoff, not just its request.
+const delegationWatch = new Map<string, { channelId?: string; toBotId: string }>();
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
@@ -575,15 +599,18 @@ bus.subscribe((event: RuntimeEvent) => {
   // firing it later: the user who hit Stop does not expect the delegations
   // that turn queued to run anyway, minutes later, on an unrelated turn.
   if (!event.ok) return void discardDelegations(commsBus, event.threadId);
-  drainDelegations(commsBus, approvalBus, event.threadId, (toBotId, text, commsDepth, sourceThreadId) => {
+  drainDelegations(commsBus, approvalBus, event.threadId, (toBotId, text, commsDepth, sourceThreadId, channel) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
     // child. Every delegation failure has to land as a chip instead.
+    const targetThreadId = store.bot(toBotId)?.threadId;
+    if (targetThreadId) delegationWatch.set(targetThreadId, { channelId: channel?.id, toBotId });
     return startTurn(toBotId, text, {
       commsDepth,
       unattended: isUnattended(store.botByThread(sourceThreadId)?.id),
     }).catch((err) => {
+      if (targetThreadId) delegationWatch.delete(targetThreadId);
       const bot = store.bot(toBotId);
       const why = err instanceof Error ? err.message : String(err);
       const source = store.botByThread(sourceThreadId);
@@ -594,6 +621,11 @@ bus.subscribe((event: RuntimeEvent) => {
         tool: { name: `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, ok: false },
       });
       broadcast({ kind: "message", threadId: sourceThreadId, message: note });
+      // The channel promised an exchange; a turn that never starts is a
+      // terminal state too, and it belongs where the request is visible.
+      if (bot && channel) {
+        mirrorActivity(commsBus, bot, channel, `Delegated turn could not start — ${why.slice(0, 120)}`, false);
+      }
     });
   });
 });

@@ -13,7 +13,7 @@
 
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
-import type { BotRecord } from "./store.ts";
+import type { BotRecord, GroupRecord } from "./store.ts";
 
 export interface DelegationItem {
   toBotId: string;
@@ -82,6 +82,7 @@ export function drainDelegations(
     message: string,
     commsDepth: number,
     sourceThreadId: string,
+    channel?: GroupRecord,
   ) => void | Promise<void>,
 ): void {
   const list = pendingDelegations.get(threadId);
@@ -133,6 +134,7 @@ async function processOne(
     message: string,
     commsDepth: number,
     sourceThreadId: string,
+    channel?: GroupRecord,
   ) => void | Promise<void>,
 ): Promise<void> {
   let sender = from;
@@ -196,7 +198,7 @@ async function processOne(
   mirrorExchange(bus, sender, target, item.message, channel, sourceThreadId);
   const reasonLine = item.reason ? `\n\n[Reason: ${item.reason}]` : "";
   const prefixed = `[Delegated by @${sender.name}, another bot in this OpenMausBot workspace. Do the work and reply directly.]\n\n${item.message}${reasonLine}`;
-  await runTarget(item.toBotId, prefixed, item.depth + 1, sourceThreadId);
+  await runTarget(item.toBotId, prefixed, item.depth + 1, sourceThreadId, channel);
 }
 
 /** Test helper: how many items remain queued for a thread. */

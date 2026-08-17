@@ -21,6 +21,7 @@ import { augmentedPath } from "../env-path.ts";
 import type { ChildProcess } from "node:child_process";
 import type {
   DriverCreateInput,
+  ModelCatalog,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -39,7 +40,7 @@ export interface AntigravityConfig {
 }
 
 // model catalog from `agy models` (agy 1.1.12)
-export const STATIC_ANTIGRAVITY_MODELS = {
+export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
   default: "gemini-3.1-pro-high",
   options: [
     { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" },

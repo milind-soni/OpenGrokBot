@@ -20,6 +20,7 @@ import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli 
 
 import type {
   DriverCreateInput,
+  ModelCatalog,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -80,7 +81,7 @@ export interface ClaudeConfig {
 }
 
 // model catalog ported from upstream packages/contracts/src/model.ts
-export const STATIC_CLAUDE_MODELS = {
+export const STATIC_CLAUDE_MODELS: ModelCatalog = {
   default: "claude-sonnet-5",
   options: [
     { id: "claude-fable-5", label: "Claude Fable 5" },

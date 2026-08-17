@@ -1,11 +1,13 @@
 // Model picker: an instance rail + model list, backed by /api/instances.
 // Routing is by exact instanceId only — an entry is never inferred from a
-// driver kind, and unavailable instances render disabled with the reason.
+// driver kind. Missing a cloud login does not grey an engine out: a local
+// model on that CLI is still a valid pick, so every icon stays clickable
+// and Custom is always at the bottom of the list.
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
-import { EngineSetup, needsSignIn } from "./EngineSetup";
+import { EngineSetup } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
@@ -100,8 +102,6 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
           {/* instance rail */}
           <div className="flex flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
             {state.instances.map((instance) => {
-              const unavailable =
-                instance.snapshot.state !== "available" || instance.snapshot.authenticated === false;
               const onRail = instance.instanceId === railInstance?.instanceId;
               return (
                 <button
@@ -110,18 +110,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     setRailId(instance.instanceId);
                     setPane("main");
                   }}
-                  title={
-                    unavailable
-                      ? `${instance.displayName} — ${
-                          instance.snapshot.reason ??
-                          (instance.snapshot.authenticated === false ? "sign-in required" : "unavailable")
-                        }`
-                      : instance.displayName
-                  }
+                  title={instance.displayName}
                   className={cn(
                     "flex size-9 items-center justify-center rounded-lg",
                     onRail ? "bg-raised" : "hover:bg-raised/60",
-                    unavailable && "opacity-40",
                   )}
                 >
                   <ProviderMark driverKind={instance.driverKind} size={18} />
@@ -141,27 +133,22 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   <div className="truncate text-[11px] text-ink-secondary">
                     {pane === "custom"
                       ? "Models this agent already knows"
-                      : railInstance.snapshot.state === "available" &&
-                          railInstance.snapshot.authenticated !== false
-                        ? (railInstance.snapshot.version ?? "ready")
-                        : (railInstance.snapshot.reason ?? "sign-in required")}
+                      : (railInstance.snapshot.version ??
+                        (railInstance.snapshot.state === "available"
+                          ? "ready"
+                          : (railInstance.snapshot.reason ?? "ready")))}
                   </div>
                 </div>
-                {/* An unavailable engine used to be a dead end here: dimmed
-                    rows and the reason hidden in a tooltip, at exactly the
-                    moment the user is trying to fix it. Show the way out. */}
-                {(railInstance.snapshot.state !== "available" || needsSignIn(railInstance)) && (
+                {/* CLI missing is the only setup dead-end. A missing cloud
+                    login is not — that engine can still run a local model. */}
+                {railInstance.snapshot.state !== "available" && (
                   <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
                     <EngineSetup instance={railInstance} />
                   </div>
                 )}
-                <div className="min-h-0 flex-1 overflow-y-auto">
                 {(() => {
                   const official = railInstance.models.options.filter((o) => !o.custom);
                   const custom = railInstance.models.options.filter((o) => o.custom);
-                  const disabled =
-                    railInstance.snapshot.state !== "available" ||
-                    railInstance.snapshot.authenticated === false;
                   const rows = pane === "custom" ? custom : official;
                   const customCurrent =
                     selection.instanceId === railInstance.instanceId &&
@@ -173,11 +160,9 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     return (
                       <button
                         key={option.id}
-                        disabled={disabled}
                         onClick={() => pick(railInstance, option.id)}
                         className={cn(
-                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
-                          disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
+                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink hover:bg-raised/60",
                           current && "bg-raised",
                         )}
                       >
@@ -196,29 +181,36 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
 
                   return (
                     <>
-                      {pane === "custom" && (
+                      <div className="min-h-0 flex-1 overflow-y-auto">
+                        {pane === "custom" && (
+                          <button
+                            onClick={() => setPane("main")}
+                            className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
+                          >
+                            <ChevronLeft size={14} />
+                            <span>Back</span>
+                          </button>
+                        )}
+                        {rows.map(row)}
+                        {pane === "custom" && custom.length === 0 && (
+                          <div className="px-2 py-3 text-[13px] text-ink-secondary">
+                            No extra models on this machine yet
+                          </div>
+                        )}
+                      </div>
+                      {pane === "main" && (
                         <button
-                          onClick={() => setPane("main")}
-                          className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
-                        >
-                          <ChevronLeft size={14} />
-                          <span>Back</span>
-                        </button>
-                      )}
-                      {rows.map(row)}
-                      {pane === "main" && custom.length > 0 && (
-                        <button
-                          disabled={disabled}
                           onClick={() => setPane("custom")}
                           className={cn(
-                            "mt-0.5 flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px]",
-                            disabled ? "cursor-not-allowed text-ink-secondary/50" : "text-ink hover:bg-raised/60",
+                            "mt-1 flex w-full shrink-0 items-center justify-between gap-2 border-t border-hairline/40 px-2 pb-0.5 pt-1.5 text-left text-[13px] text-ink hover:bg-raised/60",
                             customCurrent && "bg-raised",
                           )}
                         >
                           <span>
                             Custom
-                            <span className="ml-1.5 text-[11px] text-ink-secondary">{custom.length}</span>
+                            {custom.length > 0 && (
+                              <span className="ml-1.5 text-[11px] text-ink-secondary">{custom.length}</span>
+                            )}
                           </span>
                           <ChevronRight size={14} className="shrink-0 text-ink-secondary" />
                         </button>
@@ -226,7 +218,6 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     </>
                   );
                 })()}
-                </div>
               </>
             ) : (
               <div className="px-2 py-3 text-[13px] text-ink-secondary">

@@ -27,15 +27,14 @@ function Shell() {
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
 
-  // Nothing on this machine can run a bot. Wait for the first /api/instances
-  // response before deciding — an empty list means "not asked yet", and
-  // flashing the setup screen at every launch would be worse than the bug.
+  // Nothing on this machine can run a bot. A missing cloud login does not
+  // count — that CLI can still host a local model. Wait for the first
+  // /api/instances response before deciding: an empty list means "not asked
+  // yet", and flashing the setup screen at every launch would be worse.
   const noEngines =
     state.connected &&
     state.instances.length > 0 &&
-    !state.instances.some(
-      (i) => i.snapshot.state === "available" && i.snapshot.authenticated !== false,
-    );
+    !state.instances.some((i) => i.snapshot.state === "available");
 
   // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next.
   // Kept deliberately small; every panel already closes on Esc.

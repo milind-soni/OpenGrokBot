@@ -55,7 +55,7 @@ function EngineRow({
   label: string;
   readyNote: string;
 }) {
-  const ready = instance?.snapshot.state === "available" && instance.snapshot.authenticated !== false;
+  const ready = instance?.snapshot.state === "available";
   const version = instance?.snapshot.version ? ` · ${instance.snapshot.version.split(" ")[0]}` : "";
   return (
     <StatusRow ok={ready} warn title={`${label}${version}`} detail={ready ? readyNote : undefined}>

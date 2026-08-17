@@ -1,4 +1,4 @@
-import { Component, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -45,6 +45,7 @@ import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 import { webhookMessageView } from "@/lib/webhook-message";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
+import { expandWindowStart, resolveTranscriptWindow, tailWindowStart } from "@/lib/transcript-window";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -615,6 +616,26 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
+
+  // Windowed transcript: only a tail of the thread mounts (screenshots make
+  // full threads DOM-heavy). The boundary is anchored per bot+task; a
+  // render-phase reset re-tails it on switch so the old thread's boundary
+  // never flashes into the new one. Everything derived below (lastBotTextId,
+  // lastUserMessage, working dots) stays computed from the FULL list.
+  const transcriptKey = `${bot.id}:${bot.threadId}`;
+  const [transcriptWindow, setTranscriptWindow] = useState(() => ({
+    key: transcriptKey,
+    start: tailWindowStart(messages.length),
+  }));
+  if (transcriptWindow.key !== transcriptKey) {
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length) });
+  }
+  const {
+    visible: windowedMessages,
+    hiddenCount,
+    startIndex,
+  } = useMemo(() => resolveTranscriptWindow(messages, transcriptWindow.start), [messages, transcriptWindow.start]);
+
   const lastBotTextId = useMemo(
     () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
     [messages],
@@ -661,12 +682,36 @@ export function ChatView({ bot }: { bot: Bot }) {
   }, []);
 
   useEffect(() => setBottomFollow(true), [bot.id, setBottomFollow]);
+  // deps track the FULL messages.length, so expanding the window (which only
+  // changes windowedMessages) can never re-trigger this bottom scrollTo
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   }, [bot.id, messages.length, streaming, reasoning, bot.busy, follow]);
+
+  // Expanding prepends rows: capture the height first, then after the commit
+  // shift scrollTop by the growth so the message under the cursor stays put
+  // (browser scroll anchoring is disabled on this container).
+  const preExpandHeight = useRef<number | null>(null);
+  const showEarlier = () => {
+    preExpandHeight.current = scrollRef.current?.scrollHeight ?? null;
+    // expanding means reading scrollback — never let a mid-expand stream
+    // event pin the viewport back to the bottom
+    setBottomFollow(false);
+    const start = expandWindowStart(startIndex);
+    setTranscriptWindow((w) => ({ key: w.key, start }));
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (preExpandHeight.current === null || !el) return;
+    el.scrollTop += el.scrollHeight - preExpandHeight.current;
+    preExpandHeight.current = null;
+    // keep the resume-follow heuristic from reading the restore as a
+    // downward user scroll
+    previousScrollTop.current = el.scrollTop;
+  }, [transcriptWindow.start]);
 
   // keyboard is a scroll gesture too (upstream lesson): PageUp/Home break
   // follow like an upward wheel; the at-end onScroll check re-arms it
@@ -807,9 +852,19 @@ export function ChatView({ bot }: { bot: Bot }) {
           aria-live="polite"
           aria-label={`Conversation with ${bot.name}`}
         >
+          {hiddenCount > 0 && (
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={showEarlier}
+                className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+              >
+                Show earlier messages ({hiddenCount} more)
+              </button>
+            </div>
+          )}
           <MessagesList
             bot={bot}
-            messages={messages}
+            messages={windowedMessages}
             editingId={editingId}
             lastBotTextId={lastBotTextId}
             canRetryLast={!bot.busy && Boolean(lastUserMessage)}

@@ -2,7 +2,7 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ChevronDown, Pin } from "lucide-react";
 import {
   useStore,
@@ -11,6 +11,7 @@ import {
   type Bot,
   type Group,
   type GroupDefaultResponder,
+  type Message,
 } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
@@ -23,6 +24,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { cn } from "@/lib/cn";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
+import { expandWindowStart, resolveTranscriptWindow, tailWindowStart } from "@/lib/transcript-window";
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -54,12 +56,15 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: st
 const Transcript = memo(function Transcript({
   group,
   members,
+  messages,
 }: {
   group: Group;
   members: Bot[];
+  /** The windowed suffix of group.messages — the boundary lives in GroupView. */
+  messages: Message[];
 }) {
   const memberOf = (id?: string) => members.find((b) => b.id === id);
-  const textMessages = group.messages;
+  const textMessages = messages;
   return (
     <>
       {textMessages.map((m, i) => {
@@ -207,6 +212,26 @@ export function GroupView({ group }: { group: Group }) {
   );
   const speaker = members.find((b) => b.id === group.busyBotId);
 
+  // Windowed transcript, mirroring ChatView: only a tail of the room mounts;
+  // the anchored boundary re-tails on a render-phase reset when the room (or
+  // its thread) changes. Working dots below stay on the FULL list's tail.
+  const transcriptKey = `${group.id}:${group.threadId}`;
+  const [transcriptWindow, setTranscriptWindow] = useState(() => ({
+    key: transcriptKey,
+    start: tailWindowStart(group.messages.length),
+  }));
+  if (transcriptWindow.key !== transcriptKey) {
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length) });
+  }
+  const {
+    visible: windowedMessages,
+    hiddenCount,
+    startIndex,
+  } = useMemo(
+    () => resolveTranscriptWindow(group.messages, transcriptWindow.start),
+    [group.messages, transcriptWindow.start],
+  );
+
   const setBottomFollow = useCallback((next: boolean) => {
     followRef.current = next;
     setFollow(next);
@@ -214,12 +239,36 @@ export function GroupView({ group }: { group: Group }) {
 
   useEffect(() => setBottomFollow(true), [group.id, setBottomFollow]);
   useEffect(() => setBulletinDraft(group.bulletin), [group.id, group.bulletin]);
+  // deps track the FULL messages.length, so expanding the window (which only
+  // changes windowedMessages) can never re-trigger this bottom scrollTo
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   }, [group.id, group.messages.length, streaming, group.busyBotId, follow]);
+
+  // Expanding prepends rows: capture the height first, then after the commit
+  // shift scrollTop by the growth so the message under the cursor stays put
+  // (browser scroll anchoring is disabled on this container).
+  const preExpandHeight = useRef<number | null>(null);
+  const showEarlier = () => {
+    preExpandHeight.current = scrollRef.current?.scrollHeight ?? null;
+    // expanding means reading scrollback — never let a mid-expand stream
+    // event pin the viewport back to the bottom
+    setBottomFollow(false);
+    const start = expandWindowStart(startIndex);
+    setTranscriptWindow((w) => ({ key: w.key, start }));
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (preExpandHeight.current === null || !el) return;
+    el.scrollTop += el.scrollHeight - preExpandHeight.current;
+    preExpandHeight.current = null;
+    // keep the resume-follow heuristic from reading the restore as a
+    // downward user scroll
+    previousScrollTop.current = el.scrollTop;
+  }, [transcriptWindow.start]);
 
   const atEnd = () => {
     const el = scrollRef.current;
@@ -367,7 +416,17 @@ export function GroupView({ group }: { group: Group }) {
               </div>
             </div>
           )}
-          <Transcript group={group} members={members} />
+          {hiddenCount > 0 && (
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={showEarlier}
+                className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+              >
+                Show earlier messages ({hiddenCount} more)
+              </button>
+            </div>
+          )}
+          <Transcript group={group} members={members} messages={windowedMessages} />
           {speaker && showWorkingDots(true, streaming, group.messages.at(-1), speaker.id) && (
             <>
               <ClusterLabel bot={speaker} name={speaker.name} color={speaker.color} />

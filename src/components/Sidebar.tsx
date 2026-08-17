@@ -32,6 +32,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { downloadSelectedTeam } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { ClearTeamSprite } from "./ClearTeamSprite";
 import { RenameTitle } from "./RenameTitle";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
@@ -1120,6 +1121,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
       {/* Footer */}
       <div className="px-3 pb-3 pt-2">
+        <ClearTeamSprite />
         <button
           onClick={() => dispatch({ type: "showRoutines" })}
           className={cn(

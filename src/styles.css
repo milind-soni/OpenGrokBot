@@ -7,6 +7,7 @@
   --animate-caret: caret-blink 1s step-end infinite;
   --animate-msg-in: msg-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-shimmer: shimmer 2s linear infinite;
+  --animate-mascot-drift: mascot-drift 5.6s ease-in-out infinite;
 
   --color-app: #070707;
   --color-panel: #111111;
@@ -86,8 +87,15 @@ body {
   background-clip: text;
   color: transparent;
 }
+@keyframes mascot-drift {
+  0%, 100% { transform: translate3d(4px, 1px, 0) rotate(-8deg); }
+  25% { transform: translate3d(-6px, -8px, 0) rotate(5deg); }
+  50% { transform: translate3d(7px, -3px, 0) rotate(-3deg); }
+  75% { transform: translate3d(-3px, -7px, 0) rotate(7deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-caret, .animate-msg-in, .animate-shimmer { animation: none; }
+  .animate-caret, .animate-msg-in, .animate-shimmer, .animate-mascot-drift { animation: none; }
   .thinking-shimmer { background: none; color: var(--color-ink-secondary); }
   /* The drawer still moves, it just arrives instantly. */
   aside { transition: none; }

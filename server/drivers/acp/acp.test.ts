@@ -615,8 +615,8 @@ describe("ACP snapshot", () => {
     try {
       // favourites first in the user's own order, then the built-in slice
       expect(instance.models.options.slice(0, 2)).toEqual([
-        { id: "custom:Azure-Opus-0", label: "Azure Opus" },
-        { id: "custom:LMStudio-Qwen-0", label: "Qwen (local)" },
+        { id: "custom:Azure-Opus-0", label: "Azure Opus", custom: true },
+        { id: "custom:LMStudio-Qwen-0", label: "Qwen (local)", custom: true },
       ]);
       expect(instance.models.options.some((o) => o.id === "claude-opus-5")).toBe(true);
       expect(instance.models.default).toBe("custom:LMStudio-Qwen-0");

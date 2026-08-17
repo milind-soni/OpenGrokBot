@@ -220,7 +220,7 @@ export interface EngineInstall {
 // a rejection to an unavailable shadow snapshot.
 export interface ModelCatalog {
   default: string;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; custom?: boolean }>;
 }
 
 export interface DriverCreateInput<Config> {

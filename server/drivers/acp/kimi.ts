@@ -6,10 +6,11 @@
 // loadSession:true (session/load resume works), mcpCapabilities http+sse,
 // and a full session/new → session/prompt roundtrip streams
 // agent_thought_chunk + agent_message_chunk and settles with end_turn.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { ModelCatalog } from "../../contracts.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 function credentialsPath(env: Record<string, string | undefined>) {
@@ -17,20 +18,69 @@ function credentialsPath(env: Record<string, string | undefined>) {
   return join(dataRoot, "credentials", "kimi-code.json");
 }
 
+const STATIC_KIMI_MODELS: ModelCatalog = {
+  default: "kimi-code/k3",
+  options: [
+    { id: "kimi-code/k3", label: "Kimi K3" },
+    { id: "kimi-code/k3-256k", label: "Kimi K3 256K" },
+    { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
+    { id: "kimi-code/kimi-for-coding-highspeed", label: "Kimi for Coding Highspeed" },
+  ],
+};
+
+const SLUG = /^[a-z0-9][a-z0-9._:/-]*$/i;
+
+function readKimiModelCatalog(env: Record<string, string | undefined>): ModelCatalog {
+  const dataRoot = env.KIMI_CODE_HOME || join(env.HOME || env.USERPROFILE || homedir(), ".kimi-code");
+  let text = "";
+  try {
+    text = readFileSync(join(dataRoot, "config.toml"), "utf8");
+  } catch {
+    return STATIC_KIMI_MODELS;
+  }
+  const options = STATIC_KIMI_MODELS.options.map((o) => ({ ...o }));
+  const seen = new Set(options.map((o) => o.id));
+  let current: { slug: string; name?: string } | null = null;
+  const flush = () => {
+    if (!current || !SLUG.test(current.slug) || seen.has(current.slug)) {
+      current = null;
+      return;
+    }
+    seen.add(current.slug);
+    options.push({ id: current.slug, label: current.name || current.slug, custom: true });
+    current = null;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const stripped = line.trim();
+    if ((stripped.startsWith("[model.") || stripped.startsWith("[models.")) && stripped.endsWith("]")) {
+      flush();
+      let inner = stripped.replace(/^\[models?\./, "").slice(0, -1);
+      if (inner.startsWith('"') && inner.endsWith('"')) inner = inner.slice(1, -1);
+      current = { slug: inner };
+      continue;
+    }
+    if (stripped.startsWith("[")) {
+      flush();
+      continue;
+    }
+    if (!stripped || stripped.startsWith("#") || !stripped.includes("=")) continue;
+    const eq = stripped.indexOf("=");
+    const key = stripped.slice(0, eq).trim();
+    let value = stripped.slice(eq + 1).trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (current && (key === "name" || key === "label") && value) current.name = value;
+  }
+  flush();
+  return { default: STATIC_KIMI_MODELS.default, options };
+}
+
 const support: AcpSupport = {
   driverKind: "kimiAgent",
   displayName: "Kimi",
   // Aliases from the CLI's own catalog (~/.kimi-code/config.toml
   // [models."kimi-code/…"] — `kimi provider list` reports the same four).
-  models: {
-    default: "kimi-code/k3",
-    options: [
-      { id: "kimi-code/k3", label: "Kimi K3" },
-      { id: "kimi-code/k3-256k", label: "Kimi K3 256K" },
-      { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
-      { id: "kimi-code/kimi-for-coding-highspeed", label: "Kimi for Coding Highspeed" },
-    ],
-  },
+  models: STATIC_KIMI_MODELS,
+  resolveModels: (env) => readKimiModelCatalog(env),
   defaultCli: "kimi",
   nativeSource: "kimi.acp",
   loginNote: "Kimi Code CLI is not signed in — run `kimi login` in a terminal",

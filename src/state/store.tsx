@@ -197,7 +197,7 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
-  models: { default: string; options: Array<{ id: string; label: string }> };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean }> };
   capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; effortLevels?: readonly EffortLevel[] };
   install?: EngineInstall;
   /** Configured CLI path override — set ONLY when the user overrode it;

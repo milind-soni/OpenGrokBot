@@ -56,7 +56,7 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
       return;
     }
     seen.add(current.slug);
-    options.push({ id: current.slug, label: current.name || current.slug });
+    options.push({ id: current.slug, label: current.name || current.slug, custom: true });
     current = null;
   };
 

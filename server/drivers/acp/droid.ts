@@ -65,7 +65,7 @@ function resolveModels(env: Record<string, string | undefined>) {
   }
 
   const custom = (settings.customModels ?? []).flatMap((m) =>
-    m.id ? [{ id: m.id, label: m.displayName || m.id }] : [],
+    m.id ? [{ id: m.id, label: m.displayName || m.id, custom: true as const }] : [],
   );
   const merged = [...custom, ...MODELS.options.filter((o) => !custom.some((c) => c.id === o.id))];
 

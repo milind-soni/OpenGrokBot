@@ -94,9 +94,9 @@ let agentsMcp: McpEntry | null = null;
 
 /** Minimal one-shot MCP stdio client: initialize, call each tool in
  * sequence, return the text of the last result. Dependency-free. */
-function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: string) => unknown }>): Promise<string> {
+function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: string) => object }>): Promise<string> {
   return new Promise((resolve, reject) => {
-    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    const env = { ...process.env };
     for (const { name, value } of entry.env ?? []) env[name] = value;
     const child = spawn(entry.command, entry.args ?? [], { env, stdio: ["pipe", "pipe", "inherit"] });
     child.on("error", reject);

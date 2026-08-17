@@ -307,7 +307,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     dispatch({ type: "toggleAppSettings", open: true });
   };
 
-  const emptyState: Record<Exclude<Phase, "ready" | "local" | "vm">, string> = {
+  const emptyState = {
     checking: "Checking…",
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
@@ -320,7 +320,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     "vm-unavailable": "The Local VM isn't available for this bot",
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
-  };
+  } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
 
   return (
     <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">

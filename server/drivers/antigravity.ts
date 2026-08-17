@@ -242,7 +242,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (turn.model) args.push("--model", turn.model);
       if (resumeCursor) args.push("--conversation", resumeCursor);
 
-      const env: Record<string, string | undefined> = { ...process.env, PATH: augmentedPath() };
+      const env = { ...process.env, PATH: augmentedPath() };
 
       // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
       // owns the process-group vs windowsHide difference (see procs.ts)

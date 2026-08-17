@@ -2451,12 +2451,12 @@ const server = createServer(async (req, res) => {
         if (requestedComposioKey.trim()) {
           try {
             const prepared = await composio.prepareProjectSession(requestedComposioKey, cfg.composio);
-            patch.composio = { ...(patch.composio ?? {}), ...prepared };
+            patch.composio = { ...patch.composio, ...prepared };
           } catch (error) {
             return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
         } else {
-          patch.composio = { ...(patch.composio ?? {}), apiKey: "", sessionId: "" };
+          patch.composio = { ...patch.composio, apiKey: "", sessionId: "" };
         }
       }
       // check a box token against the provider before storing it: a

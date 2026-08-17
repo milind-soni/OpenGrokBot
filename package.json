@@ -21,6 +21,8 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "lint": "oxlint .",
     "dev": "vite",
     "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
@@ -58,6 +60,7 @@
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@tailwindcss/vite": "^4.1.11",
     "@types/node": "^26.2.0",
     "@types/react": "^19.1.9",
@@ -67,6 +70,7 @@
     "electron-builder": "^26.15.3",
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
+    "oxlint": "1.78.0",
     "tailwindcss": "^4.1.11",
     "typescript": "^5.8.3",
     "vite": "^7.1.0",

@@ -82,10 +82,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
       {open && (
         <div
           data-model-picker-content
-          className="absolute right-0 top-full z-30 mt-2 flex w-[320px] overflow-hidden rounded-xl border border-hairline/50 bg-card shadow-2xl shadow-black/50"
+          className="absolute right-0 top-full z-30 mt-2 flex max-h-[min(420px,calc(100dvh-8rem))] w-[320px] overflow-hidden rounded-xl border border-hairline/50 bg-card shadow-2xl shadow-black/50"
         >
           {/* instance rail */}
-          <div className="flex flex-col gap-1 border-r border-hairline/40 bg-panel p-2">
+          <div className="flex flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
             {state.instances.map((instance) => {
               const unavailable =
                 instance.snapshot.state !== "available" || instance.snapshot.authenticated === false;
@@ -115,10 +115,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
           </div>
 
           {/* model list for the rail-selected instance */}
-          <div className="min-w-0 flex-1 p-2">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2">
             {railInstance ? (
               <>
-                <div className="px-2 pb-1 pt-1">
+                <div className="shrink-0 px-2 pb-1 pt-1">
                   <div className="text-[13px] font-semibold text-ink">{railInstance.displayName}</div>
                   <div className="truncate text-[11px] text-ink-secondary">
                     {railInstance.snapshot.state === "available" &&
@@ -131,10 +131,11 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     rows and the reason hidden in a tooltip, at exactly the
                     moment the user is trying to fix it. Show the way out. */}
                 {(railInstance.snapshot.state !== "available" || needsSignIn(railInstance)) && (
-                  <div className="border-b border-hairline/40 px-2 pb-2.5">
+                  <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
                     <EngineSetup instance={railInstance} />
                   </div>
                 )}
+                <div className="min-h-0 flex-1 overflow-y-auto">
                 {railInstance.models.options.map((option) => {
                   const current =
                     selection.instanceId === railInstance.instanceId && selection.model === option.id;
@@ -164,6 +165,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                     </button>
                   );
                 })}
+                </div>
               </>
             ) : (
               <div className="px-2 py-3 text-[13px] text-ink-secondary">

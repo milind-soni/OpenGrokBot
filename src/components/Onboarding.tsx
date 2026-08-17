@@ -3,7 +3,10 @@ import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { EngineGroupLabel } from "./EngineGroupLabel";
 import { EngineSetup } from "./EngineSetup";
+import { ProviderMark } from "./ProviderIcons";
+import { splitEngineRail } from "@/lib/engine-rail";
 import type { InstanceInfo } from "@/state/store";
 
 // Three-step first-run onboarding: who you are (email), what's installed
@@ -17,12 +20,14 @@ function StatusRow({
   warn,
   title,
   detail,
+  mark,
   children,
 }: {
   ok: boolean;
   warn?: boolean;
   title: string;
   detail?: string;
+  mark?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -35,7 +40,10 @@ function StatusRow({
         {ok ? <Check size={14} /> : <AlertTriangle size={13} />}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[14px] font-medium text-ink">{title}</div>
+        <div className="flex items-center gap-2 text-[14px] font-medium text-ink">
+          {mark}
+          <span className="min-w-0 truncate">{title}</span>
+        </div>
         {detail && <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">{detail}</div>}
         {children}
       </div>
@@ -55,10 +63,16 @@ function EngineRow({
   label: string;
   readyNote: string;
 }) {
-  const ready = instance?.snapshot.state === "available" && instance.snapshot.authenticated !== false;
+  const ready = instance?.snapshot.state === "available" && (instance.access === "custom" || instance.snapshot.authenticated !== false);
   const version = instance?.snapshot.version ? ` · ${instance.snapshot.version.split(" ")[0]}` : "";
   return (
-    <StatusRow ok={ready} warn title={`${label}${version}`} detail={ready ? readyNote : undefined}>
+    <StatusRow
+      ok={ready}
+      warn
+      title={`${label}${version}`}
+      detail={ready ? readyNote : undefined}
+      mark={instance ? <ProviderMark driverKind={instance.driverKind} size={16} /> : undefined}
+    >
       {!ready &&
         (instance ? (
           <EngineSetup instance={instance} className="mt-0.5" />
@@ -132,16 +146,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     onDone();
   };
 
-  const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
-  const claude = byKind("claudeAgent");
-  const codex = byKind("codex");
-  const grok = byKind("grokAgent");
-  const antigravity = byKind("antigravityAgent");
-  const opencodeGo = byKind("opencodeGo");
+  const engines = (instances ?? []).filter((instance) => instance.install);
+  const { subscription, custom } = splitEngineRail(engines);
+  const readyNote = (instance: InstanceInfo) =>
+    instance.access === "custom"
+      ? "Installed — inject a local model to use this agent."
+      : "Installed — ready to power bots.";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
-      <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app p-4">
+      <div className="flex max-h-[calc(100dvh-2rem)] w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" state="happy" size={72} />
@@ -186,41 +200,44 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         )}
 
         {step === 1 && (
-          <div className="flex flex-col">
-            <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
-            <p className="mt-1 text-[13.5px] text-ink-secondary">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <h1 className="shrink-0 text-[18px] font-semibold text-ink">Your engines</h1>
+            <p className="mt-1 shrink-0 text-[13.5px] text-ink-secondary">
               Bots run on AI tools installed on this computer — here&rsquo;s what we found.
             </p>
-            <div className="mt-4 flex flex-col gap-2.5">
-              {!instances ? (
-                <div className="flex items-center gap-2 py-6 text-ink-secondary">
-                  <Loader2 size={16} className="animate-spin" /> Checking…
-                </div>
-              ) : (
-                <>
-                  <EngineRow
-                    instance={claude}
-                    label="Claude Code"
-                    readyNote="Installed and signed in — ready to power bots."
-                  />
-                  <EngineRow instance={codex} label="Codex" readyNote="Installed — bots can run on Codex too." />
-                  <EngineRow
-                    instance={grok}
-                    label="Grok Build"
-                    readyNote="Installed and signed in — bots can run on Grok too."
-                  />
-                  <EngineRow
-                    instance={antigravity}
-                    label="Antigravity"
-                    readyNote="Installed — bots can run on Antigravity too."
-                  />
-                  <EngineRow instance={opencodeGo} label="OpenCode Go" readyNote="Installed and configured." />
-                </>
-              )}
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5">
+              <div className="flex flex-col gap-2.5">
+                {!instances ? (
+                  <div className="flex items-center gap-2 py-6 text-ink-secondary">
+                    <Loader2 size={16} className="animate-spin" /> Checking…
+                  </div>
+                ) : (
+                  <>
+                    {subscription.length > 0 && <EngineGroupLabel className="px-1">Cloud</EngineGroupLabel>}
+                    {subscription.map((instance) => (
+                      <EngineRow
+                        key={instance.instanceId}
+                        instance={instance}
+                        label={instance.displayName}
+                        readyNote={readyNote(instance)}
+                      />
+                    ))}
+                    {custom.length > 0 && <EngineGroupLabel className="px-1 pt-1">Local</EngineGroupLabel>}
+                    {custom.map((instance) => (
+                      <EngineRow
+                        key={instance.instanceId}
+                        instance={instance}
+                        label={instance.displayName}
+                        readyNote={readyNote(instance)}
+                      />
+                    ))}
+                  </>
+                )}
+              </div>
             </div>
             <button
               onClick={() => (capabilities.dictation.available ? setStep(2) : finish())}
-              className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
+              className="mt-5 w-full shrink-0 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue
             </button>

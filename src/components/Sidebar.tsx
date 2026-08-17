@@ -32,6 +32,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { downloadSelectedTeam } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { RenameTitle } from "./RenameTitle";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -814,29 +815,24 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
 
 function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => void }) {
   const { state, dispatch } = useStore();
+  const [renaming, setRenaming] = useState(false);
   const selected = state.activeView === "chat" && state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
-  return (
-    <button
-      onClick={() => dispatch({ type: "select", id: bot.id })}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
-      }}
-      className={cn(
-        "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left",
-        bot.chiefOfStaff
-          ? selected
-            ? "border-accent/40 bg-accent/15"
-            : "border-accent/25 bg-accent/5 hover:bg-accent/10"
-          : selected
-            ? "border-transparent bg-raised"
-            : "border-transparent hover:bg-raised/50",
-      )}
-    >
+  const rowClass = cn(
+    "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left",
+    bot.chiefOfStaff
+      ? selected
+        ? "border-accent/40 bg-accent/15"
+        : "border-accent/25 bg-accent/5 hover:bg-accent/10"
+      : selected
+        ? "border-transparent bg-raised"
+        : "border-transparent hover:bg-raised/50",
+  );
+  const body = (
+    <>
       <MausAvatar
         color={bot.color}
         state={stateForBot({ ...bot, messages: visible })}
@@ -848,9 +844,15 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
         <div className="flex items-baseline justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
-            <span className="truncate">{bot.name}</span>
+            <RenameTitle
+              value={bot.name}
+              onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
+              onEditingChange={setRenaming}
+              className="truncate"
+              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[15px] font-semibold"
+            />
           </span>
-          {selected && last && (
+          {selected && last && !renaming && (
             <span className="shrink-0 text-xs text-ink-secondary">
               {formatTime(last.at)}
             </span>
@@ -871,7 +873,30 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
           )}
         </div>
       </div>
-    </button>
+    </>
+  );
+  return (
+    <div
+      role="button"
+      tabIndex={renaming ? -1 : 0}
+      onClick={() => {
+        if (!renaming) dispatch({ type: "select", id: bot.id });
+      }}
+      onKeyDown={(event) => {
+        if (renaming) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          dispatch({ type: "select", id: bot.id });
+        }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
+      }}
+      className={rowClass}
+    >
+      {body}
+    </div>
   );
 }
 

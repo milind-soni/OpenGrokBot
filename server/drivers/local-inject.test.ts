@@ -1,14 +1,27 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DroidAgentDriver, ensureDroidInjectModel } from "./acp/droid.ts";
 import { ensureGrokInjectSlug } from "./acp/grok.ts";
+import { ensureKimiInjectAlias, KimiAgentDriver } from "./acp/kimi.ts";
+import { ensureOpenCodeInjectModel } from "./acp/opencode-go.ts";
+import { AntigravityDriver } from "./antigravity.ts";
+
+const FAKE_ACP = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-acp-cli.ts");
+const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
+import { ensureHermesInjectProvider } from "./acp/hermes.ts";
+import { ensureQwenInjectModel } from "./acp/qwen.ts";
 import {
   applyClaudeInject,
+  applyOpenAIInject,
   codexLocalProviderArgs,
   decodeInjectId,
   encodeInjectId,
+  loadedIdsFromPayloads,
+  LOCAL_HOSTS,
   mergeLocalInject,
 } from "./local-inject.ts";
 
@@ -32,7 +45,77 @@ describe("inject ids", () => {
   });
 });
 
+describe("loadedIdsFromPayloads", () => {
+  const omlx = LOCAL_HOSTS.find((host) => host.id === "omlx")!;
+  const ollama = LOCAL_HOSTS.find((host) => host.id === "ollama")!;
+  const lmstudio = LOCAL_HOSTS.find((host) => host.id === "lmstudio")!;
+
+  it("uses oMLX /health default_model as the loaded pin", () => {
+    const loaded = loadedIdsFromPayloads(
+      omlx,
+      { data: [{ id: "gemma-4-31b-it-bf16" }, { id: "GLM-5.2-fp8" }] },
+      { default_model: "gemma-4-31b-it-bf16", engine_pool: { loaded_count: 1 } },
+    );
+    expect([...loaded]).toEqual(["gemma-4-31b-it-bf16"]);
+  });
+
+  it("uses Ollama /api/ps running models", () => {
+    const loaded = loadedIdsFromPayloads(
+      ollama,
+      { data: [{ id: "llama3.2:latest" }, { id: "mistral:latest" }] },
+      { models: [{ name: "llama3.2:latest", size: 1 }] },
+    );
+    expect([...loaded]).toEqual(["llama3.2:latest"]);
+  });
+
+  it("uses LM Studio state=loaded and skips not-loaded", () => {
+    const loaded = loadedIdsFromPayloads(
+      lmstudio,
+      { data: [{ id: "qwen" }, { id: "other" }] },
+      { data: [{ id: "qwen", state: "loaded" }, { id: "other", state: "not-loaded" }] },
+    );
+    expect([...loaded]).toEqual(["qwen"]);
+  });
+
+  it("does not pin a default_model that is not in the catalog", () => {
+    const loaded = loadedIdsFromPayloads(
+      omlx,
+      { data: [{ id: "gemma-4-31b-it-bf16" }] },
+      { default_model: "someone-elses-model" },
+    );
+    expect(loaded.size).toBe(0);
+  });
+});
+
 describe("mergeLocalInject", () => {
+  it("marks the oMLX /health default_model as loaded on the custom row", async () => {
+    const catalog = await mergeLocalInject(
+      { default: "keep", options: [{ id: "keep", label: "Keep" }] },
+      { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
+      async (url) => {
+        const href = String(url);
+        if (href.includes(":8080/v1/models")) {
+          return new Response(
+            JSON.stringify({ data: [{ id: "gemma-4-31b-it-bf16" }, { id: "GLM-5.2-fp8" }] }),
+            { status: 200 },
+          );
+        }
+        if (href.includes(":8080/health")) {
+          return new Response(
+            JSON.stringify({ default_model: "gemma-4-31b-it-bf16", engine_pool: { loaded_count: 1 } }),
+            { status: 200 },
+          );
+        }
+        return new Response("nope", { status: 500 });
+      },
+    );
+    expect(catalog.options.find((option) => option.id === "omlx::gemma-4-31b-it-bf16")).toMatchObject({
+      custom: true,
+      loaded: true,
+    });
+    expect(catalog.options.find((option) => option.id === "omlx::GLM-5.2-fp8")?.loaded).toBeUndefined();
+  });
+
   it("appends live host models as custom without touching official rows", async () => {
     const catalog = await mergeLocalInject(
       { default: "claude-sonnet-5", options: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }] },
@@ -47,6 +130,16 @@ describe("mergeLocalInject", () => {
     expect(catalog.options[0]).toEqual({ id: "claude-sonnet-5", label: "Claude Sonnet 5" });
     expect(catalog.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(true);
     expect(catalog.options.some((option) => option.id.includes("nomic"))).toBe(false);
+  });
+});
+
+describe("applyOpenAIInject", () => {
+  it("points an OpenAI-compatible CLI at the local host", () => {
+    const env: Record<string, string | undefined> = {};
+    const applied = applyOpenAIInject(env, "omlx::MiniMax-M3-4bit");
+    expect(applied).toEqual({ model: "MiniMax-M3-4bit", injected: true });
+    expect(env.OPENAI_BASE_URL).toBe("http://127.0.0.1:8080/v1");
+    expect(env.OPENAI_API_KEY).toBe("omlx");
   });
 });
 
@@ -99,5 +192,170 @@ describe("ensureGrokInjectSlug", () => {
     });
     const text = readFileSync(join(home, ".grok", "config.toml"), "utf8");
     expect(text).toContain(`api_key = "unsloth-secret"`);
+  });
+});
+
+describe("ensureKimiInjectAlias", () => {
+  it("writes an openai_legacy provider and model alias without touching hooks", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-inject-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "config.toml"), "# keep me\n[[hooks]]\nevent = \"Stop\"\n");
+    const first = ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const again = ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    expect(first).toBe("omlx/GLM-5.2-fp8");
+    expect(again).toBe(first);
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text).toContain("[[hooks]]");
+    expect(text.match(/\[providers\.omlx\]/g)?.length).toBe(1);
+    expect(text).toContain(`base_url = "http://127.0.0.1:8080/v1"`);
+    expect(text).toContain(`model = "GLM-5.2-fp8"`);
+  });
+});
+
+describe("ensureDroidInjectModel", () => {
+  it("upserts a generic-chat-completion BYOK row and reuses it", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-droid-inject-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".factory"), { recursive: true });
+    writeFileSync(join(home, ".factory", "settings.json"), JSON.stringify({ hooks: { Stop: [] } }));
+    const first = ensureDroidInjectModel("omlx::MiniMax-M3-4bit", { HOME: home });
+    const again = ensureDroidInjectModel("omlx::MiniMax-M3-4bit", { HOME: home });
+    expect(first).toBe("custom:openmausbot-omlx-MiniMax-M3-4bit");
+    expect(again).toBe(first);
+    const settings = JSON.parse(readFileSync(join(home, ".factory", "settings.json"), "utf8")) as {
+      hooks: unknown;
+      customModels: Array<{ id: string; model: string; baseUrl: string; provider: string }>;
+    };
+    expect(settings.hooks).toEqual({ Stop: [] });
+    expect(settings.customModels).toHaveLength(1);
+    expect(settings.customModels[0]).toMatchObject({
+      id: first,
+      model: "MiniMax-M3-4bit",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      provider: "generic-chat-completion-api",
+    });
+  });
+});
+
+describe("ensureOpenCodeInjectModel", () => {
+  it("merges a host provider into opencode.json without dropping existing models", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-opencode-inject-"));
+    scratchDirs.push(home);
+    const dir = join(home, ".config", "opencode");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "opencode.json"),
+      JSON.stringify({
+        provider: {
+          omlx: {
+            npm: "@ai-sdk/openai-compatible",
+            name: "oMLX",
+            options: { baseURL: "http://127.0.0.1:8080/v1" },
+            models: { "already-there": { name: "Keep me" } },
+          },
+        },
+      }),
+    );
+    const native = ensureOpenCodeInjectModel("omlx::GLM-5.2-fp8", { HOME: home });
+    expect(native).toBe("omlx/GLM-5.2-fp8");
+    const config = JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")) as {
+      provider: { omlx: { models: Record<string, { name: string }>; options: { baseURL: string } } };
+    };
+    expect(config.provider.omlx.models["already-there"]).toEqual({ name: "Keep me" });
+    expect(config.provider.omlx.models["GLM-5.2-fp8"]).toBeTruthy();
+    expect(config.provider.omlx.options.baseURL).toBe("http://127.0.0.1:8080/v1");
+  });
+});
+
+describe("ensureHermesInjectProvider", () => {
+  it("writes a named custom provider and returns the ACP model id", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-hermes-inject-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".hermes"), { recursive: true });
+    writeFileSync(join(home, ".hermes", "config.yaml"), "model:\n  provider: auto\n  base_url: https://openrouter.ai/api/v1\n");
+    const native = ensureHermesInjectProvider("omlx::gemma-4-31b-it-bf16", { HOME: home });
+    expect(native).toBe("custom:omlx:gemma-4-31b-it-bf16");
+    const again = ensureHermesInjectProvider("omlx::gemma-4-31b-it-bf16", { HOME: home });
+    expect(again).toBe(native);
+    const text = readFileSync(join(home, ".hermes", "config.yaml"), "utf8");
+    expect(text).toContain("provider: auto");
+    expect(text).toContain("https://openrouter.ai/api/v1");
+    expect(text.match(/^  omlx:$/gm)?.length).toBe(1);
+    expect(text).toContain("base_url: http://127.0.0.1:8080/v1");
+    expect(text).toContain("api_key: omlx");
+  });
+});
+
+describe("ensureQwenInjectModel", () => {
+  it("upserts an OpenAI-compatible provider without dropping existing rows", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-qwen-inject-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".qwen"), { recursive: true });
+    writeFileSync(
+      join(home, ".qwen", "settings.json"),
+      JSON.stringify({
+        modelProviders: {
+          openai: [{ id: "keep-me", name: "Keep me", baseUrl: "http://127.0.0.1:9/v1", envKey: "KEEP" }],
+        },
+      }),
+    );
+    const native = ensureQwenInjectModel("omlx::GLM-5.2-fp8", { HOME: home });
+    expect(native).toBe("GLM-5.2-fp8");
+    const settings = JSON.parse(readFileSync(join(home, ".qwen", "settings.json"), "utf8")) as {
+      env: Record<string, string>;
+      modelProviders: { openai: Array<{ id: string }> };
+    };
+    expect(settings.modelProviders.openai.map((row) => row.id)).toEqual(["keep-me", "GLM-5.2-fp8"]);
+    expect(settings.env.OPENMAUSBOT_QWEN_OMLX_API_KEY).toBe("omlx");
+  });
+});
+
+describe("live Custom lists on every local CLI harness", () => {
+  it("merges probed host models onto Kimi, Droid, and Antigravity", async () => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL) => {
+      if (String(url).includes(":8080")) {
+        return new Response(JSON.stringify({ data: [{ id: "GLM-5.2-fp8" }] }), { status: 200 });
+      }
+      return new Response("nope", { status: 500 });
+    }) as typeof fetch;
+    const home = mkdtempSync(join(tmpdir(), "omb-all-inject-"));
+    scratchDirs.push(home);
+    const environment = { HOME: home, OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" };
+    const instances = [
+      await KimiAgentDriver.create({
+        instanceId: "kimi",
+        displayName: "Kimi",
+        environment,
+        enabled: true,
+        config: { cli: FAKE_ACP, fullAuto: false },
+      }),
+      await DroidAgentDriver.create({
+        instanceId: "droid",
+        displayName: "Droid",
+        environment,
+        enabled: true,
+        config: { cli: FAKE_ACP, fullAuto: false },
+      }),
+      await AntigravityDriver.create({
+        instanceId: "agy",
+        displayName: "Antigravity",
+        environment,
+        enabled: true,
+        config: { cli: FAKE_AGY, fullAuto: true },
+      }),
+    ];
+    try {
+      for (const instance of instances) {
+        expect(instance.models.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(
+          true,
+        );
+      }
+    } finally {
+      globalThis.fetch = previous;
+      for (const instance of instances) await instance.dispose();
+    }
   });
 });

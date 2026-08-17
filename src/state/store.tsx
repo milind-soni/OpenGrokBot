@@ -197,8 +197,10 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
-  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean }> };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean }> };
   capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; effortLevels?: readonly EffortLevel[] };
+  /** `custom` agents sit below the rail divider — no subscription catalog. */
+  access?: "subscription" | "custom";
   install?: EngineInstall;
   /** Configured CLI path override — set ONLY when the user overrode it;
    * absent means the driver default is in effect. */

@@ -6,11 +6,12 @@
 // loadSession:true (session/load resume works), mcpCapabilities http+sse,
 // and a full session/new → session/prompt roundtrip streams
 // agent_thought_chunk + agent_message_chunk and settles with end_turn.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ModelCatalog } from "../../contracts.ts";
+import { decodeInjectId, hostApiKey, LOCAL_HOSTS, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 function credentialsPath(env: Record<string, string | undefined>) {
@@ -29,9 +30,78 @@ const STATIC_KIMI_MODELS: ModelCatalog = {
 };
 
 const SLUG = /^[a-z0-9][a-z0-9._:/-]*$/i;
+const LOCAL_PROVIDER_PREFIXES = LOCAL_HOSTS.map((host) => `${host.id}/`);
+
+function isLocalInjectAlias(slug: string): boolean {
+  return LOCAL_PROVIDER_PREFIXES.some((prefix) => slug.startsWith(prefix));
+}
+
+function kimiDataRoot(env: Record<string, string | undefined>): string {
+  return env.KIMI_CODE_HOME || join(env.HOME || env.USERPROFILE || homedir(), ".kimi-code");
+}
+
+function quoteToml(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function quoteTomlKey(key: string): string {
+  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
+  return quoteToml(key);
+}
+
+function hasTomlTable(text: string, heading: string): boolean {
+  return text.split(/\r?\n/).some((line) => line.trim() === heading);
+}
+
+/** Write [providers.host] + [models."host/alias"] so `kimi -m` hits the local host. */
+export function ensureKimiInjectAlias(
+  modelId: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const inject = decodeInjectId(modelId);
+  if (!inject) return modelId;
+  const host = localHost(inject.host);
+  if (!host) return modelId;
+
+  const alias = `${inject.host}/${inject.model.replace(/\//g, "-")}`;
+  const dataRoot = kimiDataRoot(env);
+  mkdirSync(dataRoot, { recursive: true });
+  const path = join(dataRoot, "config.toml");
+  let text = "";
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    text = "";
+  }
+
+  const providerHeading = `[providers.${inject.host}]`;
+  const modelHeading = `[models.${quoteTomlKey(alias)}]`;
+  const blocks: string[] = [];
+  if (!hasTomlTable(text, providerHeading)) {
+    blocks.push(
+      [
+        providerHeading,
+        `type = "openai_legacy"`,
+        `base_url = ${quoteToml(host.baseUrl)}`,
+        `api_key = ${quoteToml(hostApiKey(host, env))}`,
+        "",
+      ].join("\n"),
+    );
+  }
+  if (!hasTomlTable(text, modelHeading)) {
+    blocks.push(
+      [modelHeading, `provider = ${quoteToml(inject.host)}`, `model = ${quoteToml(inject.model)}`, ""].join("\n"),
+    );
+  }
+  if (blocks.length) {
+    const prefix = text && !text.endsWith("\n") ? `${text}\n\n` : text ? `${text}\n` : "";
+    writeFileSync(path, `${prefix}${blocks.join("\n")}`);
+  }
+  return alias;
+}
 
 function readKimiModelCatalog(env: Record<string, string | undefined>): ModelCatalog {
-  const dataRoot = env.KIMI_CODE_HOME || join(env.HOME || env.USERPROFILE || homedir(), ".kimi-code");
+  const dataRoot = kimiDataRoot(env);
   let text = "";
   try {
     text = readFileSync(join(dataRoot, "config.toml"), "utf8");
@@ -42,7 +112,7 @@ function readKimiModelCatalog(env: Record<string, string | undefined>): ModelCat
   const seen = new Set(options.map((o) => o.id));
   let current: { slug: string; name?: string } | null = null;
   const flush = () => {
-    if (!current || !SLUG.test(current.slug) || seen.has(current.slug)) {
+    if (!current || !SLUG.test(current.slug) || seen.has(current.slug) || isLocalInjectAlias(current.slug)) {
       current = null;
       return;
     }
@@ -80,7 +150,7 @@ const support: AcpSupport = {
   // Aliases from the CLI's own catalog (~/.kimi-code/config.toml
   // [models."kimi-code/…"] — `kimi provider list` reports the same four).
   models: STATIC_KIMI_MODELS,
-  resolveModels: (env) => readKimiModelCatalog(env),
+  resolveModels: (env) => mergeLocalInject(readKimiModelCatalog(env), env),
   defaultCli: "kimi",
   nativeSource: "kimi.acp",
   loginNote: "Kimi Code CLI is not signed in — run `kimi login` in a terminal",
@@ -100,6 +170,7 @@ const support: AcpSupport = {
 
   // -m is a global commander option and must precede the `acp` subcommand
   // (verified against 0.29.1).
+  resolveTurnModel: (model, env) => (model ? ensureKimiInjectAlias(model, env) : model),
   spawnArgs: (_config, turn) => {
     const model = turn.model;
     return [...(model ? ["-m", model] : []), "acp"];

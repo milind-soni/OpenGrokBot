@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 
 import { instanceConfigs, withInstanceCli, type AppConfig } from "./config.ts";
 
+describe("default fleet", () => {
+  it("ships Qwen and Hermes as custom-only engines", () => {
+    const map = instanceConfigs({});
+    expect(map.qwen).toEqual({ driver: "qwenAgent", environment: {} });
+    expect(map.hermes).toEqual({ driver: "hermesAgent", environment: {} });
+  });
+
+  it("adds missing custom-only engines onto an existing product fleet", () => {
+    const map = instanceConfigs({ instances: { claude: { driver: "claudeAgent" } } });
+    expect(map.claude.driver).toBe("claudeAgent");
+    expect(map.qwen?.driver).toBe("qwenAgent");
+    expect(map.hermes?.driver).toBe("hermesAgent");
+  });
+
+  it("does not expand a one-off shadow fleet", () => {
+    const map = instanceConfigs({ instances: { ghost: { driver: "not-a-real-driver" } } });
+    expect(Object.keys(map)).toEqual(["ghost"]);
+  });
+});
+
 describe("Instance CLI override", () => {
   it("sets, replaces, and clears config.cli on a default-fleet instance", () => {
     const cfg: AppConfig = {};

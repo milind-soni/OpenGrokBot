@@ -4,10 +4,13 @@
 // model on that CLI is still a valid pick, so every icon stays clickable
 // and Custom is always at the bottom of the list.
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
-import { EngineSetup, needsSignIn } from "./EngineSetup";
+import { EngineSetup, needsCli, needsSignIn } from "./EngineSetup";
+import { EngineGroupLabel } from "./EngineGroupLabel";
+import { filterCustomModels, partitionCustomModels } from "@/lib/custom-models";
+import { isCustomOnly, splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
@@ -19,6 +22,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   const [open, setOpen] = useState(false);
   const [railId, setRailId] = useState<string | null>(null);
   const [pane, setPane] = useState<"main" | "custom">("main");
+  const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const selection = bot.modelSelection;
@@ -41,7 +45,8 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (pane === "custom") setPane("main");
+      if (pane === "custom" && query) setQuery("");
+      else if (pane === "custom") setPane("main");
       else setOpen(false);
     };
     window.addEventListener("mousedown", onDown);
@@ -50,7 +55,11 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, pane]);
+  }, [open, pane, query]);
+
+  useEffect(() => {
+    if (!open || pane !== "custom") setQuery("");
+  }, [open, pane, railId]);
 
   const pick = (instance: InstanceInfo, model: string) => {
     // setModel replaces the whole selection, so a configured effort has to be
@@ -80,8 +89,9 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
             const next = !o;
             if (next) {
               const inst = state.instances.find((i) => i.instanceId === selection.instanceId);
+              const officialEmpty = !inst?.models.options.some((opt) => !opt.custom);
               const isCustom = inst?.models.options.some((opt) => opt.id === selection.model && opt.custom);
-              setPane(isCustom ? "custom" : "main");
+              setPane(isCustom || isCustomOnly(inst ?? {}) || officialEmpty ? "custom" : "main");
             }
             return next;
           });
@@ -101,25 +111,41 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
         >
           {/* instance rail */}
           <div className="flex flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
-            {state.instances.map((instance) => {
-              const onRail = instance.instanceId === railInstance?.instanceId;
+            {(() => {
+              const { subscription, custom } = splitEngineRail(state.instances);
+              const railButton = (instance: InstanceInfo) => {
+                const onRail = instance.instanceId === railInstance?.instanceId;
+                const officialEmpty = !instance.models.options.some((opt) => !opt.custom);
+                return (
+                  <button
+                    key={instance.instanceId}
+                    onClick={() => {
+                      setRailId(instance.instanceId);
+                      setPane(isCustomOnly(instance) || officialEmpty ? "custom" : "main");
+                    }}
+                    title={instance.displayName}
+                    className={cn(
+                      "flex size-9 items-center justify-center rounded-lg",
+                      onRail ? "bg-raised" : "hover:bg-raised/60",
+                    )}
+                  >
+                    <ProviderMark driverKind={instance.driverKind} size={18} />
+                  </button>
+                );
+              };
               return (
-                <button
-                  key={instance.instanceId}
-                  onClick={() => {
-                    setRailId(instance.instanceId);
-                    setPane("main");
-                  }}
-                  title={instance.displayName}
-                  className={cn(
-                    "flex size-9 items-center justify-center rounded-lg",
-                    onRail ? "bg-raised" : "hover:bg-raised/60",
+                <>
+                  {subscription.length > 0 && (
+                    <EngineGroupLabel className="px-0.5 pb-0.5 pt-0.5 text-center">Cloud</EngineGroupLabel>
                   )}
-                >
-                  <ProviderMark driverKind={instance.driverKind} size={18} />
-                </button>
+                  {subscription.map(railButton)}
+                  {custom.length > 0 && (
+                    <EngineGroupLabel className="px-0.5 pb-0.5 pt-1.5 text-center">Local</EngineGroupLabel>
+                  )}
+                  {custom.map(railButton)}
+                </>
               );
-            })}
+            })()}
           </div>
 
           {/* model list for the rail-selected instance */}
@@ -132,26 +158,35 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   </div>
                   <div className="truncate text-[11px] text-ink-secondary">
                     {pane === "custom"
-                      ? "Inject a local model into this agent"
+                      ? needsCli(railInstance)
+                        ? "Install this agent's CLI first, then inject a local model"
+                        : "Inject a local model into this agent"
+                      : isCustomOnly(railInstance)
+                        ? "No subscription catalog — inject a local model"
                       : (railInstance.snapshot.version ??
                         (railInstance.snapshot.state === "available"
                           ? "ready"
                           : (railInstance.snapshot.reason ?? "ready")))}
                   </div>
                 </div>
-                {/* Official-pane setup only. Custom is the inject list and
-                    must stay visible even when the cloud CLI is unsigned
-                    or the packaged app has not found it on PATH yet. */}
+                {/* Official pane: install + sign-in. Custom pane: install
+                    the CLI only — a missing cloud login must not block inject. */}
                 {pane === "main" &&
-                  (railInstance.snapshot.state !== "available" || needsSignIn(railInstance)) && (
+                  (needsCli(railInstance) || needsSignIn(railInstance)) && (
                   <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
                     <EngineSetup instance={railInstance} />
+                  </div>
+                )}
+                {pane === "custom" && needsCli(railInstance) && (
+                  <div className="shrink-0 border-b border-hairline/40 px-2 pb-2.5">
+                    <EngineSetup instance={railInstance} intent="inject" />
                   </div>
                 )}
                 {(() => {
                   const official = railInstance.models.options.filter((o) => !o.custom);
                   const custom = railInstance.models.options.filter((o) => o.custom);
-                  const rows = pane === "custom" ? custom : official;
+                  const filtered = pane === "custom" ? filterCustomModels(custom, query) : official;
+                  const { pinned, rest } = pane === "custom" ? partitionCustomModels(filtered) : { pinned: [], rest: filtered };
                   const customCurrent =
                     selection.instanceId === railInstance.instanceId &&
                     custom.some((o) => o.id === selection.model);
@@ -159,9 +194,9 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                   const row = (option: (typeof official)[number]) => {
                     const current =
                       selection.instanceId === railInstance.instanceId && selection.model === option.id;
-                    const disabled =
-                      !option.custom &&
-                      (railInstance.snapshot.state !== "available" || needsSignIn(railInstance));
+                    const disabled = option.custom
+                      ? needsCli(railInstance)
+                      : needsCli(railInstance) || needsSignIn(railInstance);
                     return (
                       <button
                         key={option.id}
@@ -188,20 +223,53 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
 
                   return (
                     <>
+                      {pane === "custom" && (
+                        <button
+                          onClick={() => setPane("main")}
+                          className="mb-0.5 flex w-full shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
+                        >
+                          <ChevronLeft size={14} />
+                          <span>Back</span>
+                        </button>
+                      )}
+                      {pane === "custom" && custom.length > 0 && (
+                        <div className="shrink-0 px-1 pb-1.5">
+                          <div className="flex items-center gap-1.5 rounded-lg bg-raised/70 px-2 py-1">
+                            <Search size={13} className="shrink-0 text-ink-secondary" />
+                            <input
+                              value={query}
+                              onChange={(e) => setQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  e.stopPropagation();
+                                  if (query) setQuery("");
+                                  else setPane("main");
+                                }
+                              }}
+                              placeholder="Search models"
+                              aria-label="Search local models"
+                              className="w-full bg-transparent text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
                       <div className="min-h-0 flex-1 overflow-y-auto">
-                        {pane === "custom" && (
-                          <button
-                            onClick={() => setPane("main")}
-                            className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] text-ink-secondary hover:bg-raised/60"
-                          >
-                            <ChevronLeft size={14} />
-                            <span>Back</span>
-                          </button>
+                        {pane === "custom" && pinned.length > 0 && (
+                          <EngineGroupLabel className="px-2 pb-0.5 pt-1">Loaded</EngineGroupLabel>
                         )}
-                        {rows.map(row)}
+                        {pinned.map(row)}
+                        {pane === "custom" && pinned.length > 0 && rest.length > 0 && (
+                          <div className="mx-2 my-1.5 border-t border-hairline/40" role="separator" />
+                        )}
+                        {rest.map(row)}
                         {pane === "custom" && custom.length === 0 && (
                           <div className="px-2 py-3 text-[13px] text-ink-secondary">
                             Start oMLX, Ollama, Unsloth, LM Studio, or EXO — live models show up here
+                          </div>
+                        )}
+                        {pane === "custom" && custom.length > 0 && filtered.length === 0 && (
+                          <div className="px-2 py-3 text-[13px] text-ink-secondary">
+                            Nothing matches “{query.trim()}”
                           </div>
                         )}
                       </div>

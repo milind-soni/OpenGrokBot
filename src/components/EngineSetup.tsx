@@ -40,6 +40,12 @@ export function needsSignIn(instance: InstanceInfo | undefined): boolean {
   return instance?.snapshot.state === "available" && instance.snapshot.authenticated === false;
 }
 
+/** True when this machine does not have the agent CLI — Custom inject
+ * cannot run until the user installs it. A missing cloud login is not this. */
+export function needsCli(instance: InstanceInfo | undefined): boolean {
+  return instance?.snapshot.state !== "available";
+}
+
 function CommandRow({ command }: { command: string }) {
   const [done, setDone] = useState<"copied" | "opened" | null>(null);
   const canOpen = Boolean(window.ogb?.openInstallTerminal);
@@ -94,14 +100,17 @@ function CommandRow({ command }: { command: string }) {
 export function EngineSetup({
   instance,
   className,
+  intent = "cloud",
 }: {
   instance: InstanceInfo;
   className?: string;
+  /** `inject` is the Custom-pane path: install the CLI, skip cloud sign-in. */
+  intent?: "cloud" | "inject";
 }) {
   const install = instance.install;
   const command = installCommandFor(install);
   const signIn = install?.signInCommand;
-  const signInOnly = needsSignIn(instance);
+  const signInOnly = intent === "cloud" && needsSignIn(instance);
 
   // No install descriptor at all means this isn't something you install —
   // the Box cloud runner is configured with a token in settings, not a CLI.
@@ -129,8 +138,9 @@ export function EngineSetup({
           {command ? (
             <>
               <p>
-                {instance.displayName} isn&rsquo;t installed. Run this in a terminal
-                {signIn ? `, then \`${signIn}\` to sign in` : ""}.
+                {intent === "inject"
+                  ? `${instance.displayName} isn’t installed. Install the CLI first — then you can inject a local model into it.`
+                  : `${instance.displayName} isn’t installed. Run this in a terminal${signIn ? `, then \`${signIn}\` to sign in` : ""}.`}
               </p>
               <CommandRow command={command} />
               {install?.needsNode && (

@@ -35,6 +35,7 @@ import { OptionCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { RenameTitle } from "./RenameTitle";
 import { TaskPicker } from "./TaskPicker";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
@@ -529,12 +530,18 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit: (id: string, text: string) => void;
   onRegenerate: () => void;
 }) {
+  const { dispatch } = useStore();
   return (
     <>
       {messages.length === 0 && !bot.busy && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <MausAvatar color={bot.color} state="idle" size={64} motion="none" motionKey={0} />
-          <div className="text-[17px] font-semibold text-ink">{bot.name}</div>
+          <RenameTitle
+            value={bot.name}
+            onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
+            className="text-[17px] font-semibold text-ink"
+            inputClassName="rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold"
+          />
           <div className="max-w-[360px] text-[14px] text-ink-secondary">
             {bot.description || "Send a message to start the conversation."}
           </div>
@@ -687,27 +694,33 @@ export function ChatView({ bot }: { bot: Bot }) {
         )}
         style={drag}
       >
-        <button
-          onClick={() => dispatch({ type: "toggleSettings" })}
-          className="flex items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-raised/50"
-          title="Bot settings"
-          style={noDrag}
-        >
-          <MausAvatar
-            color={bot.color}
-            state={stateForBot({ ...bot, messages })}
-            size={28}
-            motion={mascotMotion?.kind ?? "none"}
-            motionKey={mascotMotion?.nonce ?? 0}
+        <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1" style={noDrag}>
+          <button
+            onClick={() => dispatch({ type: "toggleSettings" })}
+            className="flex shrink-0 items-center rounded-lg p-0.5 hover:bg-raised/50"
+            title="Bot settings"
+          >
+            <MausAvatar
+              color={bot.color}
+              state={stateForBot({ ...bot, messages })}
+              size={28}
+              motion={mascotMotion?.kind ?? "none"}
+              motionKey={mascotMotion?.nonce ?? 0}
+            />
+          </button>
+          <RenameTitle
+            value={bot.name}
+            onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
+            className="truncate text-[15px] font-semibold text-ink"
+            inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
           />
-          <span className="text-[15px] font-semibold text-ink">{bot.name}</span>
           {bot.chiefOfStaff && (
             <span className="flex items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
               <Crown size={11} /> Chief of Staff
             </span>
           )}
           {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
-        </button>
+        </div>
         <div className="flex items-center gap-2" style={noDrag}>
           {bot.busy && (
             <button

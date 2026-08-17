@@ -159,19 +159,34 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // CLI"), so a default `gemini` instance could only ever show unavailable.
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
-  const map: InstanceConfigMap =
-    cfg.instances && Object.keys(cfg.instances).length
-      ? cfg.instances
-      : {
-          grok: { driver: "grokAgent" },
-          kimi: { driver: "kimiAgent" },
-          droid: { driver: "droidAgent" },
-          claude: { driver: "claudeAgent" },
-          codex: { driver: "codex" },
-          antigravity: { driver: "antigravityAgent" },
-          opencodeGo: { driver: "opencodeGo" },
-          computer: { driver: "boxAgent" },
-        };
+  const DEFAULT_FLEET: InstanceConfigMap = {
+    grok: { driver: "grokAgent" },
+    kimi: { driver: "kimiAgent" },
+    droid: { driver: "droidAgent" },
+    claude: { driver: "claudeAgent" },
+    codex: { driver: "codex" },
+    antigravity: { driver: "antigravityAgent" },
+    opencodeGo: { driver: "opencodeGo" },
+    computer: { driver: "boxAgent" },
+    qwen: { driver: "qwenAgent" },
+    hermes: { driver: "hermesAgent" },
+  };
+  const CUSTOM_ONLY = {
+    qwen: { driver: "qwenAgent" },
+    hermes: { driver: "hermesAgent" },
+  } as const;
+  const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
+  const map: InstanceConfigMap = configured ? { ...configured } : { ...DEFAULT_FLEET };
+  // Product fleets pick up newly shipped custom-only engines. A one-off
+  // test/shadow map (no claude/grok/codex) is left exactly as written.
+  if (
+    configured &&
+    (Object.hasOwn(configured, "claude") || Object.hasOwn(configured, "grok") || Object.hasOwn(configured, "codex"))
+  ) {
+    for (const [id, entry] of Object.entries(CUSTOM_ONLY)) {
+      if (!Object.hasOwn(map, id)) map[id] = { ...entry };
+    }
+  }
   for (const entry of Object.values(map)) {
     entry.environment = {
       ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),

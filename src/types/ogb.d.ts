@@ -1,5 +1,5 @@
 // The narrow bridge the Electron preload exposes. Absent in the browser.
-export {};
+
 
 declare global {
   type DesktopCapabilities = {

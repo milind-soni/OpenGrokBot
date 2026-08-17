@@ -56,10 +56,9 @@ export function execCli(
  * each, and both are setup problems the user can fix, so say which. The
  * `setup` flag lets the UI offer "Install" instead of a "Retry" that is
  * guaranteed to fail the same way. */
-export function describeSpawnFailure(
-  err: NodeJS.ErrnoException,
-  cli: string,
-): { message: string; setup: boolean } {
+type SpawnFailure = { message: string; setup: boolean };
+
+export function describeSpawnFailure(err: NodeJS.ErrnoException, cli: string): SpawnFailure {
   if (err.code === "ENOENT")
     return { message: `\`${cli}\` isn't installed, or isn't on this app's PATH`, setup: true };
   if (err.code === "EACCES" || err.code === "EPERM")

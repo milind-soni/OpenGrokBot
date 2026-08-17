@@ -400,7 +400,7 @@ const send = (obj: unknown): void => {
   process.stdout.write(JSON.stringify(obj) + "\n");
 };
 const text = (id: unknown, t: string, isError = false): void =>
-  send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) } });
+  send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: t }], isError: isError || undefined } });
 
 /** An action result: the text plus the frame the action produced. When
  * the pixels are byte-identical to the frame the model just saw, the

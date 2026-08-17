@@ -658,7 +658,17 @@ bus.subscribe((event: RuntimeEvent) => {
 type Frame = { png: string; mime: string };
 const screenPollers = new Map<
   string,
-  { timer: ReturnType<typeof setInterval> | null; capture: () => Promise<void>; last: Frame | null }
+  {
+    timer: ReturnType<typeof setInterval> | null;
+    capture: () => Promise<void>;
+    last: Frame | null;
+    /** Did this turn actually reach for the screen? A bot that merely HAS
+     * a computer would otherwise end every reply — a one-word "yes"
+     * included — with the same picture of an idle desktop. The flag lives
+     * on the poller entry, which is created and dropped per turn, so it
+     * cannot leak into a later one. */
+    touched: boolean;
+  }
 >();
 
 /** The preview shares the box's single command endpoint with the agent's
@@ -668,7 +678,10 @@ const screenPollers = new Map<
 const SCREEN_POLL_MS = 6000;
 const SCREEN_MIN_GAP_MS = 3000;
 
-function startScreenPoller(botId: string, boxId?: string) {
+/** `screenIsTheWork` starts the turn already counting as screen usage: a
+ * boxAgent's whole session runs ON the box, so every tool it calls acts on
+ * that screen even though none of them is named like a computer tool. */
+function startScreenPoller(botId: string, boxId?: string, { screenIsTheWork = false } = {}) {
   if (screenPollers.has(botId) || !box.boxConfigured(cfg)) return;
   // One capture at a time, shared by the interval, the pokes, and the
   // turn-end grab: awaiting the in-flight promise (rather than dropping the
@@ -699,6 +712,7 @@ function startScreenPoller(botId: string, boxId?: string) {
       return current;
     },
     last: null as Frame | null,
+    touched: screenIsTheWork,
   };
   entry.timer = setInterval(() => void entry.capture(), SCREEN_POLL_MS);
   screenPollers.set(botId, entry);
@@ -709,7 +723,13 @@ function startScreenPoller(botId: string, boxId?: string) {
  * capture() — a tool-heavy turn used to fire one full REST chain per
  * completed tool, competing with the agent for the same endpoint. */
 function pokeScreenPoller(botId: string) {
-  void screenPollers.get(botId)?.capture();
+  const entry = screenPollers.get(botId);
+  if (!entry) return;
+  // the same signal, read twice: a completed computer tool is both the
+  // reason to refresh the preview NOW and the proof that this turn's
+  // final frame is worth settling into the transcript
+  entry.touched = true;
+  void entry.capture();
 }
 
 function stopScreenPoller(botId: string) {
@@ -721,12 +741,16 @@ function stopScreenPoller(botId: string) {
 
 /** Turn end: stop polling, then take ONE last fresh frame (awaiting any
  * in-flight poke first) so the settled screenshot shows the screen's actual
- * end state, not the previous action's. */
+ * end state, not the previous action's. A turn that never touched the
+ * screen settles nothing — and skips the capture, which is one less
+ * command on the box's single endpoint. Either way the poller is torn down
+ * here, so no per-turn state survives the turn. */
 async function finalScreenFrame(botId: string): Promise<Frame | null> {
   const entry = screenPollers.get(botId);
   if (!entry) return null;
   if (entry.timer) clearInterval(entry.timer);
   screenPollers.delete(botId);
+  if (!entry.touched) return null;
   await entry.capture();
   return entry.last;
 }
@@ -1009,7 +1033,13 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
-      if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
+      // a turn can settle before dispatch returns, and a poller started
+      // after its own turn.completed would never be torn down — it would
+      // keep polling the box forever, carrying dead per-turn state. busy
+      // is flipped false in the fold, so it is the honest "still running".
+      if (previewBoxId && store.bot(bot.id)?.busy) {
+        startScreenPoller(bot.id, previewBoxId, { screenIsTheWork: instance.driverKind === "boxAgent" });
+      }
     } catch (e) {
       localVmLease.release(threadId);
       if (localVmActiveThread === threadId) localVmActiveThread = null;
@@ -2442,12 +2472,12 @@ const server = createServer(async (req, res) => {
         if (requestedComposioKey.trim()) {
           try {
             const prepared = await composio.prepareProjectSession(requestedComposioKey, cfg.composio);
-            patch.composio = { ...(patch.composio ?? {}), ...prepared };
+            patch.composio = { ...patch.composio, ...prepared };
           } catch (error) {
             return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
         } else {
-          patch.composio = { ...(patch.composio ?? {}), apiKey: "", sessionId: "" };
+          patch.composio = { ...patch.composio, apiKey: "", sessionId: "" };
         }
       }
       // check a box token against the provider before storing it: a

@@ -72,7 +72,7 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
     const api = async (path: string, opts: RequestInit = {}) => {
       const res = await fetch(`${BOX_API}${path}`, {
         ...opts,
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(opts.headers ?? {}) },
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...opts.headers },
         signal: (opts as any).signal ?? AbortSignal.timeout(30_000),
       });
       const body: any = await res.json().catch(() => null);

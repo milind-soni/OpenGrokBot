@@ -12,6 +12,7 @@ import { ModelPicker } from "./ModelPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { requestNotificationPermission } from "@/lib/notify";
+import { shortPath } from "@/lib/short-path";
 
 function Field({
   label,
@@ -30,11 +31,6 @@ function Field({
 
 const inputCls =
   "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline";
-
-/** ~ for the home folder, so a path reads at a glance. */
-export function shortPath(p: string, home: string | undefined): string {
-  return home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-}
 
 /** Where a bot's shell tools run. Set per bot; each task pins its own copy
  * on its first turn (the server does the pinning — Claude keeps sessions

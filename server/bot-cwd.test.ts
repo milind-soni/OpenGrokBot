@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -20,9 +20,9 @@ describe("validateBotCwd", () => {
   });
 
   it("expands a leading ~ to the home folder", () => {
-    const out = validateBotCwd("~");
-    expect(out.ok).toBe(true);
-    if (out.ok) expect(out.cwd).not.toContain("~");
+    // compare against homedir() itself: a Windows home like C:\Users\RUNNER~1
+    // legitimately contains "~", so "no ~ in the output" is not a valid check
+    expect(validateBotCwd("~")).toEqual({ ok: true, cwd: resolve(homedir()) });
   });
 
   it("rejects relative paths, files, and missing folders with a reason", () => {

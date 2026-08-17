@@ -131,6 +131,12 @@ describe("comms e2e (fake ACP fleet)", () => {
             environment: { FAKE_ACP_MODE: "empty-reply" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
+          // a turn that remains busy until provider reload disposes it.
+          helperHang: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "hang" },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
         },
       }),
     );
@@ -407,6 +413,70 @@ describe("comms e2e (fake ACP fleet)", () => {
       }
     },
     45_000,
+  );
+
+  it(
+    "finalizes a delegated turn interrupted by provider reload",
+    async () => {
+      const seeded = (await api("GET", "/api/bots")).body.bots[0];
+      await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
+      const helper = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${helper.id}`, {
+        name: "Helper",
+        modelSelection: { instanceId: "helperHang", model: "fake-model" },
+      });
+      const asker = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${asker.id}`, {
+        name: "Asker",
+        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+      });
+
+      const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
+      expect(send.status).toBe(202);
+
+      let channelId: string | undefined;
+      const busyDeadline = Date.now() + 30_000;
+      for (;;) {
+        const state = (await api("GET", "/api/bots")).body;
+        const askerBot = state.bots.find((b: any) => b.id === asker.id);
+        const helperBot = state.bots.find((b: any) => b.id === helper.id);
+        channelId = askerBot.messages.find(
+          (m: any) => m.kind === "activity" && m.tool?.name === "Messaged @Helper",
+        )?.comm?.groupId;
+        if (channelId && helperBot.busy) break;
+        if (Date.now() > busyDeadline) {
+          throw new Error(`delegated hanging turn never started. stderr: ${stderr.slice(-2000)}`);
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      // Any provider credential change rebuilds the fleet and settles busy
+      // turns without relying on a provider turn.completed event.
+      const reload = await api("PUT", "/api/config", { xai: { key: "xai_reload_test" } });
+      expect(reload.status).toBe(200);
+
+      const terminalDeadline = Date.now() + 30_000;
+      for (;;) {
+        const state = (await api("GET", "/api/bots")).body;
+        const channel = state.groups.find((g: any) => g.id === channelId);
+        const terminal = channel?.messages.filter(
+          (m: any) =>
+            m.from?.botId === helper.id
+            && m.kind === "activity"
+            && m.tool?.ok === false
+            && m.tool?.name === "Delegated turn did not finish — provider settings changed",
+        );
+        if (terminal?.length === 1) break;
+        if (Date.now() > terminalDeadline) {
+          throw new Error(
+            `provider reload did not finalize delegation. channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\n` +
+              `stderr: ${stderr.slice(-2000)}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    },
+    60_000,
   );
 
   it(

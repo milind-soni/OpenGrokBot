@@ -534,23 +534,7 @@ bus.subscribe((event) => {
             // the request was mirrored there when the delegation drained, and a
             // channel that only ever shows requests is half a record. Mirror the
             // reply on success; mirror a failed/stopped terminal chip otherwise.
-            const watched = delegationWatch.get(event.threadId);
-            if (watched) {
-                delegationWatch.delete(event.threadId);
-                const target = store.bot(watched.toBotId);
-                const channel = watched.channelId ? store.group(watched.channelId) : undefined;
-                if (target && channel) {
-                    if (event.ok && reply.trim()) {
-                        mirrorReply(commsBus, target, reply, channel);
-                    }
-                    else if (event.ok) {
-                        mirrorActivity(commsBus, target, channel, "Delegated turn completed", true);
-                    }
-                    else {
-                        mirrorActivity(commsBus, target, channel, "Delegated turn did not finish", false);
-                    }
-                }
-            }
+            finalizeDelegationWatch(event.threadId, event.ok, reply);
             // group busy/unread settle in the group turn engine, which knows
             // whether more member turns are queued behind this one
             break;
@@ -563,6 +547,26 @@ bus.subscribe((event) => {
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
 const delegationWatch = new Map();
+/** Consume one delegated-turn watch and mirror exactly one terminal state.
+ * Some harness paths settle a busy bot without a provider turn.completed
+ * event, so they call this same finalizer explicitly. */
+function finalizeDelegationWatch(threadId, ok, reply = "", failureName = "Delegated turn did not finish") {
+    const watched = delegationWatch.get(threadId);
+    if (!watched)
+        return false;
+    delegationWatch.delete(threadId);
+    const target = store.bot(watched.toBotId);
+    const channel = watched.channelId ? store.group(watched.channelId) : undefined;
+    if (!target || !channel)
+        return true;
+    if (ok && reply.trim())
+        mirrorReply(commsBus, target, reply, channel);
+    else if (ok)
+        mirrorActivity(commsBus, target, channel, "Delegated turn completed", true);
+    else
+        mirrorActivity(commsBus, target, channel, failureName, false);
+    return true;
+}
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
 // fold (which has its own switch/case noise) and its approval + startTurn
@@ -588,10 +592,11 @@ bus.subscribe((event) => {
             if (failureReported)
                 return;
             failureReported = true;
-            if (targetThreadId)
-                delegationWatch.delete(targetThreadId);
             const bot = store.bot(toBotId);
             const why = error instanceof Error ? error.message : String(error);
+            if (targetThreadId) {
+                finalizeDelegationWatch(targetThreadId, false, "", `Delegated turn could not start — ${why.slice(0, 120)}`);
+            }
             const source = store.botByThread(sourceThreadId);
             if (!source)
                 return;
@@ -601,11 +606,6 @@ bus.subscribe((event) => {
                 tool: { name: `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, ok: false },
             });
             broadcast({ kind: "message", threadId: sourceThreadId, message: note });
-            // The channel promised an exchange; a turn that never starts is a
-            // terminal state too, and it belongs where the request is visible.
-            if (bot && channel) {
-                mirrorActivity(commsBus, bot, channel, `Delegated turn could not start — ${why.slice(0, 120)}`, false);
-            }
         };
         return startTurn(toBotId, text, {
             commsDepth,
@@ -1201,6 +1201,7 @@ async function reloadProviders() {
     // forever. Settle anything still marked busy.
     for (const b of store.bots.filter((b) => b.busy)) {
         stopScreenPoller(b.id);
+        finalizeDelegationWatch(b.threadId, false, "", "Delegated turn did not finish — provider settings changed");
         const note = store.appendMessage(b.threadId, {
             role: "bot",
             kind: "activity",

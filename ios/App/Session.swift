@@ -11,6 +11,8 @@ import Foundation
 import OSLog
 import SwiftUI
 import CompanionCore
+import UserNotifications
+import UIKit
 
 /// Stream lifecycle, in Console.app and the Xcode console. A companion that
 /// is silently not connected looks exactly like one with nothing to say, so
@@ -33,6 +35,9 @@ final class Session: ObservableObject {
     @Published private(set) var status: Status = .unpaired
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String?
+    /// One exact message the next opened chat should reveal.
+    @Published private(set) var focusedMessageId: String?
+    @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
 
     private var client: CompanionClient?
     private var streamTask: Task<Void, Never>?
@@ -54,7 +59,20 @@ final class Session: ObservableObject {
     // MARK: - Pairing
 
     init() {
+        _ = NotificationCoordinator.shared
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-store-preview"),
+           let url = Bundle.main.url(forResource: "StorePreview", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
+            connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
+            state.hydrate(fleet)
+            status = .live
+            return
+        }
+#endif
         restore()
+        Task { await refreshNotificationAuthorization() }
     }
 
     /// Rebuild the last connection at launch.
@@ -126,6 +144,7 @@ final class Session: ObservableObject {
         connection = nil
         client = nil
         state = CompanionState()
+        NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
     }
 
@@ -235,6 +254,10 @@ final class Session: ObservableObject {
                         continue
                     }
                     state.apply(frame)
+                    if case let .notify(notification) = frame.frame {
+                        NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
+                    }
+                    NotificationCoordinator.shared.setBadge(state.unreadCount)
                     state.advance(to: frame.seq)
                 }
                 // the stream ended without an error — the harness went away
@@ -268,6 +291,7 @@ final class Session: ObservableObject {
         let fleet = try await client.fleet(messages: 50)
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         state.hydrate(fleet)
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
     // MARK: - Actions
@@ -356,6 +380,137 @@ final class Session: ObservableObject {
 
     func image(threadId: String, messageId: String) async -> Data? {
         try? await client?.image(threadId: threadId, messageId: messageId)
+    }
+
+    func search(_ query: String) async -> [SearchHit] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, let client else { return [] }
+        do { return try await client.search(trimmed) }
+        catch {
+            actionError = error.localizedDescription
+            return []
+        }
+    }
+
+    /// Resolve a SQLite search hit into the live task/branch, load a page
+    /// around it, and hand navigation the current chat record.
+    func open(_ hit: SearchHit) async -> Chat? {
+        guard let client else { return nil }
+        do {
+            if let botId = hit.botId, var bot = state.bot(botId) {
+                if bot.threadId != hit.threadId {
+                    bot = try await client.switchTask(botId: bot.id, threadId: hit.threadId)
+                    state.apply(.bot(bot))
+                }
+                if !hit.onActivePath {
+                    let leaf = try await client.setActiveBranch(botId: bot.id, messageId: hit.messageId)
+                    state.apply(.thread(threadId: hit.threadId, activeLeafId: leaf))
+                }
+                let page = try await client.messages(threadId: hit.threadId, around: hit.messageId)
+                state.merge(page, intoThread: hit.threadId)
+                focusedMessageId = hit.messageId
+                return state.bot(bot.id).map(Chat.bot)
+            }
+            if let groupId = hit.groupId,
+               let room = state.rooms.first(where: { $0.id == groupId }) {
+                let page = try await client.messages(threadId: hit.threadId, around: hit.messageId)
+                state.merge(page, intoThread: hit.threadId)
+                focusedMessageId = hit.messageId
+                return .room(room)
+            }
+        } catch { actionError = error.localizedDescription }
+        return nil
+    }
+
+    func consumeFocus(_ messageId: String) {
+        if focusedMessageId == messageId { focusedMessageId = nil }
+    }
+
+    func createTask(for bot: Bot, title: String?) async {
+        guard let client else { return }
+        do { state.apply(.bot(try await client.createTask(botId: bot.id, title: title))) }
+        catch { actionError = error.localizedDescription }
+    }
+
+    func switchTask(_ task: BotTask, for bot: Bot) async {
+        guard let client, task.threadId != bot.threadId else { return }
+        do { state.apply(.bot(try await client.switchTask(botId: bot.id, threadId: task.threadId))) }
+        catch { actionError = error.localizedDescription }
+    }
+
+    func renameTask(_ task: BotTask, for bot: Bot, title: String) async {
+        guard let client else { return }
+        do {
+            try await client.renameTask(botId: bot.id, threadId: task.threadId, title: title)
+            await refresh()
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func deleteTask(_ task: BotTask, for bot: Bot) async {
+        guard let client else { return }
+        do { state.apply(.bot(try await client.deleteTask(botId: bot.id, threadId: task.threadId))) }
+        catch { actionError = error.localizedDescription }
+    }
+
+    func react(to message: Message, in threadId: String, emoji: String) async {
+        guard let client else { return }
+        do {
+            let patched = try await client.toggleReaction(threadId: threadId, messageId: message.id, emoji: emoji)
+            state.apply(.messagePatch(threadId: threadId, message: patched))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func edit(_ message: Message, for bot: Bot, text: String) async {
+        await perform { try await $0.edit(botId: bot.id, messageId: message.id, text: text) }
+    }
+
+    func switchVersion(to message: Message, for bot: Bot) async {
+        guard let client else { return }
+        do {
+            let leaf = try await client.setActiveBranch(botId: bot.id, messageId: message.id)
+            state.apply(.thread(threadId: bot.threadId, activeLeafId: leaf))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func export(threadId: String, format: String) async -> URL? {
+        guard let client else { return nil }
+        do {
+            let exported = try await client.export(threadId: threadId, format: format)
+            let name = URL(fileURLWithPath: exported.filename).lastPathComponent
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            try exported.data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            actionError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func refreshNotificationAuthorization() async {
+        notificationAuthorization = await NotificationCoordinator.shared.authorizationStatus()
+    }
+
+    func enableNotifications() async {
+        if notificationAuthorization == .denied {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                await UIApplication.shared.open(url)
+            }
+            return
+        }
+        _ = await NotificationCoordinator.shared.requestAuthorization()
+        await refreshNotificationAuthorization()
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    var notificationStatusText: String {
+        switch notificationAuthorization {
+        case .authorized: return "On"
+        case .provisional: return "Quietly on"
+        case .ephemeral: return "Temporarily on"
+        case .denied: return "Off in Settings"
+        case .notDetermined: return "Not enabled"
+        @unknown default: return "Unknown"
+        }
     }
 
     private func perform(quietly: Bool = false, _ body: (CompanionClient) async throws -> Void) async {

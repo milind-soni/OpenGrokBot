@@ -249,6 +249,48 @@ public struct CompanionClient: Sendable {
         return try await send(try makeRequest("GET", "/api/threads/\(threadId)/messages", query: query), as: ThreadPage.self)
     }
 
+    /// A page containing one exact message, for landing on a search hit.
+    public func messages(threadId: String, around messageId: String, limit: Int = 50) async throws -> ThreadPage {
+        let query = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "around", value: messageId),
+        ]
+        return try await send(try makeRequest("GET", "/api/threads/\(threadId)/messages", query: query), as: ThreadPage.self)
+    }
+
+    public func search(_ query: String, limit: Int = 40) async throws -> [SearchHit] {
+        let items = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        return try await send(try makeRequest("GET", "/api/search", query: items), as: SearchResponse.self).hits
+    }
+
+    public func export(threadId: String, format: String) async throws -> TranscriptExport {
+        let request = try makeRequest(
+            "GET",
+            "/api/threads/\(threadId)/export",
+            query: [URLQueryItem(name: "format", value: format)]
+        )
+        let (data, response) = try await perform(request)
+        try Self.check(response, data)
+        let http = response as? HTTPURLResponse
+        let fallback = "transcript.\(format == "json" ? "json" : "md")"
+        let disposition = http?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        let filenamePart = disposition
+            .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.lowercased().hasPrefix("filename=") }
+        let filename = filenamePart.map {
+            String($0.dropFirst("filename=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        } ?? fallback
+        return TranscriptExport(
+            data: data,
+            filename: filename,
+            contentType: http?.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream"
+        )
+    }
+
     public func instances() async throws -> [Instance] {
         try await send(try makeRequest("GET", "/api/instances"), as: InstanceList.self).instances
     }
@@ -297,6 +339,46 @@ public struct CompanionClient: Sendable {
     /// the key and puts it on the card; the phone never derives its own.
     public func alwaysAllow(botId: String, key: String) async throws {
         try await send(try makeRequest("POST", "/api/bots/\(botId)/always-allow", body: ["allowKey": key]))
+    }
+
+    public func toggleReaction(threadId: String, messageId: String, emoji: String) async throws -> Message {
+        try await send(
+            try makeRequest(
+                "POST",
+                "/api/threads/\(threadId)/messages/\(messageId)/reactions",
+                body: ["emoji": emoji]
+            ),
+            as: MessageResponse.self
+        ).message
+    }
+
+    public func edit(botId: String, messageId: String, text: String) async throws {
+        try await send(try makeRequest("POST", "/api/bots/\(botId)/messages/\(messageId)/edit", body: ["text": text]))
+    }
+
+    public func setActiveBranch(botId: String, messageId: String) async throws -> String {
+        try await send(
+            try makeRequest("POST", "/api/bots/\(botId)/active-branch", body: ["messageId": messageId]),
+            as: ActiveBranchResponse.self
+        ).activeLeafId
+    }
+
+    public func createTask(botId: String, title: String? = nil) async throws -> Bot {
+        var body: [String: Any] = [:]
+        if let title, !title.isEmpty { body["title"] = title }
+        return try await send(try makeRequest("POST", "/api/bots/\(botId)/tasks", body: body), as: BotResponse.self).bot
+    }
+
+    public func switchTask(botId: String, threadId: String) async throws -> Bot {
+        try await send(try makeRequest("POST", "/api/bots/\(botId)/tasks/\(threadId)"), as: BotResponse.self).bot
+    }
+
+    public func renameTask(botId: String, threadId: String, title: String) async throws {
+        try await send(try makeRequest("PATCH", "/api/bots/\(botId)/tasks/\(threadId)", body: ["title": title]))
+    }
+
+    public func deleteTask(botId: String, threadId: String) async throws -> Bot {
+        try await send(try makeRequest("DELETE", "/api/bots/\(botId)/tasks/\(threadId)"), as: BotResponse.self).bot
     }
 
     public func interrupt(botId: String) async throws {

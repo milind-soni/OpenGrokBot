@@ -1,6 +1,7 @@
 // Turning the inspector's two record shapes into one-line summaries. Pure
 // so the panel stays a thin renderer and the labels can be tested.
 import type { RuntimeEvent } from "../../server/contracts.ts";
+import type { InspectorPage as WireInspectorPage } from "../../server/thread-events.ts";
 
 export type InspectorEntry =
   | { kind: "runtime"; at: string; data: RuntimeEvent }
@@ -14,9 +15,14 @@ export interface NativeRecord {
   msg: unknown;
 }
 
-export interface InspectorPage {
+export interface InspectorPage extends Omit<WireInspectorPage, "entries"> {
   entries: InspectorEntry[];
-  total: { runtime: number; native: number };
+}
+
+interface FoldPreview {
+  text: string;
+  pendingSpace: boolean;
+  overflow: boolean;
 }
 
 /** A row in the panel: adjacent content.delta events fold into one so a
@@ -35,10 +41,40 @@ export interface InspectorRow {
   data: unknown;
   /** > 1 when deltas were folded */
   count: number;
+  /** bounded, incrementally normalized preview for a folded delta run */
+  preview?: FoldPreview;
 }
 
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+const FOLD_PREVIEW_CHARS = 119;
+
+function appendPreview(previous: FoldPreview | undefined, delta: string): FoldPreview {
+  const next: FoldPreview = previous ? { ...previous } : { text: "", pendingSpace: false, overflow: false };
+  if (next.overflow) return next;
+  for (const char of delta) {
+    if (/\s/.test(char)) {
+      if (next.text) next.pendingSpace = true;
+      continue;
+    }
+    if (next.pendingSpace) {
+      if (next.text.length >= FOLD_PREVIEW_CHARS) {
+        next.overflow = true;
+        break;
+      }
+      next.text += " ";
+      next.pendingSpace = false;
+    }
+    if (next.text.length >= FOLD_PREVIEW_CHARS) {
+      next.overflow = true;
+      break;
+    }
+    next.text += char;
+  }
+  return next;
+}
+
+const previewText = (preview: FoldPreview) => `${preview.text}${preview.overflow ? "…" : ""}`;
 
 export function summarizeRuntime(e: RuntimeEvent): { summary: string; tone: InspectorRow["tone"] } {
   switch (e.type) {
@@ -131,20 +167,23 @@ export function toRows(entries: InspectorEntry[]): InspectorRow[] {
       const list = last.data as RuntimeEvent[];
       list.push(e);
       last.count = list.length;
-      const text = list.map((d) => (d as { delta: string }).delta).join("");
-      last.summary = `${e.streamKind}: ${clip(oneLine(text))}`;
+      last.preview = appendPreview(last.preview, e.delta);
+      last.summary = `${e.streamKind}: ${previewText(last.preview)}`;
       continue;
     }
     const { summary, tone } = summarizeRuntime(e);
+    const preview = e.type === "content.delta" ? appendPreview(undefined, e.delta) : undefined;
+    const streamKind = e.type === "content.delta" ? e.streamKind : undefined;
     rows.push({
       key: e.eventId || `r${i}`,
       kind: "runtime",
       at: entry.at,
       tag: e.type,
-      summary,
+      summary: preview && streamKind ? `${streamKind}: ${previewText(preview)}` : summary,
       tone,
       data: e.type === "content.delta" ? [e] : e,
       count: 1,
+      preview,
     });
   }
   return rows;

@@ -120,6 +120,26 @@ public struct CompanionState: Sendable {
         hasMore[threadId] = page.hasMore ?? false
     }
 
+    /// Merge a search landing window into the pages already held.
+    public mutating func merge(_ page: ThreadPage, intoThread threadId: String) {
+        var byId = Dictionary(
+            uniqueKeysWithValues: (messages[threadId] ?? []).map { ($0.id, $0) }
+        )
+        for message in page.messages { byId[message.id] = message }
+        messages[threadId] = byId.values.sorted {
+            $0.at == $1.at ? $0.id < $1.id : $0.at < $1.at
+        }
+        if let more = page.hasMore { hasMore[threadId] = more }
+    }
+
+    /// User-message alternatives created by edit-and-retry, oldest first.
+    public func versions(of message: Message, inThread threadId: String) -> [Message] {
+        guard message.role == .user, message.kind == .text else { return [] }
+        return transcript(forThread: threadId)
+            .filter { $0.role == .user && $0.kind == .text && $0.parentId == message.parentId }
+            .sorted { $0.at == $1.at ? $0.id < $1.id : $0.at < $1.at }
+    }
+
     // MARK: - Folding
 
     public mutating func apply(_ streamFrame: StreamFrame) {

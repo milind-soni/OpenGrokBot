@@ -9,7 +9,7 @@
 //
 // Nothing here is captured for the panel's sake — both logs already exist
 // under ~/.openmausbot (server/harness/bus.ts, server/drivers/native.ts).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bug, ChevronDown, ChevronRight, RefreshCw, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -27,15 +27,24 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const loadAbort = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
     try {
-      const res = await fetch(`/api/threads/${threadId}/events?limit=400`);
+      const res = await fetch(`/api/threads/${threadId}/events?limit=400`, { signal: controller.signal });
       if (!res.ok) throw new Error(`${res.status}`);
-      setPage((await res.json()) as InspectorPage);
+      const next = (await res.json()) as InspectorPage;
+      if (controller.signal.aborted) return;
+      setPage(next);
       setError(null);
     } catch (e) {
+      if (controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (loadAbort.current === controller) loadAbort.current = null;
     }
   }, [threadId]);
 
@@ -45,6 +54,7 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
     setExpanded(new Set());
     stickToBottom.current = true;
     void load();
+    return () => loadAbort.current?.abort();
   }, [load]);
 
   // live: append this thread's runtime events as they stream, and re-read
@@ -52,7 +62,7 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
   // up. Own EventSource on purpose: the store folds runtime events into
   // chat state and does not re-emit them.
   useEffect(() => {
-    const es = new EventSource("/api/events");
+    const es = new EventSource("/api/events?screens=off");
     let settle: ReturnType<typeof setTimeout> | null = null;
     es.onmessage = (raw) => {
       let frame: { kind?: string; event?: RuntimeEvent };
@@ -79,13 +89,17 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
     };
   }, [threadId, load]);
 
-  const rows = page ? toRows(page.entries.filter((e) => (lens === "raw" ? e.kind === "native" : e.kind === "runtime"))) : [];
+  const entries = useMemo(
+    () => (page ? page.entries.filter((e) => (lens === "raw" ? e.kind === "native" : e.kind === "runtime")) : []),
+    [page, lens],
+  );
+  const rows = useMemo(() => toRows(entries), [entries]);
 
   // follow the tail unless the user has scrolled up to read
   useEffect(() => {
     const el = listRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [rows.length, lens]);
+  }, [page?.entries.length, rows.length, lens]);
   const onScroll = () => {
     const el = listRef.current;
     if (!el) return;
@@ -100,7 +114,7 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
       return next;
     });
 
-  const shown = rows.length;
+  const shown = entries.length;
   const total = lens === "raw" ? (page?.total.native ?? 0) : (page?.total.runtime ?? 0);
 
   return (
@@ -111,6 +125,8 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
         </span>
         <button
           onClick={() => dispatch({ type: "toggleInspector", open: false })}
+          aria-label="Close the Inspector"
+          title="Close the Inspector"
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
         >
           <X size={18} />

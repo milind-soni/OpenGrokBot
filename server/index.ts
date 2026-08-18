@@ -2,16 +2,16 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { dirname, extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join } from "node:path";
 
 import { z } from "zod";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import { groupTurnCwd } from "./room-cwd.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
@@ -42,6 +42,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
+import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -55,6 +56,7 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
+import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import {
   ensureWorkspace,
@@ -77,6 +79,7 @@ import { readThreadEvents } from "./thread-events.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { WebhookManager } from "./webhooks.ts";
+import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -117,11 +120,10 @@ function authorizedComms(header: string | string[] | undefined): boolean {
 // a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
 // A→B is allowed but B→C (and A→B→A loops) never start.
 const MAX_COMMS_DEPTH = 1;
-// proxy entry: .ts in dev (node type-strips), .js in the packaged dist-server
-const agentsProxyPath = (() => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "agents-proxy.ts");
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-})();
+// Resolved from the server root — see server/proxy-paths.ts. This descending
+// path happened to survive bundling, but it goes through the same anchor so
+// there is exactly one way proxies are located.
+const agentsProxyPath = SPAWNED_PROXIES.agents;
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
 
@@ -192,14 +194,14 @@ const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
-/** A bot as a client may see it: no provider session cursors.
+/** A bot as a client may see it: no provider session bookkeeping.
  *
  * `resumeCursors` is the harness's own bookkeeping — the native session id
  * to resume, per instance, per task. No client has ever used it, and a
  * paired phone has even less business holding provider session identifiers
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
-const wireTask = ({ resumeCursors, ...task }: TaskRecord) => task;
+const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => task;
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
@@ -284,6 +286,18 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
   const end = before ? all.findIndex((msg) => msg.id === before) : -1;
   const stop = end === -1 ? all.length : end;
   const start = Math.max(0, stop - limit);
+  return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
+}
+
+/** A bounded page centred on a known message, used when a search result is
+ * opened on a client that only hydrated the newest part of the transcript. */
+function messageWindow(threadId: string, messageId: string, limit: number) {
+  const all = store.messagesFor(threadId);
+  const index = all.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+  const before = Math.floor((limit - 1) / 2);
+  const start = Math.max(0, Math.min(index - before, all.length - limit));
+  const stop = Math.min(all.length, start + limit);
   return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
 }
 
@@ -731,13 +745,22 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
-      const usage = turnUsage.get(event.threadId);
+      const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       // group turns run on the room's thread — the speaking bot's task
       // tally is not the right home for a shared room's spend, so only
       // 1:1 task turns are tallied for now.
-      if (bot && usage) store.addTaskUsage(bot.id, event.threadId, usage);
       if (bot) {
+        // bank what this turn spent before the bot broadcast carries the
+        // task list to every window. The driver's own per-turn figure
+        // (turn.completed.usage) is authoritative; a driver that only
+        // streams the running indicator falls back to its last value.
+        const tokens = event.usage ?? lastReported;
+        store.addTaskUsage(bot.id, event.threadId, {
+          input: tokens?.input,
+          output: tokens?.output,
+          costUsd: event.cost ?? null,
+        });
         // settled → idle; a setup failure already marked it dead, keep that
         if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
         store.patchBot(bot.id, { unread: true });
@@ -890,6 +913,40 @@ bus.subscribe((event: RuntimeEvent) => {
   drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
 });
 
+// ── steer-queue drain: messages sent while the bot was busy ────────────
+// Runs on ANY turn.completed rather than resolving the settling thread: a
+// bot busy in a room settles on the room's thread, and by the time this
+// subscriber runs the main fold has already dropped the speaker record —
+// so the drain matches on "this queue's bot is idle now" instead.
+// Registration order puts this after the main fold, so busy is already
+// false when it looks. Deliberately NOT gated on event.ok (unlike the
+// delegation drain above): queued delegations are a bot's fan-out and
+// dropping them on Stop is a safety property, but queued messages are the
+// user's own words — stop-then-steer is the point, so an interrupted turn
+// drains too.
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed") return;
+  drainQueuedSends();
+});
+
+function drainQueuedSends() {
+  drainSteeredMessages(store, (botId, threadId, prompt, userMessage) =>
+    // A plain attended turn — no automationSource, no unattended, no comms
+    // depth: exactly what typing the same words into an idle bot would run.
+    // The messages are already in the transcript; userMessage keeps
+    // startTurn from appending the joined prompt as a duplicate.
+    startTurn(botId, prompt, { threadId, userMessage }).catch((err) => {
+      store.appendMessage(threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: {
+          name: `error: queued message could not start — ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`,
+          ok: false,
+        },
+      });
+    }),
+  );
+}
 
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
@@ -1076,18 +1133,21 @@ async function startTurn(
   // cleared only once the turn is actually dispatched — clearing it here
   // would cost the next attempt its history if this dispatch fails.
   const rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  const turnText =
-    rewound && instance.driverKind !== "grok" && transcript.length
-      ? [
-          "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
-          "",
-          ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
-          "",
-          "[Now reply to the user's latest message:]",
-          "",
-          text,
-        ].join("\n")
-      : text;
+  // A fresh engine — the user switched this bot's model mid-thread — has no
+  // current session here either, so it gets the same replay. Distinct from
+  // rewound: the OTHER instances' cursors are left alone (a rewind wipes
+  // them all), and "fresh" is decided by who ran the last turn, not by
+  // whether we hold a cursor — see engineIsFresh.
+  const fresh =
+    !rewound &&
+    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript });
+  const { turnText, resume } = buildTurnContext({
+    text,
+    transcript,
+    rewound,
+    fresh,
+    replaysNatively: instance.driverKind === "grok",
+  });
 
   const persona = [
     `You are ${bot.name}, a personal bot in OpenMausBot.`,
@@ -1261,7 +1321,7 @@ async function startTurn(
         // a rewound thread never resumes the abandoned branch's session
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
-        resumeCursor: rewound ? undefined : task.resumeCursors[instanceId],
+        resumeCursor: resume ? task.resumeCursors[instanceId] : undefined,
         transcript,
         system:
           persona +
@@ -1295,6 +1355,8 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+      // and this engine now owns the thread's most recent turn
+      store.markTaskDispatched(bot.id, threadId, instanceId);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy
@@ -1315,6 +1377,9 @@ async function startTurn(
       });
       store.setActivity(bot.id, "idle");
       opts?.onDispatchError?.(message);
+      // a dispatch failure never emits turn.completed, so the settle-driven
+      // drain would strand anything queued behind this turn
+      drainQueuedSends();
     }
   })();
 }
@@ -1490,8 +1555,15 @@ async function runGroupMemberTurn(
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
   const worksInWorkspace = instance.driverKind !== "grok" && instance.driverKind !== "boxAgent";
-  const cwd = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
-  const roomSystem = cwd ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
+  const workspace = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
+  // The room's folder pins here — on the first turn that actually
+  // dispatches, not at PATCH time — so a folder set on a never-used room
+  // still takes effect, while a room that already worked somewhere never
+  // has its folder moved underneath it. Off-host members skip the folder
+  // but must not decide the pin: the room's desk is a property of the
+  // room, not of whichever member happened to speak first.
+  const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
+  const roomSystem = workspace ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
@@ -1723,6 +1795,9 @@ async function reloadProviders() {
     });
     store.setActivity(b.id, "idle");
   }
+  // killed turns settle here without a turn.completed event, so anything
+  // queued behind them drains now — onto the freshly loaded fleet
+  drainQueuedSends();
 }
 
 // Config writes rebuild the whole provider registry. Keep the read-modify-write
@@ -2109,6 +2184,13 @@ const server = createServer(async (req, res) => {
       const limit = pageSize(url.searchParams.get("limit"));
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
       const before = url.searchParams.get("before");
+      const around = url.searchParams.get("around");
+      if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (around) {
+        const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
+        if (!window) return json(res, 404, { error: "no such message" });
+        return json(res, 200, window);
+      }
       // An unknown cursor must not silently answer with the newest page —
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
@@ -2365,6 +2447,15 @@ const server = createServer(async (req, res) => {
         }
         if (!responder) return json(res, 400, { error: "invalid default responder" });
         patch.defaultResponder = responder;
+      }
+      if (body.cwd !== undefined) {
+        if (existing.dm) return json(res, 400, { error: "direct-message channels cannot have a working folder" });
+        if (existing.pinnedCwd !== undefined) {
+          return json(res, 409, { error: "the room's working folder is fixed after its first turn" });
+        }
+        const checked = validateBotCwd(body.cwd);
+        if (!checked.ok) return json(res, 400, { error: checked.error });
+        patch.cwd = checked.cwd ?? undefined;
       }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
@@ -2649,7 +2740,17 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      // A busy bot no longer refuses the message: it lands in the thread
+      // now (marked queued) and auto-sends when the turn settles — see the
+      // steer-queue drain above. Synchronous from the busy check to the
+      // queue insert, so a settle can't slip between them and strand it.
+      if (bot.busy) {
+        const message = queueSteeredMessage(store, bot, text);
+        return json(res, 202, { ok: true, queued: true, messageId: message.id });
+      }
+      await startTurn(bot.id, text);
       return json(res, 202, { ok: true });
     }
 
@@ -2861,7 +2962,12 @@ const server = createServer(async (req, res) => {
         store.bots.some((b) => store.tasks(b.id).some((t) => t.threadId === threadId)) ||
         Boolean(store.groupByThread(threadId));
       if (!known) return json(res, 404, { error: "no such thread" });
-      const limit = Number(url.searchParams.get("limit")) || undefined;
+      const rawLimit = url.searchParams.get("limit");
+      const parsedLimit = rawLimit === null ? undefined : Number(rawLimit);
+      if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
+        return json(res, 400, { error: "limit must be a positive whole number" });
+      }
+      const limit = parsedLimit;
       return json(res, 200, readThreadEvents({ eventsDir: EVENTS_DIR, nativeDir: NATIVE_DIR, threadId, limit }));
     }
 

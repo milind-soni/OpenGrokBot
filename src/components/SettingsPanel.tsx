@@ -12,6 +12,7 @@ import { ModelPicker } from "./ModelPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { requestNotificationPermission } from "@/lib/notify";
+import { botUsage, costCaption, formatTokens, formatUsd } from "@/lib/usage";
 import { shortPath } from "@/lib/short-path";
 
 function Field({
@@ -26,6 +27,47 @@ function Field({
       <div className="mb-1.5 text-[13px] text-ink-secondary">{label}</div>
       {children}
     </label>
+  );
+}
+
+/** What this bot has spent across its tasks. Cost is captioned by how the
+ * engine is billed — on a subscription the figure is an equivalent. */
+function BotUsageCard({ bot }: { bot: Bot }) {
+  const { state, dispatch } = useStore();
+  const usage = botUsage(bot);
+  const instance = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
+  if (usage.turns === 0) return null;
+  return (
+    <div className="rounded-xl bg-card p-4">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[15px] font-medium text-ink">Usage</div>
+        <button
+          onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
+          className="text-[12px] text-ink-secondary hover:text-ink"
+        >
+          All bots →
+        </button>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-3 text-[13px]">
+        <div>
+          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Turns</div>
+          <div className="mt-0.5 tabular-nums text-ink">{usage.turns}</div>
+        </div>
+        <div>
+          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Tokens</div>
+          <div className="mt-0.5 tabular-nums text-ink" title={`${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`}>
+            {formatTokens(usage.input + usage.output)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Cost</div>
+          <div className="mt-0.5 tabular-nums text-ink">{usage.costUsd === null ? "—" : formatUsd(usage.costUsd)}</div>
+        </div>
+      </div>
+      <div className="mt-2 text-[12px] text-ink-secondary">
+        {usage.costUsd === null ? "This engine doesn't report a price; tokens are counted." : `Cost ${costCaption(instance?.snapshot.billing)}.`}
+      </div>
+    </div>
   );
 }
 
@@ -621,6 +663,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </div>
           </div>
 
+          <BotUsageCard bot={bot} />
           <WorkingFolder bot={bot} />
 
           {/* keyed so switching bots never shows one bot's notes under another's name */}

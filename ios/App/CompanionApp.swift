@@ -18,7 +18,9 @@ struct CompanionApp: App {
                 .onAppear { session.connect() }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
-                    case .active: session.connect()
+                    case .active:
+                        session.connect()
+                        Task { await session.refreshNotificationAuthorization() }
                     case .background: session.disconnect()
                     case .inactive: break
                     @unknown default: break

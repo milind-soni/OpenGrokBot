@@ -10,11 +10,12 @@
 // repo a bare import still resolves by walking up to ./node_modules and the
 // test passes on a build that would be dead in the field — which is precisely
 // how the bug escaped. The copy is the whole point; do not "simplify" it away.
-import { spawn } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const staging = mkdtempSync(join(tmpdir(), "omb-smoke-"));
@@ -71,6 +72,32 @@ while (Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
+// Serving /api/health is necessary but nowhere near sufficient. Bundling
+// relocates import.meta.url, so a module that used to sit in drivers/ resolves
+// its sibling paths from the bundle's directory instead — one level too high.
+// The 0.1.24 candidate booted and answered /api/health perfectly while every
+// spawned proxy pointed outside Resources/server, silently killing permission
+// prompts, computer use and dweb. So check the paths the server ACTUALLY
+// resolved, from inside the staged copy, before calling the build good.
+const probe = join(staging, "server", "probe-proxy-paths.mjs");
+writeFileSync(
+  probe,
+  [
+    'import { existsSync } from "node:fs";',
+    'import { SPAWNED_PROXIES } from "./proxy-paths.js";',
+    "const missing = Object.entries(SPAWNED_PROXIES).filter(([, p]) => !existsSync(p));",
+    "console.log(JSON.stringify({ resolved: SPAWNED_PROXIES, missing }));",
+  ].join("\n"),
+);
+
+let proxyReport = null;
+try {
+  const { stdout } = await promisify(execFile)(process.execPath, [probe], { cwd: staging });
+  proxyReport = JSON.parse(stdout);
+} catch (error) {
+  proxyReport = { error: String((error && error.message) || error) };
+}
+
 cleanup();
 
 if (!listening) {
@@ -80,4 +107,14 @@ if (!listening) {
   process.exit(1);
 }
 
+if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
+  console.error("spawned proxy paths do not resolve inside the packaged server dir:");
+  console.error(JSON.stringify(proxyReport, null, 2));
+  console.error("\nthe server would still answer /api/health — and every one of these");
+  console.error("features would be dead: permission prompts, computer use, dweb, peer comms.");
+  process.exit(1);
+}
+
+const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
+console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);

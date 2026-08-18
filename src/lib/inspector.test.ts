@@ -60,4 +60,18 @@ describe("toRows", () => {
       ["← in", 1, "claude · result"],
     ]);
   });
+
+  it("builds a bounded folded preview without rejoining the full delta history", () => {
+    const entries: InspectorEntry[] = Array.from({ length: 500 }, (_, i) => ({
+      kind: "runtime" as const,
+      at: String(i),
+      data: { ...base, eventId: `d${i}`, type: "content.delta" as const, streamKind: "assistant_text" as const, delta: `word${i} ` },
+    }));
+    const [row] = toRows(entries);
+    expect(row.count).toBe(500);
+    expect(row.summary).toMatch(/^assistant_text: word0 word1/);
+    expect(row.summary.endsWith("…")).toBe(true);
+    expect(row.summary.length).toBeLessThanOrEqual("assistant_text: ".length + 120);
+    expect((row.data as unknown[])).toHaveLength(500);
+  });
 });

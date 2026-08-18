@@ -124,7 +124,8 @@ describe("Antigravity turns (fake CLI)", () => {
     expect((text as any).text).toBe("done from fake agy");
 
     const done = recorder.events.at(-1)!;
-    expect(done).toMatchObject({ type: "turn.completed", ok: true });
+    // result.usage is the turn total (the per-step figures precede it)
+    expect(done).toMatchObject({ type: "turn.completed", ok: true, usage: { input: 105, output: 20 } });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 

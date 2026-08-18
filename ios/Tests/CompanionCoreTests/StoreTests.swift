@@ -75,6 +75,17 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(state.hasMore["t1"], true)
     }
 
+    func testSearchWindowMergesAndOrdersWithoutDuplicating() {
+        var state = CompanionState()
+        state.messages["t1"] = [message("d", at: 4), message("e", at: 5)]
+        state.merge(
+            ThreadPage(messages: [message("b", at: 2), message("c", at: 3), message("d", at: 4)], hasMore: true),
+            intoThread: "t1"
+        )
+        XCTAssertEqual(state.transcript(forThread: "t1").map(\.id), ["b", "c", "d", "e"])
+        XCTAssertEqual(state.hasMore["t1"], true)
+    }
+
     // MARK: - Bots
 
     func testABotFrameMergesRatherThanWipingTheTranscript() throws {
@@ -125,6 +136,21 @@ final class StoreTests: XCTestCase {
 
         state.apply(.thread(threadId: bot.threadId, activeLeafId: tail.id))
         XCTAssertEqual(state.visibleTranscript(forThread: bot.threadId).map(\.id), ["root", "fork", "tail"])
+    }
+
+    func testVersionsAreUserMessagesWithTheSameParent() {
+        var state = CompanionState()
+        let root = message("root")
+        var first = message("first", at: 2)
+        first.parentId = root.id
+        var second = message("second", at: 3)
+        second.parentId = root.id
+        var reply = message("reply", at: 4)
+        reply.role = .bot
+        reply.parentId = root.id
+        state.messages["t1"] = [root, second, reply, first]
+
+        XCTAssertEqual(state.versions(of: first, inThread: "t1").map(\.id), ["first", "second"])
     }
 
     func testMessageAppendMovesTheLeafAndBranchSwitchClearsLiveText() throws {

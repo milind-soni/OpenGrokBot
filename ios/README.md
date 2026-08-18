@@ -156,12 +156,18 @@ mean losing the ability to lock it out.
   Software keyboards have no Shift+Return, so there `.onSubmit` sends.
 - **No affordance without a feature behind it.** The reference design this was
   modelled on has a composer mic; there is no dictation here, so it is not
-  drawn. Search and the roster's "+" are real: the latter creates the same
-  basic bot the desktop endpoint creates, then opens it.
+  drawn. Search covers the SQLite transcript store and opens the exact task,
+  branch, and message; the roster's "+" creates the same basic bot the desktop
+  endpoint creates, then opens it.
 
 ## Not in this version
 
-The app is foreground-only. There is no APNs delivery while it is closed, no
-voice/call mode, no task-management or SQLite transcript-search UI, and no
-hosted relay. Tailscale is supported through manual MagicDNS entry; it is not a
-dependency and OpenMausBot does not operate a cloud copy of local data.
+The live connection is foreground-only. Notification frames produce native
+banners, sounds, time-sensitive approval alerts, and an app badge while connected;
+the resume cursor replays alerts missed during a short background pause. There is
+no APNs delivery after the app is terminated, no voice/call mode, and no hosted relay.
+Task management, SQLite transcript search,
+transcript sharing, reactions, and edit/version controls use narrow companion
+routes and the computer remains the source of truth. Tailscale is supported
+through manual MagicDNS entry; it is not a dependency and OpenMausBot does not
+operate a cloud copy of local data.

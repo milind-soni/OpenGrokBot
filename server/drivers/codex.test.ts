@@ -95,7 +95,9 @@ describe("CodexDriver turns (fake app-server)", () => {
       input: 7,
       output: 3,
     });
-    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    // codex reports the THREAD total; the driver turns it into this turn's
+    // figure so the harness never sums a running total
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true, usage: { input: 7, output: 3 } });
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.env.OPENAI_API_KEY).toBeUndefined();

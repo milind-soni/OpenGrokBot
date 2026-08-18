@@ -501,6 +501,12 @@ describe("setupCommands", () => {
     expect(setupCommands("docker", "linux").run).toContain(IMAGE);
   });
 
+  it("uses an explicit local image name so Podman never resolves the managed build on Docker Hub", () => {
+    expect(IMAGE).toMatch(/^localhost\/openmausbot\/cua-local-vm:/);
+    expect(setupCommands("podman", "darwin").run).toContain(IMAGE);
+    expect(setupCommands("podman", "darwin").run).not.toContain("docker.io/openmausbot");
+  });
+
   it("generates Apple container lifecycle commands without Docker-only flags", () => {
     const commands = setupCommands("container", "darwin");
     expect(commands.runtimeStart).toBe("container system start");

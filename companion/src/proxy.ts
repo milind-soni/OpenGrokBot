@@ -80,22 +80,35 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
   });
 
 /** Read a raw body, bounded. Used for the inbox: those bytes are a file,
- * not JSON, and an unbounded read is a way to be memory-exhausted. */
+ * not JSON, and an unbounded read is a way to be memory-exhausted. Over
+ * the ceiling we reject without `destroy()` — the handler still has a 413
+ * to write, and killing the socket first is how a client sees a dropped
+ * connection instead of that status. */
 const readBytes = (req: IncomingMessage, limit: number): Promise<Buffer> =>
   new Promise((resolve, reject) => {
     let size = 0;
+    let settled = false;
     const chunks: Buffer[] = [];
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     req.on("data", (chunk: Buffer) => {
+      if (settled) return;
       size += chunk.length;
       if (size > limit) {
-        reject(new Error("body too large"));
-        req.destroy();
+        fail(new Error("body too large"));
         return;
       }
       chunks.push(chunk);
     });
-    req.on("error", reject);
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", fail);
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
   });
 
 /** Answer with JSON the sidecar wrote itself — a refusal, or a pairing
@@ -198,8 +211,13 @@ export function createProxyHandler(options: ProxyOptions) {
             return sendJson(res, message.includes("too large") ? 413 : 400, { error: message });
           }
         },
-        (error: Error) =>
-          sendJson(res, error.message === "body too large" ? 413 : 400, { error: error.message }),
+        (error: Error) => {
+          sendJson(res, error.message === "body too large" ? 413 : 400, { error: error.message });
+          // Stop reading whatever is still in flight. After the status is
+          // on the wire, dropping the rest is safe — before it, the phone
+          // would only see a hung upload.
+          req.destroy();
+        },
       );
       return;
     }

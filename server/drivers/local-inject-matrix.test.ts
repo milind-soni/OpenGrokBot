@@ -125,6 +125,21 @@ describe("host credentials", () => {
     writeFileSync(join(home, ".unsloth", "studio", "auth", "agent_api_key.json"), JSON.stringify({ api_key: "from-file" }));
     expect(hostApiKey(localHost("unsloth")!, { HOME: home })).toBe("from-file");
   });
+
+  it("reads a minted Unsloth Studio token from the servers map", () => {
+    const home = scratchHome("omb-unsloth-minted-");
+    mkdirSync(join(home, ".unsloth", "studio", "auth"), { recursive: true });
+    writeFileSync(
+      join(home, ".unsloth", "studio", "auth", "agent_api_key.json"),
+      JSON.stringify({
+        servers: {
+          "http://127.0.0.1:8888": { saved: [], minted: ["sk-unsloth-minted"] },
+        },
+      }),
+    );
+    expect(hostApiKey(localHost("unsloth")!, { HOME: home })).toBe("sk-unsloth-minted");
+    expect(hostApiKey(localHost("unsloth_api")!, { HOME: home })).toBe("sk-unsloth-minted");
+  });
 });
 
 describe("OpenAI / Anthropic env dialects", () => {

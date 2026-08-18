@@ -102,7 +102,7 @@ final class SpeechDictation: ObservableObject {
         }
 
         do {
-            try beginCapture()
+            try beginCapture(generation: gen)
             starting = false
         } catch CaptureError.noRecognizer {
             starting = false
@@ -125,7 +125,7 @@ final class SpeechDictation: ObservableObject {
 
     // MARK: - Capture
 
-    private func beginCapture() throws {
+    private func beginCapture(generation gen: Int) throws {
         let recognizer = Dictation.localeCandidates()
             .compactMap { SFSpeechRecognizer(locale: $0) }
             .first { $0.isAvailable }
@@ -181,22 +181,36 @@ final class SpeechDictation: ObservableObject {
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, recognitionError in
             Task { @MainActor in
-                self?.handle(result: result, recognitionError: recognitionError)
+                self?.handle(
+                    result: result,
+                    recognitionError: recognitionError,
+                    generation: gen
+                )
             }
         }
     }
 
-    private func handle(result: SFSpeechRecognitionResult?, recognitionError: Error?) {
+    private func handle(
+        result: SFSpeechRecognitionResult?,
+        recognitionError: Error?,
+        generation gen: Int
+    ) {
+        // A cancelled task can still deliver a partial or a 209 after the
+        // next session has already started. `isListening` is true then too,
+        // so generation is what keeps this callback from rewriting the
+        // new draft or stopping the new capture.
+        guard gen == generation, !stopping, isListening else { return }
         if let result {
             transcript = result.bestTranscription.formattedString
             // Composer dictation does not wait for isFinal — the last
             // partial is what you send. If the recognizer finalizes on
             // its own (rare without endAudio), just stop listening.
-            if result.isFinal, isListening {
+            if result.isFinal {
                 stop()
+                return
             }
         }
-        guard let recognitionError, !stopping, isListening else { return }
+        guard let recognitionError else { return }
         let ns = recognitionError as NSError
         // 209/216 are the cancellation codes Speech uses when we tear
         // the task down ourselves. Surfacing those as "Couldn't

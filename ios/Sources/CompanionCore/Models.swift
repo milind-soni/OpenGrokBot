@@ -259,6 +259,10 @@ public struct PairResponse: Codable, Sendable {
     /// What the computer calls itself — worth showing so someone with two
     /// paired machines can tell them apart.
     public var serverName: String
+    /// Every address the computer answers on, best first. Stored with the
+    /// connection so the app can walk to the next one when the address it
+    /// paired on stops resolving. Absent from older sidecars.
+    public var hosts: [String]?
 }
 
 /// A freshly minted provider viewer. It is deliberately not Codable for

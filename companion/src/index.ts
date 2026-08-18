@@ -19,7 +19,7 @@
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer } from "node:http";
 
-import { createControlServer } from "./control.ts";
+import { createControlServer, hostCandidates } from "./control.ts";
 import { DeviceRegistry } from "./devices.ts";
 import { lanAddresses, refreshTailnetName, tailnetName, tailscaleAddress } from "./listener.ts";
 import {
@@ -121,6 +121,10 @@ const companion = createServer(
     authenticate: (token) => devices.authenticate(token),
     redeem: (code, deviceName) => devices.redeem(code, deviceName),
     serverName: machineName,
+    // Recomputed per pairing rather than cached: addresses change when the
+    // machine joins another network, and a pairing is exactly the moment the
+    // list has to be right.
+    hosts: () => hostCandidates(),
   }),
 );
 

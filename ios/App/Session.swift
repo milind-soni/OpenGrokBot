@@ -42,6 +42,14 @@ final class Session: ObservableObject {
     @Published private(set) var pairingInvite: PairingInvite?
 
     private var client: CompanionClient?
+    /// The device token, kept in memory so the client can be rebuilt when the
+    /// dial moves to another stored host. The keychain remains the only place
+    /// it is persisted.
+    private var token: String?
+    /// Which of the connection's stored hosts the next attempt dials. The
+    /// walk advances on address-shaped failures and the winner is promoted —
+    /// and persisted — when a stream goes live.
+    private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
     /// Identifies the task currently stored in `streamTask`. A cancelled task
     /// can finish after its replacement starts; its cleanup must not clear
@@ -112,6 +120,10 @@ final class Session: ObservableObject {
         guard let stored else { return } // no token: genuinely not paired
 
         connection = saved
+        token = stored
+        // `orderedHosts` puts the stored host first, so the address that
+        // worked last time is the one dialed first this time.
+        rotation = CandidateRotation(hosts: saved.orderedHosts)
         client = CompanionClient(connection: saved, token: stored)
         status = .connecting
     }
@@ -128,11 +140,18 @@ final class Session: ObservableObject {
         // prefer the name the computer calls itself over the Bonjour label
         var stored = connection
         if !paired.serverName.isEmpty { stored.name = paired.serverName }
+        // The computer knows every address it answers on, and what it says at
+        // redeem time beats whatever the invite carried. Then the host that
+        // just redeemed the code leads: it demonstrably works from here.
+        if let hosts = paired.hosts, !hosts.isEmpty { stored.hosts = hosts }
+        stored.promote(stored.host)
 
         try Keychain.save(paired.token, for: stored.id)
         UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: Self.connectionKey)
 
         self.connection = stored
+        self.token = paired.token
+        self.rotation = CandidateRotation(hosts: stored.orderedHosts)
         self.client = CompanionClient(connection: stored, token: paired.token)
         self.state = CompanionState()
         // A fresh pairing settles any restore that was still waiting on the
@@ -165,6 +184,8 @@ final class Session: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.connectionKey)
         connection = nil
         client = nil
+        token = nil
+        rotation = CandidateRotation(hosts: [])
         state = CompanionState()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
@@ -273,6 +294,9 @@ final class Session: ObservableObject {
                             state.resetCursor(cursor)
                         }
                         status = .live
+                        // this candidate carried a live stream — dial it
+                        // first from now on, including next launch
+                        promoteWorkingHost()
                         continue
                     }
                     state.apply(frame)
@@ -297,7 +321,7 @@ final class Session: ObservableObject {
                     return
                 }
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
-                status = .offline(error.localizedDescription)
+                status = .offline(failureMessage(for: error))
             }
 
             if Task.isCancelled { return }
@@ -314,6 +338,60 @@ final class Session: ObservableObject {
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         state.hydrate(fleet)
         NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    // MARK: - Which address to dial
+
+    /// Turn a stream failure into advice a person can act on — and, when the
+    /// failure is about the address rather than the pairing, move the dial to
+    /// the next stored host so the retry that follows tries somewhere new.
+    /// A 401 never reaches here: the unauthorized path returns above, which
+    /// is what keeps a token problem from masquerading as an address walk.
+    private func failureMessage(for error: Error) -> String {
+        guard let urlError = error as? URLError, let connection else {
+            return error.localizedDescription
+        }
+        let failed = rotation.current.isEmpty ? connection.host : rotation.current
+        var next: String?
+        if ConnectionAdvice.shouldTryAnotherHost(urlError.code), rotation.count > 1 {
+            let candidate = rotation.advance()
+            if let token {
+                client = CompanionClient(connection: connection.dialing(candidate), token: token)
+            }
+            next = candidate
+            log.info("advancing to candidate host \(candidate, privacy: .public)")
+        }
+        return ConnectionAdvice.message(for: urlError.code, host: failed, port: connection.port, tryingNext: next)
+    }
+
+    /// The candidate that just carried a live stream dials first from now on.
+    /// Persisted, so the next launch starts from the address that works
+    /// rather than re-walking the list from a stale front-runner.
+    private func promoteWorkingHost() {
+        let winner = rotation.current
+        guard !winner.isEmpty, var updated = connection,
+              updated.host != Connection.urlHost(winner) else { return }
+        updated.promote(winner)
+        connection = updated
+        UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
+    }
+
+    /// Replace the stored address by hand, keeping the pairing and its token.
+    /// False when the text does not parse as a host or host:port.
+    @discardableResult
+    func updateAddress(_ text: String) -> Bool {
+        guard var updated = connection, let parsed = Connection.parse(text) else { return false }
+        updated.port = parsed.port
+        updated.promote(parsed.host)
+        connection = updated
+        UserDefaults.standard.set(try? JSONEncoder().encode(updated), forKey: Self.connectionKey)
+        rotation = CandidateRotation(hosts: updated.orderedHosts)
+        if let token { client = CompanionClient(connection: updated, token: token) }
+        // Dial the new address now rather than on the next backoff tick —
+        // someone who just typed an address is watching the banner.
+        restartStream()
+        connect()
+        return true
     }
 
     // MARK: - Actions

@@ -59,6 +59,44 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(PairingInvite.parse(url)?.credential, "004209")
     }
 
+    func testCarriesTheFallbackHostsFromTheInvite() throws {
+        let url = try XCTUnwrap(URL(string:
+            "openmausbot://pair?address=macbook.tail1234.ts.net%3A8810&code=004209" +
+            "&hosts=macbook.tail1234.ts.net,192.168.1.42,openmausbot-aa.local"))
+        let invite = try XCTUnwrap(PairingInvite.parse(url))
+        XCTAssertEqual(invite.connection.hosts, ["macbook.tail1234.ts.net", "192.168.1.42", "openmausbot-aa.local"])
+    }
+
+    func testDropsUnusableFallbackHostsWithoutRefusingTheInvite() throws {
+        // Fallbacks are advisory: a bad one costs a single failed dial when
+        // its turn comes, so it is filtered rather than fatal.
+        let url = try XCTUnwrap(URL(string:
+            "openmausbot://pair?address=mac.local&code=004209&hosts=%20192.168.1.42%20,,bad%2Fslash,has%20space"))
+        let invite = try XCTUnwrap(PairingInvite.parse(url))
+        XCTAssertEqual(invite.connection.hosts, ["192.168.1.42"])
+
+        // and an invite with no usable candidate keeps the single address
+        let empty = try XCTUnwrap(URL(string: "openmausbot://pair?address=mac.local&code=004209&hosts=bad%2Fslash"))
+        XCTAssertNil(PairingInvite.parse(empty)?.connection.hosts)
+    }
+
+    func testASavedConnectionWithoutFallbacksStillDecodes() throws {
+        // Exactly what UserDefaults holds for anyone who paired before
+        // fallback hosts existed — `hosts` must stay optional forever.
+        let data = Data(#"{"id":"saved","name":"Mac","host":"mac.tail1234.ts.net","port":8810}"#.utf8)
+        let saved = try JSONDecoder().decode(Connection.self, from: data)
+        XCTAssertNil(saved.hosts)
+        XCTAssertEqual(saved.orderedHosts, ["mac.tail1234.ts.net"])
+    }
+
+    func testAPairResponseWithAndWithoutHostsDecodes() throws {
+        let older = Data(#"{"token":"omb_x","device":{"id":"d","name":"p","createdAt":1,"lastSeenAt":1},"serverName":"Mac"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(PairResponse.self, from: older).hosts)
+
+        let newer = Data(#"{"token":"omb_x","device":{"id":"d","name":"p","createdAt":1,"lastSeenAt":1},"serverName":"Mac","hosts":["a.ts.net","192.168.1.42"]}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(PairResponse.self, from: newer).hosts, ["a.ts.net", "192.168.1.42"])
+    }
+
     func testRejectsAnUntrustedOrMalformedPairingInvite() throws {
         XCTAssertNil(PairingInvite.parse(try XCTUnwrap(URL(string: "https://example.com/pair?address=mac.local&code=123456"))))
         XCTAssertNil(PairingInvite.parse(try XCTUnwrap(URL(string: "openmausbot://pair?address=mac.local&code=12345"))))

@@ -16,6 +16,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 
 import type { DeviceRegistry } from "./devices.ts";
 import { lanAddresses, tailnetName, tailscaleAddress } from "./listener.ts";
+import { defaultHostName } from "./mdns.ts";
 
 /** What the pairing page needs to render itself and act on what you click. */
 export interface ControlOptions {
@@ -80,6 +81,34 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
   res.end(text);
 };
 
+/** Every host a phone could dial for this computer, best first.
+ *
+ * One address is one point of failure: a phone paired over the tailnet keeps
+ * a MagicDNS name that stops resolving the moment either device leaves the
+ * tailnet — while the same computer sits reachable on the LAN. Handing the
+ * phone the whole ordered list at pairing time is what lets it walk to the
+ * next candidate instead of failing forever on the first.
+ *
+ * The order is the reachability story: the MagicDNS name works from anywhere
+ * the tailnet does, the LAN addresses work on this network, and the sidecar's
+ * synthetic mDNS name comes last because it only resolves while the sidecar
+ * itself is running. The bare tailnet address is deliberately absent — iOS
+ * refuses plain HTTP to 100.64/10, so it would be a candidate that can never
+ * succeed. */
+export function hostCandidates(
+  addresses: string[] = lanAddresses(),
+  magicDnsName: string | null = tailnetName(),
+): string[] {
+  const tailscale = tailscaleAddress(addresses);
+  const out: string[] = [];
+  if (tailscale && magicDnsName) out.push(magicDnsName);
+  for (const address of addresses) {
+    if (address !== tailscale) out.push(address);
+  }
+  out.push(defaultHostName());
+  return out;
+}
+
 /** Everything the page shows, in one object: where to connect, whether a
  * pairing window is open, and which phones are paired. Recomputed per request
  * rather than cached — addresses change when you join another network. */
@@ -98,6 +127,9 @@ export function companionState(options: ControlOptions) {
     ...(tailscale ? { tailscale } : {}),
     ...(tailscale && name ? { tailnetName: name } : {}),
     lan: addresses.find((a) => a !== tailscale) ?? null,
+    // The ordered fallback list the pairing QR hands the phone, so it can
+    // walk to the next address when the first stops resolving.
+    hosts: hostCandidates(addresses, name),
     pairing: pairing ? { code: pairing.code, token: pairing.token, expiresAt: pairing.expiresAt } : null,
     devices: options.devices.list(),
     discovery: options.discovery(),

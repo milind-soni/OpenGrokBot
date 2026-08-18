@@ -61,6 +61,7 @@ final class AttachmentTests: XCTestCase {
             "/Users/me/.openmausbot-companion/inbox/1-ab-photo.jpg"
         )
         XCTAssertTrue(shown.files.first?.isImage == true)
+        XCTAssertEqual(shown.files.first?.displayName, "photo.jpg")
     }
 
     func testAPhotoWithNoCaptionStillDisplaysAsAFile() {
@@ -89,5 +90,20 @@ final class AttachmentTests: XCTestCase {
 
     func testAPdfIsNotAnImage() {
         XCTAssertFalse(Attachment.File(path: "/tmp/a.pdf", name: "a.pdf", size: 1).isImage)
+    }
+
+    func testInboxDisplayNameDropsTheUniquenessPrefix() {
+        XCTAssertEqual(
+            Attachment.File(
+                path: "/tmp/1787025214436-54414f70-photo.jpg",
+                name: "1787025214436-54414f70-photo.jpg",
+                size: 1
+            ).displayName,
+            "photo.jpg"
+        )
+        XCTAssertEqual(
+            Attachment.File(path: "/tmp/notes.txt", name: "notes.txt", size: 1).displayName,
+            "notes.txt"
+        )
     }
 }

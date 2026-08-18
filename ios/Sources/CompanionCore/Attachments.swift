@@ -24,6 +24,19 @@ public enum Attachment {
             return Self.imageExtensions.contains(ext)
         }
 
+        /// Inbox files are stored as `timestamp-hex-original.jpg`. Show the
+        /// original in a chip; the prefix is only uniqueness on disk.
+        public var displayName: String {
+            let base = URL(fileURLWithPath: name).lastPathComponent
+            let parts = base.split(separator: "-", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3,
+                  parts[0].allSatisfy(\.isNumber),
+                  parts[1].count == 8,
+                  parts[1].allSatisfy(\.isHexDigit)
+            else { return base }
+            return String(parts[2])
+        }
+
         private static let imageExtensions: Set<String> = [
             "jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tif", "tiff",
         ]

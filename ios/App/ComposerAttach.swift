@@ -147,6 +147,30 @@ struct ComposerAttachBar: View {
     }
 }
 
+/// JPEG bytes for a photo this phone already uploaded, keyed by the inbox
+/// filename. The bubble should not have to round-trip to the Mac to show
+/// something it held a moment ago.
+enum InboxCache {
+    private static var folder: URL {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OpenMausInbox", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    static func save(_ data: Data, hostPath: String) {
+        let name = URL(fileURLWithPath: hostPath).lastPathComponent
+        guard !name.isEmpty, name != "/", !name.contains("/") else { return }
+        try? data.write(to: folder.appendingPathComponent(name), options: .atomic)
+    }
+
+    static func load(hostPath: String) -> Data? {
+        let name = URL(fileURLWithPath: hostPath).lastPathComponent
+        guard !name.isEmpty else { return nil }
+        return try? Data(contentsOf: folder.appendingPathComponent(name))
+    }
+}
+
 /// A file that already went with a message: the photo if we can show it,
 /// otherwise a chip with the name. The sidecar still has the bytes.
 struct InboxAttachmentView: View {
@@ -154,41 +178,65 @@ struct InboxAttachmentView: View {
     var cached: UIImage?
     @EnvironmentObject private var session: Session
     @State private var loaded: UIImage?
-    @State private var failed = false
+    @State private var tried = false
+
+    private var pixels: UIImage? { cached ?? loaded }
 
     var body: some View {
-        if file.isImage, let image = cached ?? loaded {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(maxHeight: 240)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .accessibilityLabel(file.name)
-        } else if file.isImage, !failed {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.secondary.opacity(0.16))
-                .frame(height: 120)
-                .overlay { ProgressView() }
-                .task(id: file.path) {
-                    let name = URL(fileURLWithPath: file.path).lastPathComponent
-                    guard let data = await session.inboxFile(named: name),
-                          let image = UIImage(data: data)
-                    else {
-                        failed = true
-                        return
-                    }
-                    loaded = image
+        Group {
+            if file.isImage, let pixels {
+                Image(uiImage: pixels)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else if file.isImage, !tried {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.secondary.opacity(0.16))
+                    .frame(height: 160)
+                    .overlay { ProgressView() }
+            } else if file.isImage {
+                Button {
+                    tried = false
+                    Task { await load() }
+                } label: {
+                    Label(file.displayName, systemImage: "photo")
+                        .font(.system(size: 15))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.secondary.opacity(0.16))
+                        )
                 }
-        } else {
-            Label(file.name, systemImage: file.isImage ? "photo" : "doc")
-                .font(.system(size: 15))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.secondary.opacity(0.16))
-                )
-                .accessibilityLabel(file.name)
+                .buttonStyle(.plain)
+            } else {
+                Label(file.displayName, systemImage: "doc")
+                    .font(.system(size: 15))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.secondary.opacity(0.16))
+                    )
+            }
         }
+        .accessibilityLabel(file.displayName)
+        .task(id: file.path) { await load() }
+    }
+
+    private func load() async {
+        guard file.isImage, pixels == nil else { return }
+        if let data = InboxCache.load(hostPath: file.path), let decoded = UIImage(data: data) {
+            loaded = decoded
+            return
+        }
+        let name = URL(fileURLWithPath: file.path).lastPathComponent
+        if let data = await session.inboxFile(named: name), let decoded = UIImage(data: data) {
+            InboxCache.save(data, hostPath: file.path)
+            loaded = decoded
+            return
+        }
+        tried = true
     }
 }

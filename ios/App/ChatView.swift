@@ -264,6 +264,7 @@ struct ChatView: View {
                     if let preview = pending[index].preview {
                         session.rememberPreview(preview, for: host.path)
                     }
+                    InboxCache.save(pending[index].data, hostPath: host.path)
                     files.append(host)
                     continue
                 }
@@ -278,6 +279,7 @@ struct ChatView: View {
                 if let preview = pending[index].preview {
                     session.rememberPreview(preview, for: file.path)
                 }
+                InboxCache.save(item.data, hostPath: file.path)
                 files.append(file)
             }
             let body = Attachment.draft(text: text, files: files)

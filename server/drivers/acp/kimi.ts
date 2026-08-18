@@ -89,7 +89,16 @@ export function ensureKimiInjectAlias(
   }
   if (!hasTomlTable(text, modelHeading)) {
     blocks.push(
-      [modelHeading, `provider = ${quoteToml(inject.host)}`, `model = ${quoteToml(inject.model)}`, ""].join("\n"),
+      [
+        modelHeading,
+        `provider = ${quoteToml(inject.host)}`,
+        `model = ${quoteToml(inject.model)}`,
+        // Kimi 0.36+ refuses openai_legacy as a wire protocol; ACP then
+        // skips default-model binding and falls through to OAuth.
+        `protocol = "openai"`,
+        `max_context_size = 262144`,
+        "",
+      ].join("\n"),
     );
   }
   if (blocks.length) {
@@ -97,6 +106,41 @@ export function ensureKimiInjectAlias(
     writeFileSync(path, `${prefix}${blocks.join("\n")}`);
   }
   return alias;
+}
+
+/** Env keys Kimi 0.36+ reads to synthesize an in-memory default model.
+ *  ACP `session/new` runs auth readiness against `default_model`, not `-m`.
+ *  Without a default, a missing/expired `kimi login` becomes
+ *  "Authentication required" even when the picker is a local host. */
+const KIMI_MODEL_ENV = [
+  "KIMI_MODEL_NAME",
+  "KIMI_MODEL_API_KEY",
+  "KIMI_MODEL_BASE_URL",
+  "KIMI_MODEL_PROVIDER_TYPE",
+  "KIMI_MODEL_DISPLAY_NAME",
+] as const;
+
+/** Overlay a local inject as Kimi's in-memory default. Does not write
+ *  config.toml — Kimi strips these reserved entries on persist. */
+export function applyKimiLocalModelEnv(
+  env: Record<string, string | undefined>,
+  modelId: string | undefined,
+): void {
+  const inject = decodeInjectId(modelId);
+  if (!inject) return;
+  const host = localHost(inject.host);
+  if (!host) return;
+  env.KIMI_MODEL_NAME = inject.model;
+  env.KIMI_MODEL_API_KEY = hostApiKey(host, env);
+  env.KIMI_MODEL_BASE_URL = host.baseUrl;
+  // Env overlay accepts openai | anthropic | kimi — not the toml
+  // openai_legacy type we write for the on-disk provider row.
+  env.KIMI_MODEL_PROVIDER_TYPE = "openai";
+  env.KIMI_MODEL_DISPLAY_NAME = `${inject.model} (${host.label})`;
+}
+
+function stripKimiModelEnv(env: Record<string, string | undefined>): void {
+  for (const key of KIMI_MODEL_ENV) delete env[key];
 }
 
 function readKimiModelCatalog(env: Record<string, string | undefined>): ModelCatalog {
@@ -180,6 +224,12 @@ const support: AcpSupport = {
   transformEnv: (env) => {
     delete env.MOONSHOT_API_KEY;
     delete env.KIMI_API_KEY;
+    // A leftover shell overlay would steal every Kimi turn, including
+    // subscription models. applyTurnEnv puts the inject back per turn.
+    stripKimiModelEnv(env);
+  },
+  applyTurnEnv: (env, { requestedModel }) => {
+    applyKimiLocalModelEnv(env, requestedModel);
   },
 
   // The only advertised authMethod is {id:"login", type:"terminal"} — a

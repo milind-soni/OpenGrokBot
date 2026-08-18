@@ -6,12 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DroidAgentDriver, ensureDroidInjectModel } from "./acp/droid.ts";
 import { ensureGrokInjectSlug } from "./acp/grok.ts";
-import { ensureKimiInjectAlias, KimiAgentDriver } from "./acp/kimi.ts";
+import { applyKimiLocalModelEnv, ensureKimiInjectAlias, KimiAgentDriver } from "./acp/kimi.ts";
 import { ensureOpenCodeInjectModel } from "./acp/opencode-go.ts";
 import { AntigravityDriver } from "./antigravity.ts";
 
 const FAKE_ACP = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-acp-cli.ts");
 const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
+import { recordEvents } from "../testing/events.ts";
 import { ensureHermesInjectProvider } from "./acp/hermes.ts";
 import { ensureQwenInjectModel } from "./acp/qwen.ts";
 import {
@@ -261,6 +262,8 @@ describe("ensureKimiInjectAlias", () => {
     expect(text.match(/\[providers\.omlx\]/g)?.length).toBe(1);
     expect(text).toContain(`base_url = "http://127.0.0.1:8080/v1"`);
     expect(text).toContain(`model = "GLM-5.2-fp8"`);
+    expect(text).toContain(`protocol = "openai"`);
+    expect(text).toContain(`max_context_size = 262144`);
   });
 
   it("treats USERPROFILE as the same home for credentials and config", async () => {
@@ -281,6 +284,76 @@ describe("ensureKimiInjectAlias", () => {
       expect(snap.authenticated).toBe(true);
       expect(ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: undefined, USERPROFILE: home })).toBe("omlx/GLM-5.2-fp8");
       expect(readFileSync(join(home, ".kimi-code", "config.toml"), "utf8")).toContain("[providers.omlx]");
+    } finally {
+      await instance.dispose();
+    }
+  });
+});
+
+describe("applyKimiLocalModelEnv", () => {
+  it("overlays an OpenAI-compatible default for a local inject pick", () => {
+    const env: Record<string, string | undefined> = {};
+    applyKimiLocalModelEnv(env, "ollama::ornith:35b-bf16");
+    expect(env).toMatchObject({
+      KIMI_MODEL_NAME: "ornith:35b-bf16",
+      KIMI_MODEL_API_KEY: "ollama",
+      KIMI_MODEL_BASE_URL: "http://127.0.0.1:11434/v1",
+      KIMI_MODEL_PROVIDER_TYPE: "openai",
+    });
+  });
+
+  it("leaves subscription slugs and already-resolved aliases alone", () => {
+    const env: Record<string, string | undefined> = { KIMI_MODEL_NAME: "keep-me" };
+    applyKimiLocalModelEnv(env, "kimi-code/k3");
+    applyKimiLocalModelEnv(env, "ollama/ornith:35b-bf16");
+    applyKimiLocalModelEnv(env, undefined);
+    expect(env.KIMI_MODEL_NAME).toBe("keep-me");
+    expect(env.KIMI_MODEL_API_KEY).toBeUndefined();
+  });
+
+  it("reads the Unsloth token from the turn env", () => {
+    const env: Record<string, string | undefined> = { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" };
+    applyKimiLocalModelEnv(env, "unsloth::qwen3-coder");
+    expect(env.KIMI_MODEL_API_KEY).toBe("unsloth-secret");
+    expect(env.KIMI_MODEL_BASE_URL).toBe("http://127.0.0.1:8888/v1");
+  });
+
+  it("puts the overlay on the Kimi child only for a local inject pick", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-overlay-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    const dump = join(home, "dump.json");
+    const instance = await KimiAgentDriver.create({
+      instanceId: "kimi-overlay",
+      displayName: "Kimi",
+      environment: { HOME: home, FAKE_ACP_DUMP: dump, KIMI_MODEL_NAME: "from-shell" },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: false },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({
+        threadId: "t-inject",
+        text: "hi",
+        model: "ollama::ornith:35b-bf16",
+      });
+      await recorder.until((e) => e.type === "turn.completed");
+      const injectDump = JSON.parse(readFileSync(dump, "utf8")) as { env: Record<string, string> };
+      expect(injectDump.env).toMatchObject({
+        KIMI_MODEL_NAME: "ornith:35b-bf16",
+        KIMI_MODEL_API_KEY: "ollama",
+        KIMI_MODEL_BASE_URL: "http://127.0.0.1:11434/v1",
+        KIMI_MODEL_PROVIDER_TYPE: "openai",
+      });
+
+      await instance.adapter.sendTurn({
+        threadId: "t-cloud",
+        text: "hi",
+        model: "kimi-code/k3",
+      });
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-cloud");
+      const cloudDump = JSON.parse(readFileSync(dump, "utf8")) as { env: Record<string, string> };
+      expect(cloudDump.env.KIMI_MODEL_NAME).toBeUndefined();
     } finally {
       await instance.dispose();
     }

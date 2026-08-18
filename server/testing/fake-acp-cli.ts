@@ -71,6 +71,12 @@ if (process.env.FAKE_ACP_DUMP) {
       "ANTHROPIC_API_KEY",
       "XAI_API_KEY",
       "UNSLOTH_STUDIO_AUTH_TOKEN",
+      "KIMI_MODEL_NAME",
+      "KIMI_MODEL_API_KEY",
+      "KIMI_MODEL_BASE_URL",
+      "KIMI_MODEL_PROVIDER_TYPE",
+      "KIMI_MODEL_DISPLAY_NAME",
+      "TEST_TURN_MODEL",
     ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
   );
   writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));

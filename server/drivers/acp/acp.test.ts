@@ -458,6 +458,36 @@ describe("ACP turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: true });
   });
 
+  it("applyTurnEnv sees the picker model after resolveTurnModel", async () => {
+    const dump = join(scratch, "turn-env.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    const TurnEnvDriver = createAcpDriver({
+      ...SELECT_MODEL_SUPPORT,
+      driverKind: "turnEnvTest",
+      selectModel: undefined,
+      applyTurnEnv: (env, { requestedModel }) => {
+        env.TEST_TURN_MODEL = requestedModel ?? "";
+      },
+    });
+    instance = await TurnEnvDriver.create({
+      instanceId: "turn-env-test",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({
+      threadId: "t-turn-env",
+      text: "go",
+      model: "ollama::ornith:35b-bf16",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_TURN_MODEL).toBe("ollama::ornith:35b-bf16");
+  });
+
   it("transformEnv sees the instance config", async () => {
     const dump = join(scratch, "policy.json");
     process.env.FAKE_ACP_DUMP = dump;

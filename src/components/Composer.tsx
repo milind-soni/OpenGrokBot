@@ -1,10 +1,21 @@
 import { track } from "@/lib/analytics";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Clock, Mic, Square, X } from "lucide-react";
-import { useStore, type Bot } from "@/state/store";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Clock, Mic, Square, Users, X } from "lucide-react";
+import { useStore, visibleMessages, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { useComposerDraft } from "@/lib/drafts";
 import { MausAvatar } from "./Avatar";
+import { ComposerAttachments } from "./ComposerAttachments";
+import {
+  composeMessage,
+  isLongPaste,
+  pasteAttachment,
+  type Attachment,
+} from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
+import { groupComposerHint } from "@/lib/group-routing";
+import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
+import { useDesktopCapabilities } from "./DesktopCapabilities";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -18,9 +29,51 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => void }) {
+type MentionChoice = { id: string; name: string; bot?: Bot };
+
+export function Composer({
+  bot,
+  group,
+  members,
+  onEditLast,
+}: {
+  bot?: Bot;
+  group?: Group;
+  members?: Bot[];
+  onEditLast?: () => void;
+}) {
   const { state, dispatch } = useStore();
-  const [text, setText] = useState("");
+  const { capabilities } = useDesktopCapabilities();
+  // Unified target: a 1:1 bot thread or a room. In a room the @ picker
+  // offers members plus @everyone; explicit mentions override the room's
+  // configured default responder.
+  const busy = group ? Boolean(group.busyBotId) : Boolean(bot?.busy);
+  // a pending approval blocks the prompt until it is answered
+  const threadId = group?.threadId ?? bot?.threadId ?? "";
+  // the VISIBLE branch only — an approval left on a branch you edited away
+  // from must not keep blocking the composer
+  const approvals = pendingApprovals(group ? group.messages : bot ? visibleMessages(bot) : []);
+  const approval = approvals[0];
+  const approvalBot = group
+    ? members?.find((b) => b.id === approval?.message.from?.botId) ??
+      members?.find((b) => b.id === group.busyBotId)
+    : bot;
+  const busyName = group
+    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? "A bot")
+    : (bot?.name ?? "The bot");
+  // Per-thread draft: switching bots unmounts this component, so both the
+  // text and its attachment chips have to outlive it (see lib/drafts).
+  const [text, setText, attachments, setAttachments] = useComposerDraft(
+    group ? `group:${group.id}` : `bot:${bot?.id ?? ""}`,
+  );
+  const addAttachments = useCallback(
+    (next: Attachment[]) => setAttachments((prev) => [...prev, ...next]),
+    [setAttachments],
+  );
+  const removeAttachment = useCallback(
+    (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id)),
+    [setAttachments],
+  );
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
@@ -34,13 +87,20 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const peers = state.bots.filter((b) => b.id !== bot.id && !b.hidden);
+    const pool: MentionChoice[] = group
+      ? [
+          { id: "__everyone__", name: "everyone" },
+          ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
+        ]
+      : state.bots
+          .filter((member) => member.id !== bot?.id && !member.hidden)
+          .map((member) => ({ id: member.id, name: member.name, bot: member }));
     const q = mention.query.trim().toLowerCase();
     // "@Scout " — the full name plus a space — is a COMPLETED tag, not a
     // search: keep the picker closed so Enter sends instead of re-picking
-    if (mention.query.endsWith(" ") && peers.some((b) => b.name.toLowerCase() === q)) return [];
-    return peers.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot.id]);
+    if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
+    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
   const pickerOpen = candidates.length > 0;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
@@ -53,7 +113,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
-  const pickMention = (peer: Bot) => {
+  const pickMention = (peer: MentionChoice) => {
     if (!mention) return;
     const after = text.slice(caret);
     const next = `${text.slice(0, mention.start)}@${peer.name} ${after}`;
@@ -71,25 +131,35 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
   // One message may be queued while the bot works; it auto-sends the moment
   // the turn settles. Enter during a turn queues instead of silently dying.
   const [queued, setQueued] = useState<string | null>(null);
+  // a chip on its own is a message: the send control has to appear for it
+  const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const send = () => {
-    const t = text.trim();
+    const t = composeMessage(text, attachments);
     if (!t) return;
-    if (bot.busy) {
+    if (busy) {
       setQueued(t);
       setText("");
+      setAttachments([]);
       return;
     }
-    dispatch({ type: "send", botId: bot.id, text: t });
-    track("message_sent", { driver: bot.modelSelection?.instanceId });
+    if (group) {
+      dispatch({ type: "sendGroup", groupId: group.id, text: t });
+      track("message_sent", { room: true });
+    } else if (bot) {
+      dispatch({ type: "send", botId: bot.id, text: t });
+      track("message_sent", { driver: bot.modelSelection?.instanceId });
+    }
     setText("");
+    setAttachments([]);
   };
   useEffect(() => {
-    if (!bot.busy && queued) {
-      dispatch({ type: "send", botId: bot.id, text: queued });
-      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: true });
+    if (!busy && queued) {
+      if (group) dispatch({ type: "sendGroup", groupId: group.id, text: queued });
+      else if (bot) dispatch({ type: "send", botId: bot.id, text: queued });
+      track("message_sent", { queued: true });
       setQueued(null);
     }
-  }, [bot.busy, queued, bot.id, bot.modelSelection?.instanceId, dispatch]);
+  }, [busy, queued, bot, group, dispatch]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
@@ -126,8 +196,8 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
   }, [recording]);
 
   const toggleMic = () => {
-    if (!window.ogb) {
-      setSpeechError("Voice input is available in the desktop app.");
+    if (!capabilities.dictation.available || !window.ogb) {
+      setSpeechError("Dictation isn't available in this build.");
       return;
     }
     baseText.current = text.trim();
@@ -146,7 +216,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
             <Clock size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Queued — sends when {bot.name} finishes: “{queued}”
+              Queued — sends when {busyName} finishes: “{queued}”
             </span>
             <button
               onClick={() => setQueued(null)}
@@ -175,13 +245,44 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
                   i === highlight ? "bg-raised-hover" : "",
                 )}
               >
-                <MausAvatar color={peer.color} state={normalizeState(peer.mascotExpression) ?? "happy"} size={24} />
+                {peer.bot ? (
+                  <MausAvatar
+                    color={peer.bot.color}
+                    state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
+                    size={24}
+                  />
+                ) : (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                    <Users size={14} aria-hidden="true" />
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">Agent</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? "Agent" : "Room"}</span>
               </button>
             ))}
           </div>
         )}
+        {/* An approval takes over the composer: you answer it before you
+            can type again, so a waiting bot is impossible to miss. */}
+        {approval && (
+          <div className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
+            <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
+            <PendingApprovalActions
+              pending={approval}
+              threadId={threadId}
+              bot={approvalBot}
+              onCancelTurn={() => {
+                if (group) dispatch({ type: "interruptGroup", groupId: group.id });
+                else if (bot) dispatch({ type: "interrupt", botId: bot.id });
+              }}
+            />
+          </div>
+        )}
+        <ComposerAttachments
+          items={attachments}
+          onAdd={addAttachments}
+          onRemove={removeAttachment}
+        />
         <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2">
         <textarea
           ref={inputRef}
@@ -191,6 +292,21 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
             setDismissedAt(null);
+          }}
+          onPaste={(e) => {
+            // a wall of text becomes a chip instead of burying the input
+            const pasted = e.clipboardData.getData("text/plain");
+            if (!isLongPaste(pasted)) return;
+            e.preventDefault();
+            // Preserve native paste replacement semantics: if text was
+            // selected, the attachment replaces that selection.
+            const start = e.currentTarget.selectionStart;
+            const end = e.currentTarget.selectionEnd;
+            if (start !== end) {
+              setText(`${text.slice(0, start)}${text.slice(end)}`);
+              setCaret(start);
+            }
+            setAttachments((prev) => [...prev, pasteAttachment(pasted)]);
           }}
           onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
@@ -214,7 +330,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
               }
             }
             // an empty composer + ArrowUp = edit your last message (like a chat app)
-            if (e.key === "ArrowUp" && !text && onEditLast) {
+            if (e.key === "ArrowUp" && !hasContent && onEditLast) {
               e.preventDefault();
               onEditLast();
               return;
@@ -226,19 +342,27 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
             }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
+          disabled={Boolean(approval)}
           placeholder={
-            recording
+            approval
+              ? "Answer the approval above to continue"
+              : recording
               ? "Listening…"
-              : bot.busy
-                ? `${bot.name} is working — Enter queues your message`
-                : `Message ${bot.name}`
+              : busy
+                ? `${busyName} is working — Enter queues your message`
+                : group
+                  ? `Message ${group.name} — ${groupComposerHint(group, members ?? [])}`
+                  : `Message ${bot?.name ?? ""}`
           }
-          aria-label={`Message ${bot.name}`}
+          aria-label={`Message ${group ? group.name : (bot?.name ?? "")}`}
           className="max-h-40 w-full resize-none self-center bg-transparent py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
-        {bot.busy && (
+        {busy && (
           <button
-            onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
+            onClick={() => {
+              if (group) dispatch({ type: "interruptGroup", groupId: group.id });
+              else if (bot) dispatch({ type: "interrupt", botId: bot.id });
+            }}
             aria-label="Stop this turn"
             className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
             title="Stop"
@@ -246,7 +370,7 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
             <Square size={14} className="fill-current" />
           </button>
         )}
-        {!bot.busy && !text.trim() && (
+        {!busy && !hasContent && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? "Stop dictation" : "Start dictation"}
@@ -261,17 +385,17 @@ export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => voi
             <Mic size={18} />
           </button>
         )}
-        {text.trim() && (
+        {hasContent && (
           <button
             onClick={send}
-            aria-label={bot.busy ? "Queue message" : "Send message"}
-            title={bot.busy ? "Queue — sends when the bot finishes" : "Send"}
+            aria-label={busy ? "Queue message" : "Send message"}
+            title={busy ? "Queue — sends when the bot finishes" : "Send"}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
-              bot.busy ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
+              busy ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
             )}
           >
-            {bot.busy ? <Clock size={15} /> : <ArrowUp size={17} />}
+            {busy ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
         )}
         </div>

@@ -18,6 +18,8 @@ let stubPort = 0;
 let lastAuth: string | undefined;
 let lastAskBody: any = null;
 let askResponse: unknown = { botName: "Helper", text: "hi from helper" };
+let lastDelegateBody: any = null;
+let delegateResponse: unknown = { queued: true, message: "Delegation queued." };
 
 let child: ChildProcess;
 const pending = new Map<number, (msg: any) => void>();
@@ -60,6 +62,16 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/api/internal/delegate-bot") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastDelegateBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(delegateResponse));
+      });
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unknown" }));
   });
@@ -71,6 +83,7 @@ beforeAll(async () => {
       ...process.env,
       OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
       OMB_BOT_ID: "bot-asker",
+      OMB_THREAD_ID: "thread-asker-routine",
       OMB_COMMS_TOKEN: TOKEN,
       OMB_TURN_DEPTH: "0",
     },
@@ -97,11 +110,11 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
-  it("answers the MCP handshake and lists both tools", async () => {
+  it("answers the MCP handshake and lists all three tools", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["list_bots", "ask_bot"]);
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["list_bots", "ask_bot", "delegate_bot"]);
   });
 
   it("list_bots renders the roster and authenticates with the shared token", async () => {
@@ -117,7 +130,13 @@ describe("agents-proxy MCP surface", () => {
     const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "ping" });
     expect(res.result.content[0].text).toContain("Helper replied:");
     expect(res.result.content[0].text).toContain("hi from helper");
-    expect(lastAskBody).toMatchObject({ fromBotId: "bot-asker", toBotId: "bot-helper", message: "ping", depth: 0 });
+    expect(lastAskBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      toBotId: "bot-helper",
+      message: "ping",
+      depth: 0,
+    });
   });
 
   it("renders a busy peer as a clean answer, not an error", async () => {
@@ -132,6 +151,31 @@ describe("agents-proxy MCP surface", () => {
     const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "ping" });
     expect(res.result.isError).toBe(true);
     expect(res.result.content[0].text).toContain("one hop");
+  });
+
+  it("forwards the source thread when queueing a delegation", async () => {
+    delegateResponse = { queued: true, message: "Delegation queued." };
+    const res = await callTool("delegate_bot", {
+      bot_id: "bot-helper",
+      message: "take this",
+      reason: "follow-up",
+    });
+    expect(res.result.content[0].text).toContain("Delegation queued");
+    expect(lastDelegateBody).toMatchObject({
+      fromBotId: "bot-asker",
+      fromThreadId: "thread-asker-routine",
+      toBotId: "bot-helper",
+      message: "take this",
+      reason: "follow-up",
+      depth: 0,
+    });
+  });
+
+  it("returns queue refusal guidance to the agent as a tool error", async () => {
+    delegateResponse = { error: "delegation chains are limited to one hop — do this one yourself" };
+    const res = await callTool("delegate_bot", { bot_id: "bot-helper", message: "take this" });
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toContain("do this one yourself");
   });
 
   it("rejects unknown tools with -32602", async () => {

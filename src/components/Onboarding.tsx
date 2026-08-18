@@ -1,31 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { EngineSetup } from "./EngineSetup";
+import { ProviderMark } from "./ProviderIcons";
+import type { InstanceInfo } from "@/state/store";
 
 // Three-step first-run onboarding: who you are (email), what's installed
 // (live engine checks from the harness), what the app may use (TCC).
 // Every check is skippable — onboarding must never brick the app.
 
-type InstanceRow = {
-  instanceId: string;
-  driverKind: string;
-  displayName: string;
-  snapshot: { state: "available" | "unavailable"; reason?: string; version?: string | null; authenticated?: boolean };
-};
-
-const isElectron = navigator.userAgent.includes("Electron");
+type InstanceRow = InstanceInfo;
 
 function StatusRow({
   ok,
   warn,
   title,
   detail,
+  mark,
+  children,
 }: {
   ok: boolean;
   warn?: boolean;
   title: string;
-  detail: string;
+  detail?: string;
+  mark?: ReactNode;
+  children?: ReactNode;
 }) {
   return (
     <div className="flex items-start gap-3 rounded-xl bg-card p-3.5">
@@ -36,15 +37,76 @@ function StatusRow({
       >
         {ok ? <Check size={14} /> : <AlertTriangle size={13} />}
       </span>
-      <div className="min-w-0">
-        <div className="text-[14px] font-medium text-ink">{title}</div>
-        <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">{detail}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-[14px] font-medium text-ink">
+          {mark}
+          <span className="min-w-0 truncate">{title}</span>
+        </div>
+        {detail && <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">{detail}</div>}
+        {children}
       </div>
     </div>
   );
 }
 
+/** One engine on the setup screen: what it's called, what the harness
+ * found, and the one-liner to show when it's good to go. Ready states get
+ * a sentence; anything the user has to act on gets the shared setup UI, so
+ * the instructions come from the driver and are correct for this platform. */
+interface EngineEntry {
+  instance: InstanceRow;
+  label: string;
+  readyNote: string;
+}
+
+function engineReady(instance: InstanceRow): boolean {
+  return (
+    instance.snapshot.state === "available" &&
+    (instance.access === "custom" || instance.snapshot.authenticated !== false)
+  );
+}
+
+function engineTitle({ instance, label }: EngineEntry): string {
+  const version = instance?.snapshot.version ? ` · ${instance.snapshot.version.split(" ")[0]}` : "";
+  return `${label}${version}`;
+}
+
+/** A ready engine needs no attention: a small tile in the grid, so five
+ * engines don't read as one long list where the good news and the setup
+ * work look the same. */
+function ReadyTile(entry: EngineEntry) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl bg-card p-3">
+      <ProviderMark driverKind={entry.instance.driverKind} size={17} />
+      <div className="min-w-0">
+        <div className="truncate text-[13.5px] font-medium text-ink">{engineTitle(entry)}</div>
+        <div className="mt-0.5 text-[12px] leading-snug text-ink-secondary">{entry.readyNote}</div>
+      </div>
+    </div>
+  );
+}
+
+/** An engine that still needs installing or signing in keeps the full-width
+ * row: the command box and terminal button need the room. */
+function SetupRow(entry: EngineEntry) {
+  return (
+    <StatusRow
+      ok={false}
+      warn
+      title={engineTitle(entry)}
+      mark={<ProviderMark driverKind={entry.instance.driverKind} size={16} />}
+    >
+      <EngineSetup
+        instance={entry.instance}
+        className="mt-0.5"
+        intent={entry.instance.access === "custom" ? "inject" : "cloud"}
+      />
+    </StatusRow>
+  );
+}
+
 export function Onboarding({ onDone }: { onDone: () => void }) {
+  const { capabilities } = useDesktopCapabilities();
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -66,20 +128,36 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     track("onboarding_step", { step });
-    if (step === 1 && !instances) {
+  }, [step]);
+
+  useEffect(() => {
+    if (step !== 1) return;
+    let active = true;
+    let latestRequest = 0;
+    const refresh = () => {
+      const request = ++latestRequest;
       fetch("/api/instances")
         .then((r) => r.json())
-        .then((d) => setInstances(d.instances ?? []))
-        .catch(() => setInstances([]));
-    }
-    if (step === 2 && isElectron) {
+        .then((d) => active && request === latestRequest && setInstances(d.instances ?? []))
+        .catch(() => active && request === latestRequest && setInstances([]));
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [step]);
+
+  useEffect(() => {
+    if (step === 2 && capabilities.dictation.available) {
       const poll = () => window.ogb?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
       const t = setInterval(poll, 2000);
       return () => clearInterval(t);
     }
-  }, [step, instances]);
+  }, [step, capabilities.dictation.available]);
 
   const finish = () => {
     track("onboarding_completed", {
@@ -90,14 +168,28 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     onDone();
   };
 
-  const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
-  const claude = byKind("claudeAgent");
-  const codex = byKind("codex");
-  const grok = byKind("grokAgent");
+  const engines: EngineEntry[] = (instances ?? [])
+    .filter((instance) => instance.install)
+    .map((instance) => ({
+      instance,
+      label: instance.displayName,
+      readyNote:
+        instance.access === "custom"
+          ? "Installed — ready for a local model."
+          : "Installed — ready to power bots.",
+    }));
+  const readyEngines = engines.filter((e) => engineReady(e.instance));
+  const setupEngines = engines.filter((e) => !engineReady(e.instance));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
-      <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app p-8">
+      {/* the engines step lays tiles out two across, so it gets more room —
+          but never more than the window: the panel caps at the viewport and
+          the engine list scrolls inside it, so the header and Continue stay
+          put and nothing runs into the edges */}
+      <div
+        className={`flex max-h-full w-full flex-col rounded-2xl border border-hairline/40 bg-panel p-8 ${step === 1 ? "max-w-[680px]" : "max-w-[460px]"}`}
+      >
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" state="happy" size={72} />
@@ -142,58 +234,44 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         )}
 
         {step === 1 && (
-          <div className="flex flex-col">
+          <div className="flex min-h-0 flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on AI tools installed on this computer — here&rsquo;s what we found.
             </p>
-            <div className="mt-4 flex flex-col gap-2.5">
+            <div className="mt-4 flex min-h-0 flex-col gap-2.5 overflow-y-auto pr-1 [scrollbar-width:thin]">
               {!instances ? (
                 <div className="flex items-center gap-2 py-6 text-ink-secondary">
                   <Loader2 size={16} className="animate-spin" /> Checking…
                 </div>
               ) : (
                 <>
-                  <StatusRow
-                    ok={claude?.snapshot.state === "available"}
-                    warn
-                    title={`Claude Code ${claude?.snapshot.version ? `· ${claude.snapshot.version.split(" ")[0]}` : ""}`}
-                    detail={
-                      claude?.snapshot.state === "available"
-                        ? claude.snapshot.authenticated
-                          ? "Installed and signed in — ready to power bots."
-                          : "Installed. Run `claude` once in a terminal to sign in."
-                        : "Not found. Install: npm i -g @anthropic-ai/claude-code"
-                    }
-                  />
-                  <StatusRow
-                    ok={codex?.snapshot.state === "available"}
-                    warn
-                    title={`Codex ${codex?.snapshot.version ? `· ${codex.snapshot.version.replace("codex-cli ", "")}` : ""}`}
-                    detail={
-                      codex?.snapshot.state === "available"
-                        ? "Installed — bots can run on Codex too."
-                        : "Optional. Install: npm i -g @openai/codex"
-                    }
-                  />
-                  <StatusRow
-                    ok={grok?.snapshot.state === "available"}
-                    warn
-                    title={`Grok Build ${grok?.snapshot.version ? `· ${grok.snapshot.version.split(" ")[1]}` : ""}`}
-                    detail={
-                      grok?.snapshot.state === "available"
-                        ? grok.snapshot.authenticated
-                          ? "Installed and signed in — bots can run on Grok too."
-                          : "Installed. Run `grok login` in a terminal to sign in."
-                        : "Optional. Install: curl -fsSL https://x.ai/cli/install.sh | bash"
-                    }
-                  />
+                  {readyEngines.length > 0 && (
+                    <>
+                      <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">Ready</div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {readyEngines.map((e) => (
+                          <ReadyTile key={e.label} {...e} />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {setupEngines.length > 0 && (
+                    <>
+                      <div className={`text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary ${readyEngines.length ? "mt-2" : ""}`}>
+                        Needs setup
+                      </div>
+                      {setupEngines.map((e) => (
+                        <SetupRow key={e.label} {...e} />
+                      ))}
+                    </>
+                  )}
                 </>
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
-              className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
+              onClick={() => (capabilities.dictation.available ? setStep(2) : finish())}
+              className="mt-5 w-full shrink-0 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue
             </button>

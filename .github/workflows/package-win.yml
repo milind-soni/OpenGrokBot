@@ -1,0 +1,113 @@
+# Windows installer, built on a real Windows runner and published as a
+# workflow artifact.
+#
+# Why this exists: releases are cut by hand from a Mac, which cannot build
+# an NSIS installer (electron-builder needs wine, and a cross-built exe
+# that never ran on Windows is exactly the artifact that looks fine and
+# breaks in the field). So every release so far shipped Windows behind the
+# mac build — different trees under one version number. Run this from the
+# same commit as the mac build and attach the artifact to the release.
+#
+# Deliberately artifact-only: pushing straight to the separate releases
+# repo would need a cross-repo token this workflow has no business holding.
+name: Package Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit/tag/branch to build (defaults to the branch this is run from)"
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: NSIS installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # the packaged app ships compiled JS, so a stale dist/ or dist-server/
+      # would ride along unsigned-for and unsealed (the 0.1.15 "damaged"
+      # incident) — a fresh checkout is clean, but be explicit
+      - name: clean build outputs
+        shell: bash
+        run: rm -rf dist dist-server release
+      - run: pnpm package:win
+      - name: report what was built
+        shell: bash
+        run: |
+          echo "version: $(node -p "require('./package.json').version")"
+          echo "commit:  $(git rev-parse HEAD)"
+          ls -lh release/*.exe release/*.yml 2>/dev/null || true
+      # Three things silently produce an installer that builds fine and is
+      # broken in the field, and none of them can be checked from the Mac the
+      # release is cut on — the artifact carries only the .exe. So assert them
+      # here, where the unpacked tree exists, and fail the build instead of
+      # shipping it.
+      - name: verify the packaged tree
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          fail=0
+          # missing → utilityProcess.fork fails → the 🐭 "Couldn't start the
+          # bot server" page
+          [ -f "$res/server/index.js" ] || { echo "::error::missing $res/server/index.js"; fail=1; }
+          # missing → the server has nothing to serve → black window
+          [ -f "$res/ui/index.html" ] || { echo "::error::missing $res/ui/index.html"; fail=1; }
+          [ -f "$res/app-update.yml" ] || { echo "::error::missing $res/app-update.yml"; fail=1; }
+          if [ -f "$res/app-update.yml" ]; then
+            grep -q "openmausbot-releases" "$res/app-update.yml" || {
+              echo "::error::app-update.yml does not point at openmausbot-releases"; fail=1; }
+            # while the build is unsigned, a publisherName makes
+            # electron-updater reject every update as untrusted
+            if grep -q "publisherName" "$res/app-update.yml"; then
+              echo "::error::app-update.yml carries publisherName on an unsigned build"; fail=1
+            fi
+          fi
+          echo "--- app-update.yml ---"; cat "$res/app-update.yml" 2>/dev/null || true
+          exit $fail
+
+      # index.js EXISTING is not the same as index.js RUNNING. 0.1.24 shipped a
+      # server that died instantly on ERR_MODULE_NOT_FOUND because tsc left a
+      # bare `zod` import in a tree that carries no node_modules — and the
+      # existence check above passed it. Start the real packaged copy here,
+      # where node_modules genuinely is not present.
+      - name: start the packaged server
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
+            OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 1 90); do
+            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
+              echo "packaged server answered /api/health ✓"
+              kill $pid 2>/dev/null || true
+              exit 0
+            fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 1
+          done
+          echo "::error::the packaged server never served /api/health"
+          cat "$RUNNER_TEMP/server.log" || true
+          kill $pid 2>/dev/null || true
+          exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 14

@@ -141,6 +141,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .animate-caret, .animate-msg-in, .animate-shimmer { animation: none; }
   .thinking-shimmer { background: none; color: var(--color-ink-secondary); }
+  /* The drawer still moves, it just arrives instantly. */
+  aside { transition: none; }
 }
 
 /* SupaMaus vector motion. The fast horizontal compression is the edge-on

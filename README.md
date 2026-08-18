@@ -14,17 +14,21 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows-2B2E3A?logo=electron&logoColor=9FEAF9)
+![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
 ![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
 
 <br>
 
 <a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS&labelColor=070707&color=1084fe" alt="Download the latest OpenMausBot for macOS (.dmg)" height="40">
+  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest OpenMausBot for macOS (.dmg)" height="40">
+</a>
+&nbsp;
+<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe">
+  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest OpenMausBot for Windows (.exe)" height="40">
 </a>
 
-<sub>Apple silicon · signed & notarized · one-click .dmg, always the latest · [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
+<sub>macOS: Apple silicon · signed & notarized · one-click .dmg &nbsp;·&nbsp; Windows: 64-bit · one-click installer, no admin rights &nbsp;·&nbsp; both always the latest · [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
 
 <br>
 <br>
@@ -42,12 +46,13 @@ it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each
 memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
 already have:
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your Mac — your
-  existing logins and subscriptions, no new accounts, no proxy in the middle.
+- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
+  — your existing logins and subscriptions, no new accounts, no proxy in the middle. Point any engine at a
+  custom CLI binary (a versioned build or wrapper) in **Settings → Engines**.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
-  live, or your own Mac — plus 500+ apps through Composio Connect.
+  live, or your own Mac — plus 500+ apps through Composio.
 
 ## Features
 
@@ -89,7 +94,7 @@ permission broker turns every risky action into a decision you make, for cloud a
 
 ### 🔌 Connected apps
 
-A one-click marketplace over Composio Connect: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
+A one-click marketplace over Composio Sessions: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
 OAuth once, and every bot can use them as tools.
 
 <img src="docs/screenshots/marketplace.png" alt="Connected apps marketplace" width="100%">
@@ -120,6 +125,15 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 </tr>
 </table>
 
+### 🎧 Bots that talk back
+
+Press the speaker on any reply, or switch a bot to read its answers out as they land — so you can listen
+to what ran overnight while you make breakfast. Hit **call** and it's a conversation: it hears you, tells
+you what it's doing while it works, and asks for approvals out loud.
+
+Bring your own ElevenLabs key — paste it once in App Settings, pick a voice, and every bot can talk.
+Give a bot its own voice and a room stops sounding like one person.
+
 **Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
 composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
 expressions · screenshots of the bot's work folded into the transcript.
@@ -139,16 +153,17 @@ flowchart LR
         REG[Driver registry] --> BUS[Event bus → SSE]
         BROKER[Permission broker]
     end
-    subgraph agents ["Agents on your Mac"]
+    subgraph agents ["Agents on your computer"]
         CL[claude CLI]
         CX[codex CLI]
+        GR[grok CLI]
     end
     UI -- "HTTP commands" --> server
     BUS -- "one SSE stream" --> UI
-    REG --> CL & CX
-    CL & CX -- "MCP" --> BROKER
+    REG --> CL & CX & GR
+    CL & CX & GR -- "permission requests" --> BROKER
     server -- "Box API" --> BOX[("Cloud computer<br/>box.ascii.dev")]
-    server -- "Composio Connect" --> APPS[("Gmail · Slack · GitHub · …")]
+    server -- "Composio Session" --> APPS[("Gmail · Slack · GitHub · …")]
 ```
 
 | Layer | Where | What it does |
@@ -156,13 +171,22 @@ flowchart LR
 | Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
 | Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
+| Voice | `server/tts/` | ElevenLabs, bring your own key. Runs on the harness so the key never reaches the UI; markdown is rewritten into something worth hearing before it is spoken. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
-| Desktop | `electron/` | macOS + Windows shells: dictation helper (SFSpeechRecognizer, macOS only), local screen capture, CUA bridge (macOS only). |
+| Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and explicit platform capabilities; Apple speech, local screen capture, and the current CUA bridge remain macOS-only. |
 
 ## Quick start
 
-**Easiest:** [download the latest .dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest),
-drag it to Applications, open it. The harness server is embedded — no setup.
+**Released builds:** the harness server is embedded, so macOS and Windows need no separate server setup.
+
+| | Download | Install |
+|---|---|---|
+| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
+| **Windows** (x64) | [OpenMausBot-setup.exe](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
+
+**Ubuntu Desktop beta:** build the `.deb` or AppImage from source using the commands below. Release downloads
+will be linked here once Linux publishing is enabled. See [the Ubuntu Desktop guide](docs/linux-desktop.md) for
+installation, capabilities, and troubleshooting.
 
 **From source:**
 
@@ -172,33 +196,77 @@ pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
 pnpm dev           # app → http://127.0.0.1:5199
-pnpm dev:desktop   # or the Electron shell
+pnpm dev:desktop   # Electron shell; keep the two commands above running
 ```
 
-Requirements: **macOS or Windows**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
+Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
 [`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
 in the model picker automatically.
 
-Optional, pasted once in **App Settings** (gear in the sidebar footer):
+Package the desktop application:
 
-| Key | Unlocks |
-|---|---|
-| Composio Connect key (`ck_…`) | The connected-apps marketplace |
-| Composio API key (`ak_…`) | The full 500+ app catalog with official logos |
-| Box token ([box.ascii.dev](https://box.ascii.dev)) | Cloud computers for your bots |
+```sh
+pnpm package:mac      # macOS: DMG + ZIP; requires Swift/Xcode tools
+pnpm package:win      # Windows: installer + ZIP
+pnpm package:linux    # Ubuntu x64: .deb + AppImage; no Swift required
+```
+
+### Desktop capability status
+
+| Capability | macOS | Ubuntu 24.04 Xorg | Ubuntu 24.04 Wayland |
+|---|---|---|---|
+| Packaged app, embedded harness, local agent CLIs | Supported | Beta | Beta |
+| Composio and Box/cloud computers | Supported | Beta | Beta |
+| Local screen preview and computer control | Supported | Planned | Planned after compositor validation |
+| Native on-device dictation | Supported | Planned | Planned |
+
+Unavailable native features fail closed on Ubuntu without blocking chat or cloud features. Linux local computer
+control, Wayland capture/automation, dictation, and ARM64 are tracked in
+[#29](https://github.com/milind-soni/OpenMausBot/issues/29) and are not claimed by the baseline package.
+
+These credentials are optional — local chat works without them. Paste a key once in **App Settings** (gear
+in the sidebar footer) when you want to enable its integration:
+
+| Credential | What it enables | Where to get it |
+|---|---|---|
+| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
+| Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
+| ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
+
+Composio and Box are third-party services with their own accounts and terms. Box is a paid service after
+its trial, and using a cloud computer may incur charges.
 
 ```sh
 pnpm typecheck     # app + server
+pnpm test          # unit, driver, API, and desktop capability tests
 pnpm build         # typecheck + production build
+pnpm check:electron # syntax-check Electron main/preload files
 pnpm package:win   # Windows installer + zip → release/
+pnpm package:linux # Ubuntu x64 .deb + AppImage → release/
 ```
+
+### Routines and webhook triggers
+
+Routines can run once or on selected weekdays, using either a MAUS's configured model/computer or the
+Cloud VM runner. Webhook triggers are independent from schedules but reuse the same queued task executor
+and calendar receipts.
+
+OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
+Set `OMB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
+or rotated. Bearer authentication is recommended so the secret stays out of request URLs and most access
+logs; a single capability URL remains available for senders that cannot configure headers. The receiver
+exposes only `/health` and secret `/hooks/...` endpoints; it never exposes the app's broader API.
+OpenMausBot must remain running to accept a delivery. For public internet delivery, proxy only this
+dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
 
 ## Status
 
 Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use. Rough edges to expect: routines (scheduled tasks) are a placeholder, sidebar sections aren't
-built yet, and the Linux shell hasn't been attempted (macOS and Windows both run end to end; the harness
-itself is portable Node).
+computer use. macOS and Windows have released builds; Ubuntu 24.04 x64 packages are in beta with the
+capability limits above. Rough edges to expect: hosted/mobile connectivity is still being built, and webhook
+triggers currently use the local receiver rather than an always-on hosted relay.
+Voice needs an ElevenLabs key, and calls are macOS-only for now (they ride the same on-device dictation as
+the composer mic) — see [`docs/voice-mode.md`](docs/voice-mode.md) for the design and the known gaps.
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.

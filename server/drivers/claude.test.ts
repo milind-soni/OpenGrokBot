@@ -3,23 +3,23 @@
 // stream-json protocol into canonical events, keep argv hygiene (prompt
 // over stdin, secrets stripped), and broker permission asks.
 //
-// Spawn-based tests are POSIX-only until Windows CLI spawning lands: the
-// fake CLI is a shebang script, which Windows cannot exec directly (the
-// same reason claude.cmd needs special handling — see the Windows PRs).
-import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+// These used to be POSIX-only: the fake CLI is a shebang script Windows
+// cannot exec, and the broker is a unix socket. Both now go through
+// resolveCliSpawn / permissionSocketPath, so they run everywhere.
+import { chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DATA_DIR, ensureDirs } from "../config.ts";
+import { ensureDirs } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
-import { ClaudeDriver } from "./claude.ts";
+import { ClaudeDriver, permissionSocketPath } from "./claude.ts";
+import { removeTempDir } from "../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
-const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("ClaudeDriver.decodeConfig", () => {
   it("defaults to the claude binary with acceptEdits", () => {
@@ -36,19 +36,23 @@ describe("ClaudeDriver.decodeConfig", () => {
   it("throws on an invalid permissionMode (registry downgrades this to a shadow)", () => {
     expect(() => ClaudeDriver.decodeConfig({ permissionMode: "yolo" })).toThrow(/permissionMode/);
   });
+
+  it.skipIf(process.platform !== "win32")("names permission pipes per harness process", () => {
+    expect(permissionSocketPath("thread-abc")).toBe(`\\\\.\\pipe\\openmausbot-perm-${process.pid}-thread-a`);
+  });
 });
 
-posixOnly("ClaudeDriver turns (fake CLI)", () => {
+describe("ClaudeDriver turns (fake CLI)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
   let scratch: string;
 
-  const create = async (mode?: string) => {
+  const create = async (mode?: string, environment: Record<string, string> = {}) => {
     if (mode) process.env.FAKE_CLAUDE_MODE = mode;
     instance = await ClaudeDriver.create({
       instanceId: "claude-test",
       displayName: "Claude Test",
-      environment: {},
+      environment,
       enabled: true,
       config: { cli: FAKE_CLI, permissionMode: "acceptEdits" },
     });
@@ -67,7 +71,7 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.ANTHROPIC_API_KEY;
     recorder?.stop();
     await instance?.dispose();
-    rmSync(scratch, { recursive: true, force: true });
+    await removeTempDir(scratch);
   });
 
   it("normalizes a full turn into the canonical event sequence", async () => {
@@ -91,7 +95,9 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated")!;
     expect(usage).toMatchObject({ input: 12, output: 5 }); // input + cache_read
     const done = recorder.events.at(-1)!;
-    expect(done).toMatchObject({ type: "turn.completed", ok: true, cost: 0.01 });
+    // usage on the settle is the turn total from the result message, so
+    // the harness has one figure to bank per turn
+    expect(done).toMatchObject({ type: "turn.completed", ok: true, cost: 0.01, usage: { input: 12, output: 5 } });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 
@@ -133,6 +139,24 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
   });
 
+  it("uses instance credentials when launching an injected local model", async () => {
+    await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-local-model",
+      text: "hi",
+      model: "unsloth::local-model",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv[seen.argv.indexOf("--model") + 1]).toBe("local-model");
+    expect(seen.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8888");
+    expect(seen.env.ANTHROPIC_AUTH_TOKEN).toBe("unsloth-secret");
+  });
+
   it("mounts the agents comms proxy as an MCP server and pre-allows its tools", async () => {
     await create();
     const dump = join(scratch, "dump.json");
@@ -152,13 +176,97 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    const mcpConfig = JSON.parse(seen.argv[seen.argv.indexOf("--mcp-config") + 1]);
-    expect(mcpConfig.mcpServers.agents).toMatchObject({
+    expect(seen.mcpConfig.mcpServers.agents).toMatchObject({
       args: ["/fake/agents-proxy.js"],
       env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
     });
+    // the config goes in a private file, never on argv, where `ps` would
+    // show the comms token to every other user on the machine
+    expect(JSON.stringify(seen.argv)).not.toContain("tok");
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
+  });
+
+  it("mounts the dweb proxy from the drivers directory and pre-allows its tools", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-dweb",
+      text: "hi",
+      integrations: { dweb: { url: "http://127.0.0.1:49737" } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.dweb.args[0]).toMatch(/[\\/]drivers[\\/]dweb-proxy\.(?:ts|js)$/);
+    expect(seen.mcpConfig.mcpServers.dweb.env.DWEB_URL).toBe("http://127.0.0.1:49737");
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__dweb");
+  });
+
+  // the harness gates both the integration and the prompt hint on
+  // capabilities.composioMcp, so the flag and the mount must agree — a bot
+  // told about tools its driver never mounted burns the turn hunting
+  it("mounts the user's connected apps and claims the capability that gates them", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    expect(instance.adapter.capabilities.composioMcp).toBe(true);
+    await instance.adapter.sendTurn({
+      threadId: "t-composio",
+      text: "hi",
+      integrations: {
+        composio: {
+          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+          headers: { "x-api-key": "ak_test" },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.composio).toMatchObject({
+      type: "http",
+      url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+      headers: { "x-api-key": "ak_test" },
+    });
+    // the user's Composio key must not be readable via `ps`
+    expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
+  });
+
+  // the config file holds live credentials, so it must not outlive the turn —
+  // including when the CLI dies mid-turn, which is the path that leaks if
+  // cleanup is hung off the happy-path result instead of settle()
+  it.each([
+    ["a completed turn", "happy"],
+    ["a crashed turn", "exit-early"],
+  ])("deletes the mcp config file after %s", async (_label, mode) => {
+    await create(mode);
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-cleanup",
+      text: "hi",
+      integrations: {
+        composio: {
+          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
+          headers: { "x-api-key": "ak_test" },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const configPath = (() => {
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      return seen.argv[seen.argv.indexOf("--mcp-config") + 1] as string;
+    })();
+    expect(configPath).toMatch(/omb-mcp-/);
+    expect(existsSync(configPath)).toBe(false);
+    expect(existsSync(dirname(configPath))).toBe(false);
   });
 
   it("resumes with --resume when a cursor exists and reports that session id", async () => {
@@ -233,11 +341,9 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-perm-abc", text: "go" });
     await recorder.until((e) => e.type === "session.started");
 
-    // connect as the MCP proxy would and raise an ask (same tag rule as
-    // permissionSocketPath in claude.ts)
-    const tag = "t-perm-abc".replace(/[^\w-]/g, "").slice(0, 8);
-    const socketPath = join(DATA_DIR, `perm-${tag}.sock`);
-    const conn = connect(socketPath);
+    // connect as the MCP proxy would and raise an ask — unix socket on
+    // POSIX, named pipe on Windows, same one the driver handed the proxy
+    const conn = connect(permissionSocketPath("t-perm-abc"));
     const answered = new Promise<{ behavior: string }>((resolve) => {
       let buf = "";
       conn.on("data", (c) => {
@@ -260,7 +366,8 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
       requestId: "ask-1",
     });
 
-    await instance.adapter.respondToRequest("t-perm-abc", "ask-1", { behavior: "allow" });
+    // the outcome names exactly what was granted: this action, once
+    await expect(instance.adapter.respondToRequest("t-perm-abc", "ask-1", { behavior: "allow" })).resolves.toBe("allowed-once");
     expect(await answered).toMatchObject({ behavior: "allow" });
     const resolved = await recorder.until((e) => e.type === "request.resolved");
     expect(resolved).toMatchObject({ behavior: "allow", source: "user" });
@@ -270,13 +377,123 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
-  it("rejects answers to unknown or already-resolved asks", async () => {
+  it("answers to unknown or already-resolved asks resolve `unavailable` — typed, never a throw", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-perm-2", text: "go" });
-    await expect(
-      instance.adapter.respondToRequest("t-perm-2", "never-asked", { behavior: "allow" }),
-    ).rejects.toThrow(/pending request/);
+    await expect(instance.adapter.respondToRequest("t-perm-2", "never-asked", { behavior: "allow" })).resolves.toBe("unavailable");
+    // and a thread with no turn at all is the same answer
+    await expect(instance.adapter.respondToRequest("no-such-thread", "x", { behavior: "deny" })).resolves.toBe("unavailable");
     await instance.adapter.interruptTurn("t-perm-2");
     await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("resolves a pending ask as a system denial when the turn is interrupted", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-stop", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-perm-stop"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-stop", tool: "Bash", input: { command: "sleep 60" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-stop");
+
+    await instance.adapter.interruptTurn("t-perm-stop");
+    const resolved = await recorder.until((e) => e.type === "request.resolved" && e.requestId === "ask-stop");
+    expect(resolved).toMatchObject({ behavior: "deny", source: "system" });
+    await recorder.until((e) => e.type === "turn.completed");
+    conn.end();
+  });
+
+  it("passes effort to the CLI, and omits the flag when unset", async () => {
+    await create();
+    const dump = join(scratch, "effort.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "xhigh" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("--effort");
+    expect(seen.argv[seen.argv.indexOf("--effort") + 1]).toBe("xhigh");
+    expect(seen.argv.filter((a: string) => a === "--effort")).toHaveLength(1);
+  });
+
+  it("adds no effort flag when the turn has none", async () => {
+    await create();
+    const dump = join(scratch, "no-effort.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).not.toContain("--effort");
+  });
+
+  it("declares the effort levels the CLI accepts", async () => {
+    await create();
+    expect(instance.adapter.capabilities.effortLevels).toEqual([
+      "low", "medium", "high", "xhigh", "max",
+    ]);
+  });
+});
+
+// Auth state must come from the CLI, not from probing its credential store:
+// on macOS the OAuth tokens live in the login Keychain, so the old
+// ~/.claude/.credentials.json check reported signed-in users as signed out
+// and disabled the model picker with them (#108).
+describe("ClaudeDriver snapshot auth (fake CLI)", () => {
+  let instance: ProviderInstance;
+
+  const create = async () => {
+    instance = await ClaudeDriver.create({
+      instanceId: "claude-auth-test",
+      displayName: "Claude Auth Test",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, permissionMode: "acceptEdits" },
+    });
+  };
+
+  beforeEach(() => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+  });
+
+  afterEach(async () => {
+    delete process.env.FAKE_CLAUDE_AUTH;
+    delete process.env.ANTHROPIC_API_KEY;
+    await instance?.dispose();
+  });
+
+  it("reports authenticated when `auth status` says loggedIn", async () => {
+    process.env.FAKE_CLAUDE_AUTH = "in";
+    await create();
+    expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: true });
+  });
+
+  it("reports signed out when `auth status` says loggedIn:false", async () => {
+    process.env.FAKE_CLAUDE_AUTH = "out";
+    await create();
+    expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
+  });
+
+  it("fails closed instead of trusting stale credential storage", async () => {
+    await create();
+
+    process.env.FAKE_CLAUDE_AUTH = "unsupported";
+    expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
+
+    process.env.FAKE_CLAUDE_AUTH = "malformed";
+    expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
+
+    // The real turn removes inherited API keys, so the auth probe must do the
+    // same or setup can report a login the turn cannot use.
+    process.env.FAKE_CLAUDE_AUTH = "inherited-api-key";
+    process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
+    expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
   });
 });

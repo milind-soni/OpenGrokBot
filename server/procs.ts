@@ -1,9 +1,8 @@
 // Cross-platform process spawning for the agent CLIs. Three Windows
-// differences live here and nowhere else:
-//   1. CreateProcess can't exec .cmd/.bat shims directly (codex installs
-//      one) — those go through cmd.exe. Native .exe shims (claude) spawn
-//      directly so quoting-sensitive args like --mcp-config <json> survive
-//      (a cmd.exe hop would mangle embedded quotes).
+// differences are exposed to drivers through this module:
+//   1. CreateProcess can't exec npm .cmd/.bat shims or node-shebang scripts
+//      directly. env-path resolves those to their real .exe / `node script`
+//      entry without a shell, so quoting-sensitive JSON argv stays intact.
 //   2. No process-group kill (kill(-pid) is POSIX) — taskkill /T reaps the
 //      whole tree, CLI + its spawned MCP proxies alike.
 //   3. Console apps spawned from the GUI shell flash a console window
@@ -11,7 +10,6 @@
 import {
   spawn,
   execFile,
-  execFileSync,
   type ChildProcess,
   type ChildProcessByStdio,
   type ExecFileOptions,
@@ -19,28 +17,10 @@ import {
 } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { join } from "node:path";
+import { resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
 
-interface ResolvedCli {
-  command: string;
-  prefixArgs: string[];
-}
-
-export function resolveCli(cli: string): ResolvedCli {
-  if (process.platform !== "win32") return { command: cli, prefixArgs: [] };
-  // explicit path or bare .exe — direct spawn, no shell in between
-  if (/[\\/]/.test(cli) || /\.(exe|com)$/i.test(cli)) return { command: cli, prefixArgs: [] };
-  try {
-    const hit = execFileSync("where.exe", [cli], { encoding: "utf8", timeout: 5000 })
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .find((p) => /\.(exe|com|cmd|bat)$/i.test(p));
-    if (hit && /\.(cmd|bat)$/i.test(hit)) return { command: "cmd.exe", prefixArgs: ["/d", "/s", "/c", hit] };
-    if (hit) return { command: hit, prefixArgs: [] };
-  } catch {
-    /* unresolved — let the spawn itself surface the error */
-  }
-  return { command: cli, prefixArgs: [] };
+export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
+  return resolveCliSpawn(cli, args);
 }
 
 export function spawnCli(
@@ -48,13 +28,27 @@ export function spawnCli(
   args: string[],
   opts: SpawnOptions,
 ): ChildProcessByStdio<Writable, Readable, Readable> {
-  const { command, prefixArgs } = resolveCli(cli);
-  return spawn(command, [...prefixArgs, ...args], {
+  const resolved = resolveCli(cli, args);
+  const child = spawn(resolved.command, resolved.args, {
     ...opts,
     // posix: own process group so kill(-pid) reaps child MCP servers;
     // win32: taskkill /T does the reaping instead (see killCliTree)
     ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
   }) as ChildProcessByStdio<Writable, Readable, Readable>; // callers always pipe all three
+
+  // A write to a dying child's stdin fails differently per platform, and one
+  // of the ways is fatal. On POSIX the kill is synchronous, the stream is
+  // already destroyed by the time anything writes, and the write throws into
+  // the caller's try/catch. On Windows killCliTree goes through taskkill — a
+  // subprocess — so there is a window where the child is dead but its pipe is
+  // not, and a write during it errors *asynchronously* on the stream. No
+  // driver listens for that, an unlistened stream error is an uncaught
+  // exception, and the whole harness exits over one dead CLI. The error
+  // carries no information the drivers don't already get from `close`, which
+  // is where every one of them settles the turn — so it is swallowed, not
+  // logged.
+  child.stdin?.on("error", () => {});
+  return child;
 }
 
 export function execCli(
@@ -63,26 +57,49 @@ export function execCli(
   opts: ExecFileOptions,
   cb: (err: Error | null, stdout: string) => void,
 ): void {
-  const { command, prefixArgs } = resolveCli(cli);
-  execFile(command, [...prefixArgs, ...args], { ...opts, windowsHide: true }, (err, stdout) =>
+  const resolved = resolveCli(cli, args);
+  execFile(resolved.command, resolved.args, { ...opts, windowsHide: true }, (err, stdout) =>
     cb(err, typeof stdout === "string" ? stdout : String(stdout)),
   );
 }
 
+/** Human wording for a failed CLI spawn.
+ *
+ * Node reports these as bare errno strings — "spawn grok ENOENT" — which
+ * reads as a crash. On a CLI spawn the common codes mean exactly one thing
+ * each, and both are setup problems the user can fix, so say which. The
+ * `setup` flag lets the UI offer "Install" instead of a "Retry" that is
+ * guaranteed to fail the same way. */
+type SpawnFailure = { message: string; setup: boolean };
+
+export function describeSpawnFailure(err: NodeJS.ErrnoException, cli: string): SpawnFailure {
+  if (err.code === "ENOENT")
+    return { message: `\`${cli}\` isn't installed, or isn't on this app's PATH`, setup: true };
+  if (err.code === "EACCES" || err.code === "EPERM")
+    return { message: `\`${cli}\` isn't executable — check its file permissions`, setup: true };
+  return { message: `spawn failed: ${err.message}`, setup: false };
+}
+
 /** Stop a CLI and every process it spawned (MCP proxies included). */
 export function killCliTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
+
   if (process.platform === "win32") {
-    if (child.pid) {
+    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (err) => {
+      if (!err) return;
       try {
-        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+        // taskkill is unavailable or the tree lookup failed. At least stop
+        // the process we own instead of leaving the entire turn running.
+        child.kill();
       } catch {
         /* already gone */
       }
-    }
+    });
     return;
   }
   try {
-    process.kill(-child.pid!, "SIGTERM");
+    process.kill(-pid, "SIGTERM");
   } catch {
     try {
       child.kill("SIGTERM");
@@ -96,6 +113,8 @@ export function killCliTree(child: ChildProcess): void {
  * (Node can't listen on a filesystem socket path there — EACCES). */
 export function brokerSocketPath(dataDir: string, tag: string): string {
   return process.platform === "win32"
-    ? `\\\\.\\pipe\\openmausbot-perm-${tag}`
+    // Named pipes share a global namespace; DATA_DIR cannot isolate two
+    // concurrent app instances the way a POSIX socket directory does.
+    ? `\\\\.\\pipe\\openmausbot-perm-${process.pid}-${tag}`
     : join(dataDir, `perm-${tag}.sock`);
 }

@@ -13,21 +13,36 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
 
 import type {
   DriverCreateInput,
+  EffortLevel,
+  EngineInstall,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
+  ModelCatalog,
   RuntimeEvent,
   RuntimeEventListener,
   SendTurnInput,
+  ProviderErrorCode,
 } from "../../contracts.ts";
 import { newEventId, newId } from "../../contracts.ts";
+import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath } from "../../env-path.ts";
+
+// the computer proxy entry: .ts in dev (node type stripping), .js in the
+// compiled dist-server the packaged app ships
+const COMPUTER_PROXY_PATH = (() => {
+  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "computer-proxy.ts");
+  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
 import { appendNative } from "../native.ts";
 
 export interface AcpConfig {
@@ -41,32 +56,84 @@ export interface AcpConfig {
 export interface AcpSupport {
   driverKind: string;
   displayName: string;
+  /** Omit for subscription CLIs (the default). Custom-only CLIs sit below
+   *  the picker-rail divider and have no first-party cloud catalog. */
+  access?: "subscription" | "custom";
   models: { default: string; options: Array<{ id: string; label: string }> };
+  /** Effort levels this harness's CLI accepts, ascending. Omit when it has
+   * no reasoning-effort control. Static for the same reason `models` is:
+   * describe() runs before any session exists, so there is no _meta to read
+   * — eventually both should come from initialize's _meta.modelState. */
+  effortLevels?: readonly EffortLevel[];
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
+  /** Optional live model catalog. A failed lookup keeps the last usable catalog. */
+  resolveModels?(environment: Record<string, string | undefined>): ModelCatalog | Promise<ModelCatalog>;
   /** Native-protocol log label, e.g. "grok.acp". */
   nativeSource: string;
   /** Message shown when the CLI is present but not signed in. */
   loginNote: string;
+  /** How a user installs this harness's CLI; surfaced by the setup UI. */
+  install?: EngineInstall;
   /** CLI argv AFTER the binary name to enter ACP stdio mode. */
   spawnArgs(config: AcpConfig, turn: SendTurnInput): string[];
-  /** Mutate the child env in place (e.g. strip a key). Optional. */
-  transformEnv?(env: Record<string, string | undefined>): void;
+  /** Provider credential variables this ACP child is allowed to inherit. */
+  credentialEnv?: readonly string[];
+  /** Select the model through a session config option instead of argv, for
+   *  harnesses whose ACP subcommand takes no -m (opencode). The agent must
+   *  CONFIRM the requested model before we prompt: silently running a model
+   *  other than the one the picker shows is the failure this guards. */
+  selectModel?: { configId: string };
+  /** Mutate the child env in place: strip a key, inject a policy. Receives the
+   *  instance config so a support can vary with fullAuto. */
+  transformEnv?(env: Record<string, string | undefined>, config: AcpConfig): void;
   /** Pick the ACP authenticate methodId from initialize's advertised
    * authMethods; return null to skip the authenticate step. */
   pickAuthMethod(authMethods: Array<{ id?: string }>): string | null;
   /** "fail": abort the turn if auth is missing/errors (subscription CLIs).
    *  "continue": proceed anyway (CLIs that work off an ambient login). */
   authFailure: "fail" | "continue";
-  /** snapshot(): is the CLI signed in? (env already carries the merged config) */
-  isAuthenticated(env: Record<string, string | undefined>): boolean;
+  /** snapshot(): can this harness actually run a turn? (env already carries the
+   *  merged config). May be async for harnesses that have to ask the CLI. */
+  isAuthenticated(env: Record<string, string | undefined>, config: AcpConfig): boolean | Promise<boolean>;
+  /** Classify provider-native failures without coupling the core to messages. */
+  classifyError?(error: unknown): ProviderErrorCode | undefined;
   /** Compose the session/prompt text. Default prepends the persona. */
   buildPromptText?(turn: SendTurnInput): string;
+  /** Rewrite a picker id (`omlx::model`) into the CLI-native id before spawn
+   * and session/select. Local inject writers live here so the child sees a
+   * model it already knows. */
+  resolveTurnModel?(
+    model: string | undefined,
+    env: Record<string, string | undefined>,
+  ): string | undefined;
+  /** Apply per-session settings between session/new (or session/load) and the
+   * first session/prompt. Some CLIs ignore argv and take the model/mode over
+   * the wire instead (droid), so this is the only place the pick can land; a
+   * throw here fails the turn rather than silently running another model. */
+  configureSession?(ctx: {
+    request: (method: string, params: unknown, timeoutMs?: number) => Promise<any>;
+    sessionId: string;
+    config: AcpConfig;
+    turn: SendTurnInput;
+  }): Promise<void>;
 }
 
 const INIT_TIMEOUT = 20_000;
+const SESSION_CONFIG_TIMEOUT = 20_000; // configureSession's per-request default
 const NEW_SESSION_TIMEOUT = 30_000;
 const LOAD_SESSION_TIMEOUT = 120_000; // history replay on a long thread is slow
+const PROVIDER_CREDENTIAL_ENV = [
+  "ANTHROPIC_API_KEY",
+  "FACTORY_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "KIMI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENCODE_API_KEY",
+  "XAI_API_KEY",
+] as const;
 
 function decodeAcpConfig(defaultCli: string) {
   return (raw: unknown): AcpConfig => {
@@ -88,19 +155,48 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
   return {
     driverKind: DRIVER_KIND,
-    metadata: { displayName: support.displayName, supportsMultipleInstances: true },
+    metadata: {
+      displayName: support.displayName,
+      supportsMultipleInstances: true,
+      access: support.access ?? "subscription",
+    },
+    install: support.install,
     models: support.models,
     decodeConfig,
     defaultConfig: () => decodeConfig({}),
 
     async create(input: DriverCreateInput<AcpConfig>): Promise<ProviderInstance> {
       const { instanceId, config } = input;
+      const childEnv = () => {
+        const env: Record<string, string | undefined> = {
+          ...process.env,
+          ...input.environment,
+          PATH: augmentedPath(),
+        };
+        const allowedCredentials = new Set(support.credentialEnv ?? []);
+        for (const key of PROVIDER_CREDENTIAL_ENV) {
+          if (!allowedCredentials.has(key)) delete env[key];
+        }
+        support.transformEnv?.(env, config);
+        return env;
+      };
+      let models = support.models;
+      const refreshModels = async () => {
+        if (!support.resolveModels) return;
+        try {
+          const resolved = await support.resolveModels(childEnv());
+          if (resolved.options.length) models = resolved;
+        } catch {
+          // Keep the last usable catalog when an optional discovery source is down.
+        }
+      };
+      await refreshModels();
       const listeners = new Set<RuntimeEventListener>();
       interface Turn {
         stop: () => void;
         interrupt: () => void;
         turnId: string;
-        asks: Map<string, (behavior: string) => void>;
+        asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => void>;
       }
       const active = new Map<string, Turn>();
 
@@ -115,29 +211,36 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         createdAt: new Date().toISOString(),
       });
 
-      const childEnv = () => {
-        const env: Record<string, string | undefined> = {
-          ...process.env,
-          ...input.environment,
-          PATH: augmentedPath(),
-        };
-        support.transformEnv?.(env);
-        return env;
-      };
-
       // ACP session mcpServers: stdio is the baseline every ACP agent
       // supports (mcpCapabilities.http/.sse only add EXTRA transports), so
       // an injected stdio proxy — e.g. the peer-agent comms tool — attaches
       // fine here. env is the ACP {name,value}[] shape.
       const acpMcpServers = (turn: SendTurnInput) => {
         const servers: Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }> = [];
+        const acpEnv = (env: Record<string, string>) =>
+          Object.entries(env).map(([name, value]) => ({ name, value: String(value) }));
         const agents = turn.integrations?.agents;
         if (agents) {
+          servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
+        }
+        // The bot's computer, mounted exactly like the Claude driver does.
+        // Cloud boxes use the REST adapter; host and sandbox Cua connections
+        // expose Cua Driver's official MCP server directly.
+        const computer = turn.integrations?.computer;
+        if (computer) {
           servers.push({
-            name: "agents",
-            command: agents.command,
-            args: agents.args,
-            env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
+            name: "computer",
+            command: process.execPath,
+            args: [COMPUTER_PROXY_PATH],
+            env: acpEnv({ ELECTRON_RUN_AS_NODE: "1", ...computerProxyEnv(computer) }),
+          });
+        } else if (turn.integrations?.localComputer) {
+          const local = turn.integrations.localComputer;
+          servers.push({
+            name: "computer",
+            command: local.command,
+            args: local.args,
+            env: acpEnv(local.env ?? {}),
           });
         }
         return servers;
@@ -149,16 +252,21 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const turnId = newId();
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv();
+        const resolvedModel = support.resolveTurnModel?.(turn.model, env);
+        const cliTurn =
+          resolvedModel !== undefined && resolvedModel !== turn.model
+            ? { ...turn, model: resolvedModel }
+            : turn;
         const mcpServers = acpMcpServers(turn);
 
-        const child = spawnCli(config.cli, support.spawnArgs(config, turn), {
+        const child = spawnCli(config.cli, support.spawnArgs(config, cliTurn), {
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
         });
 
         const state = { settled: false, promptSent: false, text: "" };
-        const asks = new Map<string, (behavior: string) => void>();
+        const asks = new Map<string, (behavior: string, source?: "user" | "timeout" | "system") => void>();
         let nextId = 1;
         let sessionId: string | null = null;
         let interruptTimer: ReturnType<typeof setTimeout> | null = null;
@@ -194,7 +302,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (state.settled) return;
           state.settled = true;
           if (interruptTimer) clearTimeout(interruptTimer);
-          for (const finish of [...asks.values()]) finish("cancel");
+          for (const finish of [...asks.values()]) finish("cancel", "system");
           for (const p of rpcPending.values()) {
             if (p.timer) clearTimeout(p.timer);
             p.reject(new Error("turn settled"));
@@ -240,7 +348,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const tool = kind === "execute" ? "shell" : kind === "edit" ? "edit" : kind || "tool";
           const summary = String(toolCall.rawInput?.command ?? toolCall.title ?? tool).slice(0, 200);
           const requestId = newId();
-          const finish = (behavior: string) => {
+          const finish = (behavior: string, source: "user" | "timeout" | "system" = "user") => {
             if (!asks.delete(requestId)) return;
             clearTimeout(timer);
             const want = behavior === "allow" ? "allow" : "reject";
@@ -256,12 +364,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               type: "request.resolved",
               requestId,
               behavior: optionId && behavior === "allow" ? "allow" : "deny",
-              source: optionId ? "user" : "system",
+              source: optionId ? source : "system",
             });
           };
           const timer = setTimeout(() => {
             emit({ ...base(threadId, turnId), type: "runtime.error", message: DENY_TIMEOUT_NOTE });
-            finish("deny");
+            finish("deny", "timeout");
           }, 15 * 60_000);
           timer.unref?.();
           asks.set(requestId, finish);
@@ -324,6 +432,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         };
 
         let buf = "";
+        // decode as UTF-8 across chunk boundaries — a raw `buf += chunk` splits
+        // multibyte characters that straddle two reads and corrupts the text
+        child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
           buf += chunk;
           let nl;
@@ -343,7 +454,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               if (pend) {
                 rpcPending.delete(msg.id);
                 if (pend.timer) clearTimeout(pend.timer);
-                msg.error ? pend.reject(new Error(msg.error.message ?? JSON.stringify(msg.error))) : pend.resolve(msg.result);
+                if (msg.error) {
+                  const error = new Error(msg.error.message ?? JSON.stringify(msg.error));
+                  Object.assign(error, { code: msg.error.code, data: msg.error.data });
+                  pend.reject(error);
+                } else {
+                  pend.resolve(msg.result);
+                }
               }
             } else if (msg.id !== undefined && msg.method) {
               handleServerRequest(msg);
@@ -359,7 +476,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (stderr.length > 8192) stderr = stderr.slice(-8192);
         });
         child.on("error", (e) => {
-          emit({ ...base(threadId, turnId), type: "runtime.error", message: `spawn failed: ${e.message}` });
+          emit({ ...base(threadId, turnId), type: "runtime.error", ...describeSpawnFailure(e, config.cli) });
           settle(false, "spawn_error");
         });
         child.on("close", (code) => {
@@ -404,25 +521,78 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
 
             const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+            let sessionResult: any = null;
             if (cursor) {
               try {
-                await request("session/load", { sessionId: cursor, cwd, mcpServers }, LOAD_SESSION_TIMEOUT);
+                sessionResult = await request(
+                  "session/load",
+                  { sessionId: cursor, cwd, mcpServers },
+                  LOAD_SESSION_TIMEOUT,
+                );
                 sessionId = cursor;
               } catch {
                 /* session gone, load unsupported, or too slow — start fresh */
               }
             }
             if (!sessionId) {
-              const started = await request("session/new", { cwd, mcpServers }, NEW_SESSION_TIMEOUT);
-              sessionId = typeof started?.sessionId === "string" ? started.sessionId : null;
+              sessionResult = await request("session/new", { cwd, mcpServers }, NEW_SESSION_TIMEOUT);
+              sessionId = typeof sessionResult?.sessionId === "string" ? sessionResult.sessionId : null;
               if (!sessionId) throw new Error("session/new returned no sessionId");
             }
-            emit({
-              ...base(threadId, turnId),
-              type: "session.started",
-              sessionId,
-              model: init?._meta?.modelState?.currentModelId ?? turn.model ?? null,
-            });
+            let selectedModel: string | null = null;
+            let sessionStarted = false;
+            const emitSessionStarted = () => {
+              if (sessionStarted) return;
+              sessionStarted = true;
+              emit({
+                ...base(threadId, turnId),
+                type: "session.started",
+                sessionId,
+                model: selectedModel ?? init?._meta?.modelState?.currentModelId ?? cliTurn.model ?? null,
+              });
+            };
+
+            try {
+              if (support.selectModel) {
+                const { configId } = support.selectModel;
+                const currentOf = (r: any) =>
+                  (Array.isArray(r?.configOptions) ? r.configOptions : []).find((o: any) => o?.id === configId)
+                    ?.currentValue ?? null;
+                selectedModel = currentOf(sessionResult);
+                if (cliTurn.model && cliTurn.model !== selectedModel) {
+                  selectedModel = currentOf(
+                    await request(
+                      "session/set_config_option",
+                      { sessionId, configId, value: cliTurn.model },
+                      INIT_TIMEOUT,
+                    ),
+                  );
+                  // an agent that answers OK but keeps its old model is worse than
+                  // one that errors: it burns a paid turn on the wrong thing
+                  if (selectedModel !== cliTurn.model) {
+                    throw new Error(
+                      `${DRIVER_KIND} did not switch to ${cliTurn.model} (still ${selectedModel ?? "unknown"})`,
+                    );
+                  }
+                }
+              }
+
+              if (support.configureSession) {
+                await support.configureSession({
+                  request: (method, params, timeoutMs) =>
+                    request(method, params, timeoutMs ?? SESSION_CONFIG_TIMEOUT),
+                  sessionId,
+                  config,
+                  turn: cliTurn,
+                });
+              }
+            } catch (error) {
+              // session.started is the only place the resume cursor is recorded,
+              // so a rejected setting must not orphan a session we just created.
+              emitSessionStarted();
+              throw error;
+            }
+            emitSessionStarted();
             state.promptSent = true;
             const text = support.buildPromptText
               ? support.buildPromptText(turn)
@@ -433,7 +603,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               sessionId,
               prompt: [{ type: "text", text }],
             });
-            const usage = result?._meta ?? {};
+            // opencode 1.18.18 reports usage at the result root; grok and
+            // gemini put it under _meta. Read both rather than lose the count.
+            const usage = result?.usage ?? result?._meta ?? {};
             if (typeof usage.inputTokens === "number" || typeof usage.outputTokens === "number") {
               emit({
                 ...base(threadId, turnId),
@@ -448,9 +620,20 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             else settle(false, reason ?? "failed");
           } catch (e) {
             if (!state.settled) {
-              const message = (e as Error).message;
-              emit({ ...base(threadId, turnId), type: "runtime.error", message });
-              settle(false, message === support.loginNote ? "auth_required" : "rpc_error");
+              const message = e instanceof Error ? e.message : String(e);
+              const code = support.classifyError?.(e);
+              // Authentication setup is a user action, not a retry. The
+              // classifier is preferred; loginNote remains a compatibility
+              // fallback for existing ACP supports.
+              const needsAuth = code === "invalid_credentials" || code === "inactive_subscription"
+                || message === support.loginNote;
+              emit({
+                ...base(threadId, turnId),
+                type: "runtime.error",
+                message,
+                ...(needsAuth ? { setup: true } : {}),
+              });
+              settle(false, needsAuth ? "auth_required" : "rpc_error");
             }
           }
         })();
@@ -466,7 +649,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           );
         });
         if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-        return { state: "available", version, authenticated: support.isAuthenticated(env) };
+        return { state: "available", version, authenticated: await support.isAuthenticated(env, config) };
       };
 
       return {
@@ -474,18 +657,27 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         driverKind: DRIVER_KIND,
         displayName: input.displayName,
         enabled: input.enabled,
-        models: support.models,
+        get models() {
+          return models;
+        },
+        refreshModels: support.resolveModels ? refreshModels : undefined,
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+          capabilities: {
+            sessionModelSwitch: "unsupported",
+            agentsMcp: true,
+            computerMcp: true,
+            effortLevels: support.effortLevels,
+          },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {
             const turn = active.get(threadId);
             const finish = turn?.asks.get(requestId);
-            if (!finish) throw new Error("no such pending request");
-            finish(decision.behavior === "allow" ? "allow" : "deny");
+            if (!finish) return "unavailable"; // settled, timed out, or turn gone
+            finish(decision.behavior === "allow" ? "allow" : "deny", "user");
+            return decision.behavior === "allow" ? "allowed-once" : "rejected";
           },
           hasSession: (threadId) => active.has(threadId),
           stopAll: async () => {

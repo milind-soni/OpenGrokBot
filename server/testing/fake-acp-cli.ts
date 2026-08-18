@@ -5,29 +5,86 @@
 // session/prompt, and streams session/update notifications for a scripted
 // turn. Failure modes mirror how real ACP agents misbehave:
 //
-//   FAKE_ACP_MODE   happy (default) | exit-early | hang | no-auth | permission
+//   FAKE_ACP_MODE   happy (default) | empty-reply | exit-early | hang | no-auth | auth-required | permission
+//                   | no-session-config (reject session/set_mode + set_model
+//                     with -32601, i.e. an agent predating those methods)
 //                   | ask-peer (spawn the injected "agents" MCP server from
 //                     session/new's mcpServers, call list_bots + ask_bot on a
 //                     peer, and reply with what the peer said — the comms e2e)
+//                   | delegate-peer (same as ask-peer but uses delegate_bot —
+//                     returns immediately, the peer runs after our turn)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene
+//   FAKE_ACP_MODELS      comma-separated model ids. Enables the opencode-shaped
+//                        surface: session/new and session/load return
+//                        configOptions, and session/set_config_option switches
+//                        the model (rejecting an unadvertised one with -32602).
+//   FAKE_ACP_MODEL_STICKS  session/set_config_option succeeds but leaves the
+//                        model where it was, so the confirmation guard in
+//                        core.ts has something to catch
+//   FAKE_ACP_USAGE_ROOT  put the prompt result's usage at the root instead of
+//                        under _meta (what opencode 1.18.18 actually does)
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
+// opencode-shaped surface: the session carries its own model catalog and the
+// model is chosen with session/set_config_option, because `opencode acp` takes
+// no -m. Off unless FAKE_ACP_MODELS is set, so every existing mode is byte-
+// identical to before.
+const models = (process.env.FAKE_ACP_MODELS ?? "").split(",").filter(Boolean);
+let currentModel: string | null = models[0] ?? null;
+const configOptions = () =>
+  models.length
+    ? [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: currentModel,
+          options: models.map((value) => ({ value, name: value })),
+        },
+      ]
+    : null;
 const argv = process.argv.slice(2);
+if (process.env.FAKE_ACP_DUMP) {
+  const dumpEnv = Object.fromEntries(
+    [
+      "PATH",
+      "HOME",
+      "USERPROFILE",
+      "SystemRoot",
+      "FAKE_ACP_MODE",
+      "FAKE_ACP_RPC_DUMP",
+      "TEST_POLICY",
+      "OPENCODE_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "XAI_API_KEY",
+      "UNSLOTH_STUDIO_AUTH_TOKEN",
+    ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
+  );
+  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));
+}
 if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
   process.exit(0);
 }
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env }, null, 2));
-}
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const result = (id: unknown, res: unknown) => out({ jsonrpc: "2.0", id, result: res });
+const rpcMethods: string[] = [];
+const recordMethod = (method: string) => {
+  rpcMethods.push(method);
+  if (process.env.FAKE_ACP_RPC_DUMP) writeFileSync(process.env.FAKE_ACP_RPC_DUMP, JSON.stringify(rpcMethods));
+};
+
+// session/set_mode + session/set_model calls seen this run
+const configCalls: Array<{ method: string; params: unknown }> = [];
 
 // pending server→client permission request id → resolver
 let pendingPermissionId: number | null = null;
@@ -39,9 +96,9 @@ let agentsMcp: McpEntry | null = null;
 
 /** Minimal one-shot MCP stdio client: initialize, call each tool in
  * sequence, return the text of the last result. Dependency-free. */
-function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: string) => unknown }>): Promise<string> {
+function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: string) => object }>): Promise<string> {
   return new Promise((resolve, reject) => {
-    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    const env = { ...process.env };
     for (const { name, value } of entry.env ?? []) env[name] = value;
     const child = spawn(entry.command, entry.args ?? [], { env, stdio: ["pipe", "pipe", "inherit"] });
     child.on("error", reject);
@@ -119,6 +176,7 @@ function handle(msg: any) {
     return;
   }
   if (!msg.method) return;
+  recordMethod(msg.method);
 
   switch (msg.method) {
     case "initialize": {
@@ -134,22 +192,85 @@ function handle(msg: any) {
       result(msg.id, {});
       break;
     case "session/new": {
+      if (mode === "auth-required") {
+        out({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32000, message: "Authentication required", data: { providerId: "opencode-go" } },
+        });
+        break;
+      }
       const servers: McpEntry[] = Array.isArray(msg.params?.mcpServers) ? msg.params.mcpServers : [];
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
-      result(msg.id, { sessionId: "fake-acp-session" });
+      const opts = configOptions();
+      result(msg.id, opts ? { sessionId: "fake-acp-session", configOptions: opts } : { sessionId: "fake-acp-session" });
       break;
     }
-    case "session/load":
+    case "session/load": {
+      const opts = configOptions();
+      result(msg.id, opts ? { configOptions: opts } : {});
+      break;
+    }
+    // per-session settings (droid sets model/autonomy here, not via argv).
+    // Recorded next to FAKE_ACP_DUMP so a test can assert what was applied.
+    // NOTE: last writer wins — each turn spawns a fresh child, so a two-turn
+    // test would only ever see the final turn's calls.
+    case "session/set_mode":
+    case "session/set_model": {
+      if (mode === "no-session-config") {
+        // an older agent that predates these methods
+        return out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+      }
+      const settingId = msg.method === "session/set_mode" ? "modeId" : "modelId";
+      if (typeof msg.params?.sessionId !== "string" || typeof msg.params?.[settingId] !== "string") {
+        out({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32602, message: `Invalid params: sessionId and ${settingId} must be strings` },
+        });
+        break;
+      }
+      configCalls.push({ method: msg.method, params: msg.params });
+      if (process.env.FAKE_ACP_DUMP) {
+        writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+      }
       result(msg.id, {});
       break;
+    }
+    case "session/set_config_option": {
+      const { configId, value } = msg.params ?? {};
+      if (configId !== "model" || !models.includes(value)) {
+        out({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32602, message: `Invalid params: model not found: ${value}`, data: { modelId: value } },
+        });
+        break;
+      }
+      // FAKE_ACP_MODEL_STICKS: answer OK and keep the old model anyway. Nothing
+      // in the protocol forbids it, and it is the shape core.ts's confirmation
+      // guard exists for — an error is loud, this is silent.
+      if (!process.env.FAKE_ACP_MODEL_STICKS) currentModel = value;
+      result(msg.id, { configOptions: configOptions() });
+      break;
+    }
     case "session/prompt": {
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);
         return;
       }
-      const complete = () =>
-        result(msg.id, { stopReason: "end_turn", _meta: { inputTokens: 10, outputTokens: 5 } });
+      const complete = () => {
+        recordMethod("session/prompt.result");
+        result(
+          msg.id,
+          // FAKE_ACP_USAGE_ROOT reproduces opencode 1.18.18's shape: usage at
+          // the result root with an empty _meta, instead of usage under _meta.
+          process.env.FAKE_ACP_USAGE_ROOT
+            ? { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 }, _meta: {} }
+            : { stopReason: "end_turn", _meta: { inputTokens: 10, outputTokens: 5 } },
+        );
+      };
       if (mode === "ask-peer" && agentsMcp) {
         // the comms e2e: reach a peer bot through the injected agents proxy
         // and reply with whatever it said (the peer's fake runs plain happy
@@ -171,7 +292,33 @@ function handle(msg: any) {
           });
         return;
       }
-      playTurn();
+      if (mode === "delegate-peer" && agentsMcp) {
+        // async peer-handoff e2e: queue the delegation and return
+        // immediately; the harness fires the peer's depth-1 turn after our
+        // turn settles. We don't need the peer's reply in our text — the
+        // comms e2e verifies the channel mirroring on its own.
+        void driveMcp(agentsMcp, [
+          { name: "list_bots", args: () => ({}) },
+          {
+            name: "delegate_bot",
+            args: (list) => ({
+              bot_id: /id: ([\w-]+)/.exec(list)?.[1] ?? "",
+              message: "delegated task",
+              reason: "followup",
+            }),
+          },
+        ])
+          .then((reply) => {
+            out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `delegated: ${reply}` } } } });
+            complete();
+          })
+          .catch((e) => {
+            out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `delegate error: ${(e as Error).message}` } } } });
+            complete();
+          });
+        return;
+      }
+      if (mode !== "empty-reply") playTurn();
       if (mode === "permission") {
         // ask the client to approve a tool, then complete once answered
         pendingPermissionId = 9001;

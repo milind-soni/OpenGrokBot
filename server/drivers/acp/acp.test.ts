@@ -4,9 +4,9 @@
 // normalize the ACP handshake into canonical events, keep argv/env hygiene,
 // broker permission asks, and settle interrupts/crashes cleanly.
 //
-// Spawn-based tests are POSIX-only until Windows CLI spawning lands (the fake
-// CLI is a shebang script Windows cannot exec directly).
-import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+// The fake CLI is a shebang script Windows cannot exec directly —
+// resolveCliSpawn turns it into `node <script>`, so these run everywhere.
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,18 +15,118 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../../config.ts";
 import type { ProviderInstance } from "../../contracts.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
+import { createAcpDriver, type AcpSupport } from "./core.ts";
 import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
+import { KimiAgentDriver } from "./kimi.ts";
+import { DroidAgentDriver } from "./droid.ts";
+import { removeTempDir } from "../../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
-const posixOnly = describe.skipIf(process.platform === "win32");
+
+/** A harness that exists only in tests: it exercises the opt-in session-config
+ *  model hook so PR 1 can prove the core capability without shipping a visible
+ *  engine. Real harnesses live in their own file. */
+const SELECT_MODEL_SUPPORT: AcpSupport = {
+  driverKind: "selectModelTest",
+  displayName: "Select Model Test",
+  models: { default: "m-one", options: [{ id: "m-one", label: "One" }, { id: "m-two", label: "Two" }] },
+  defaultCli: "fake-select-model",
+  nativeSource: "test.acp",
+  loginNote: "never reached",
+  selectModel: { configId: "model" },
+  spawnArgs: () => [],
+  pickAuthMethod: () => null,
+  authFailure: "continue",
+  isAuthenticated: () => true,
+};
+const SelectModelDriver = createAcpDriver(SELECT_MODEL_SUPPORT);
+
+/** Proves transformEnv can vary with the instance config, which is how the
+ *  opencode driver picks its permission policy from `fullAuto`. */
+const EnvPolicyDriver = createAcpDriver({
+  ...SELECT_MODEL_SUPPORT,
+  driverKind: "envPolicyTest",
+  selectModel: undefined,
+  transformEnv: (env, config) => {
+    env.TEST_POLICY = config.fullAuto ? "auto" : "ask";
+  },
+});
+
+/** Proves snapshot() awaits an async isAuthenticated, which is how the
+ *  opencode driver answers from a discovered catalog. */
+const AsyncAuthDriver = createAcpDriver({
+  ...SELECT_MODEL_SUPPORT,
+  driverKind: "asyncAuthTest",
+  selectModel: undefined,
+  isAuthenticated: async () => true,
+});
+
+const ClassifiedErrorDriver = createAcpDriver({
+  ...SELECT_MODEL_SUPPORT,
+  driverKind: "classifiedErrorTest",
+  selectModel: undefined,
+  classifyError: (error) =>
+    error && typeof error === "object" && (error as { code?: unknown }).code === -32000
+      ? "invalid_credentials"
+      : undefined,
+});
 
 describe("ACP decodeConfig", () => {
+  it("resolves a dynamic model catalog when a support provides one", async () => {
+    const support: AcpSupport = {
+      driverKind: "dynamic-test",
+      displayName: "Dynamic Test",
+      models: { default: "fallback", options: [{ id: "fallback", label: "Fallback" }] },
+      defaultCli: FAKE_CLI,
+      nativeSource: "dynamic-test.acp",
+      loginNote: "not authenticated",
+      spawnArgs: () => [],
+      pickAuthMethod: () => null,
+      authFailure: "continue",
+      isAuthenticated: () => true,
+      resolveModels: async () => ({
+        default: "dynamic-model",
+        options: [{ id: "dynamic-model", label: "Dynamic model" }],
+      }),
+    };
+    const driver = createAcpDriver(support);
+    const instance = await driver.create({
+      instanceId: "dynamic-test",
+      displayName: "Dynamic Test",
+      environment: {},
+      enabled: true,
+      config: driver.defaultConfig(),
+    });
+    expect(instance.models).toEqual({
+      default: "dynamic-model",
+      options: [{ id: "dynamic-model", label: "Dynamic model" }],
+    });
+    await instance.dispose();
+  });
   it("grok defaults to the grok binary", () => {
     expect(GrokAgentDriver.decodeConfig({})).toEqual({ cli: "grok", fullAuto: false, workspace: undefined });
   });
   it("gemini defaults to the gemini binary", () => {
     expect(GeminiAgentDriver.decodeConfig(undefined)).toEqual({ cli: "gemini", fullAuto: false, workspace: undefined });
+  });
+  it("kimi defaults to the kimi binary and declares cross-platform setup", () => {
+    expect(KimiAgentDriver.decodeConfig(undefined)).toEqual({ cli: "kimi", fullAuto: false, workspace: undefined });
+    expect(KimiAgentDriver.install?.command).toMatchObject({
+      darwin: expect.stringContaining("install.sh"),
+      linux: expect.stringContaining("install.sh"),
+      win32: expect.stringContaining("install.ps1"),
+    });
+    expect(KimiAgentDriver.install?.signInCommand).toBe("kimi login");
+  });
+  it("droid defaults to the droid binary and declares cross-platform setup", () => {
+    expect(DroidAgentDriver.decodeConfig(undefined)).toEqual({ cli: "droid", fullAuto: false, workspace: undefined });
+    expect(DroidAgentDriver.install?.command).toMatchObject({
+      darwin: expect.stringContaining("factory.ai/cli"),
+      linux: expect.stringContaining("factory.ai/cli"),
+      win32: expect.stringContaining("factory.ai/cli"),
+    });
+    expect(DroidAgentDriver.install?.signInCommand).toBe("droid");
   });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
@@ -34,7 +134,7 @@ describe("ACP decodeConfig", () => {
   });
 });
 
-posixOnly("ACP turns (fake CLI)", () => {
+describe("ACP turns (fake CLI)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
   let scratch: string;
@@ -61,9 +161,13 @@ posixOnly("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODE;
     delete process.env.FAKE_ACP_DUMP;
     delete process.env.XAI_API_KEY;
+    delete process.env.OPENCODE_API_KEY;
+    delete process.env.FAKE_ACP_MODELS;
+    delete process.env.FAKE_ACP_MODEL_STICKS;
+    delete process.env.FAKE_ACP_USAGE_ROOT;
     recorder?.stop();
     await instance?.dispose();
-    rmSync(scratch, { recursive: true, force: true });
+    await removeTempDir(scratch);
   });
 
   it("normalizes a full turn into the canonical event sequence", async () => {
@@ -92,11 +196,22 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 
-  it("passes ACP stdio flags and strips XAI_API_KEY from the child env", async () => {
+  it("reads token usage from the root of the prompt result", async () => {
+    process.env.FAKE_ACP_USAGE_ROOT = "1";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-usage-root", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
+    expect(usage).toMatchObject({ input: 10, output: 5 });
+  });
+
+  it("passes ACP stdio flags and strips foreign provider keys from the child env", async () => {
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_ACP_DUMP = dump;
     process.env.XAI_API_KEY = "xai-should-not-leak";
+    process.env.OPENCODE_API_KEY = "opencode-should-not-leak";
 
     await instance.adapter.sendTurn({ threadId: "t-hygiene", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -106,6 +221,94 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(seen.argv).toContain("stdio");
     expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
+    expect(seen.env.OPENCODE_API_KEY).toBeUndefined();
+  });
+
+  // this driver has no Composio mount, so it must not claim the
+  // capability: claiming it is what would tell an ACP bot to call
+  // composio tools it was never given
+  it("does not claim the Composio capability it cannot honour", async () => {
+    await create();
+    expect(instance.adapter.capabilities.composioMcp).not.toBe(true);
+  });
+
+  it("droid takes model and autonomy over the wire, never through argv", async () => {
+    // `droid exec -m <id> -o acp` ignores the flag (verified against 0.196.0),
+    // so a model that only reached argv would silently run the CLI's own pick.
+    instance = await DroidAgentDriver.create({
+      instanceId: "droid-test",
+      displayName: "Droid Test",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: true },
+    });
+    recorder = recordEvents(instance.adapter);
+    const dump = join(scratch, "droid-dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-droid", text: "go", model: "claude-sonnet-5" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual(["exec", "-o", "acp"]);
+    expect(seen.argv).not.toContain("-m");
+
+    const applied = JSON.parse(readFileSync(`${dump}.config.json`, "utf8"));
+    expect(applied).toEqual([
+      { method: "session/set_mode", params: { sessionId: "fake-acp-session", modeId: "auto-high" } },
+      { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "claude-sonnet-5" } },
+    ]);
+  });
+
+  it("droid pins read-only mode when fullAuto is off", async () => {
+    instance = await DroidAgentDriver.create({
+      instanceId: "droid-safe",
+      displayName: "Droid Safe",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    recorder = recordEvents(instance.adapter);
+    const dump = join(scratch, "droid-safe.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-droid-safe", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    // Both settings are explicit even with nothing on the turn: whatever
+    // ~/.factory/settings.json pinned (including a `custom:` provider with its
+    // own endpoint) must never be what the session silently runs on.
+    expect(JSON.parse(readFileSync(`${dump}.config.json`, "utf8"))).toEqual([
+      { method: "session/set_mode", params: { sessionId: "fake-acp-session", modeId: "normal" } },
+      { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "claude-opus-5" } },
+    ]);
+  });
+
+  it("droid names the rejected setting when the agent predates session config", async () => {
+    // The realistic failure is version skew: an older droid answers -32601 to
+    // session/set_mode, and core surfaces the RPC message verbatim. A bare
+    // "method not found" tells the user nothing, so the driver wraps it.
+    process.env.FAKE_ACP_MODE = "no-session-config";
+    instance = await DroidAgentDriver.create({
+      instanceId: "droid-old-cli",
+      displayName: "Droid Old CLI",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({ threadId: "t-droid-skew", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+
+    expect(done).toMatchObject({ ok: false, stopReason: "rpc_error" });
+    const err = recorder.events.find((e) => e.type === "runtime.error")!;
+    expect(err.message).toContain("session/set_mode");
+    expect(err.message).toContain('autonomy mode "normal"');
+    expect(err.message).toMatch(/`droid` is current/);
+    // The session id still reached the client, so the thread can resume rather
+    // than orphaning the session droid just created.
+    expect(recorder.events.some((e) => e.type === "session.started")).toBe(true);
   });
 
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
@@ -163,9 +366,130 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false });
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(true);
   });
+
+  it("preserves ACP error codes for provider setup classification", async () => {
+    await create(ClassifiedErrorDriver, "auth-required");
+    await instance.adapter.sendTurn({ threadId: "t-auth-required", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+
+    expect(done).toMatchObject({ ok: false, stopReason: "auth_required" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ setup: true });
+  });
+
+  it("selectModel confirms the requested model before prompting", async () => {
+    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    await create(SelectModelDriver);
+    await instance.adapter.sendTurn({ threadId: "t-model", text: "go", model: "m-two" });
+
+    const started = await recorder.until((e) => e.type === "session.started");
+    expect(started).toMatchObject({ model: "m-two" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+  });
+
+  it("a model the session does not advertise fails the turn instead of running another", async () => {
+    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    await create(SelectModelDriver);
+    await instance.adapter.sendTurn({ threadId: "t-bad-model", text: "go", model: "m-nope" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const err = recorder.events.find((e) => e.type === "runtime.error")!;
+    expect(err.message).toMatch(/model not found/);
+    // nothing was generated: the prompt is never sent
+    expect(recorder.events.some((e) => e.type === "content.delta")).toBe(false);
+  });
+
+  // The unadvertised-model test above rides the fake's -32602, so it settles in
+  // `request()` and never reaches the guard. This one is the silent case the
+  // guard was written for: the agent acknowledges the switch and keeps its old
+  // model, which no error surfaces.
+  it("a model switch acknowledged but not applied fails the turn", async () => {
+    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    process.env.FAKE_ACP_MODEL_STICKS = "1";
+    await create(SelectModelDriver);
+    await instance.adapter.sendTurn({ threadId: "t-stuck-model", text: "go", model: "m-two" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false });
+    const err = recorder.events.find((e) => e.type === "runtime.error")!;
+    expect(err.message).toMatch(/did not switch to m-two \(still m-one\)/);
+    // the whole point: no paid turn is spent on the wrong model
+    expect(recorder.events.some((e) => e.type === "content.delta")).toBe(false);
+  });
+
+  it("selects the model on a resumed session too, not just a new one", async () => {
+    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    await create(SelectModelDriver);
+    await instance.adapter.sendTurn({
+      threadId: "t-resume-model",
+      text: "go",
+      model: "m-two",
+      // deliberately NOT "fake-acp-session", the id session/new returns: with
+      // that cursor a session/load that threw and fell back to session/new
+      // would emit the same sessionId and this test could not fail
+      resumeCursor: "resumed-thread-1",
+    });
+
+    // session/load feeds the same sessionResult as session/new, so the model
+    // hook must fire on a resumed thread as well
+    const started = await recorder.until((e) => e.type === "session.started");
+    expect(started).toMatchObject({ sessionId: "resumed-thread-1", model: "m-two" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+  });
+
+  it("transformEnv sees the instance config", async () => {
+    const dump = join(scratch, "policy.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    instance = await EnvPolicyDriver.create({
+      instanceId: "policy-test",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: true },
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({ threadId: "t-policy", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_POLICY).toBe("auto");
+  });
+
+  it("declares effort levels for Grok only", async () => {
+    await create(GrokAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toEqual(["low", "medium", "high"]);
+
+    await create(GeminiAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
+
+    await create(KimiAgentDriver);
+    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
+  });
+
+  it("passes effort to Grok, and omits the flag when unset", async () => {
+    const withEffort = join(scratch, "grok-effort.json");
+    await create(GrokAgentDriver);
+    process.env.FAKE_ACP_DUMP = withEffort;
+    await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "high" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(withEffort, "utf8"));
+    expect(seen.argv).toContain("--reasoning-effort");
+    expect(seen.argv[seen.argv.indexOf("--reasoning-effort") + 1]).toBe("high");
+
+    const without = join(scratch, "grok-no-effort.json");
+    await create(GrokAgentDriver);
+    process.env.FAKE_ACP_DUMP = without;
+    await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(JSON.parse(readFileSync(without, "utf8")).argv).not.toContain("--reasoning-effort");
+  });
 });
 
-describe.skipIf(process.platform === "win32")("ACP snapshot", () => {
+describe("ACP snapshot", () => {
   it("a missing binary is unavailable", async () => {
     const instance = await GrokAgentDriver.create({
       instanceId: "grok-missing",
@@ -177,5 +501,187 @@ describe.skipIf(process.platform === "win32")("ACP snapshot", () => {
     const snap = await instance.snapshot();
     expect(snap.state).toBe("unavailable");
     await instance.dispose();
+  });
+
+  it("kimi checks KIMI_CODE_HOME before the child HOME", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-kimi-auth-"));
+    const kimiHome = join(scratch, "custom-kimi-home");
+    const childHome = join(scratch, "child-home");
+    mkdirSync(join(childHome, ".kimi-code", "credentials"), { recursive: true });
+    writeFileSync(join(childHome, ".kimi-code", "credentials", "kimi-code.json"), "{}");
+
+    const instance = await KimiAgentDriver.create({
+      instanceId: "kimi-custom-home",
+      displayName: undefined,
+      environment: { KIMI_CODE_HOME: kimiHome, HOME: childHome },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(false);
+      mkdirSync(join(kimiHome, "credentials"), { recursive: true });
+      writeFileSync(join(kimiHome, "credentials", "kimi-code.json"), "{}");
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("droid resolves the signed-in CLI before falling back to FACTORY_API_KEY", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-droid-auth-"));
+    // FACTORY_HOME_OVERRIDE replaces the CLI's HOME, not its data root: droid
+    // writes <home>/.factory/auth.v2.file either way (verified against 0.196.0).
+    const overrideHome = join(scratch, "custom-home");
+    const childHome = join(scratch, "child-home");
+    mkdirSync(join(childHome, ".factory"), { recursive: true });
+    writeFileSync(join(childHome, ".factory", "auth.v2.file"), "{}");
+
+    // The child env inherits process.env (core.ts childEnv), so a developer
+    // machine with a real FACTORY_API_KEY exported would otherwise satisfy
+    // every case here and prove nothing about the on-disk lookup.
+    const make = (environment: Record<string, string>) =>
+      DroidAgentDriver.create({
+        instanceId: "droid-auth",
+        displayName: undefined,
+        environment: { FACTORY_API_KEY: "", ...environment },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+
+    const instances: ProviderInstance[] = [];
+    try {
+      // FACTORY_HOME_OVERRIDE wins: the child HOME's credential must not count.
+      const overridden = await make({ FACTORY_HOME_OVERRIDE: overrideHome, HOME: childHome });
+      instances.push(overridden);
+      expect((await overridden.snapshot()).authenticated).toBe(false);
+      mkdirSync(join(overrideHome, ".factory"), { recursive: true });
+      writeFileSync(join(overrideHome, ".factory", "auth.v2.file"), "{}");
+      expect((await overridden.snapshot()).authenticated).toBe(true);
+
+      // A logged-out override is not rescued by a key on the way past it, but
+      // the key alone still authenticates when nothing is signed in on disk.
+      const loggedOutWithKey = await make({
+        FACTORY_HOME_OVERRIDE: join(scratch, "empty-home"),
+        HOME: childHome,
+        FACTORY_API_KEY: "fk-test",
+      });
+      instances.push(loggedOutWithKey);
+      expect((await loggedOutWithKey.snapshot()).authenticated).toBe(true);
+
+      const fromHome = await make({ HOME: childHome });
+      instances.push(fromHome);
+      expect((await fromHome.snapshot()).authenticated).toBe(true);
+
+      // secure_auth_storage writes the keychain/keyring variant instead of
+      // auth.v2.file, so a fresh macOS login has only this one.
+      const keychainHome = join(scratch, "keychain-home");
+      mkdirSync(join(keychainHome, ".factory"), { recursive: true });
+      writeFileSync(join(keychainHome, ".factory", "auth.v2.loginkeychain"), "{}");
+      const fromKeychain = await make({ HOME: keychainHome });
+      instances.push(fromKeychain);
+      expect((await fromKeychain.snapshot()).authenticated).toBe(true);
+
+      const neither = await make({ HOME: join(scratch, "empty") });
+      instances.push(neither);
+      expect((await neither.snapshot()).authenticated).toBe(false);
+    } finally {
+      for (const i of instances) await i.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("droid reads custom models, favourites order, and the configured default", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-droid-models-"));
+    mkdirSync(join(scratch, ".factory"), { recursive: true });
+    writeFileSync(
+      join(scratch, ".factory", "settings.json"),
+      JSON.stringify({
+        customModels: [
+          { id: "custom:LMStudio-Qwen-0", displayName: "Qwen (local)" },
+          { id: "custom:Azure-Opus-0", displayName: "Azure Opus" },
+        ],
+        modelFavorites: ["custom:Azure-Opus-0", "custom:LMStudio-Qwen-0"],
+        sessionDefaultSettings: { model: "custom:LMStudio-Qwen-0" },
+      }),
+    );
+
+    const instance = await DroidAgentDriver.create({
+      instanceId: "droid-models",
+      displayName: undefined,
+      environment: { HOME: scratch },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      // favourites first in the user's own order, then the built-in slice
+      expect(instance.models.options.slice(0, 2)).toEqual([
+        { id: "custom:Azure-Opus-0", label: "Azure Opus", custom: true },
+        { id: "custom:LMStudio-Qwen-0", label: "Qwen (local)", custom: true },
+      ]);
+      expect(instance.models.options.some((o) => o.id === "claude-opus-5")).toBe(true);
+      expect(instance.models.default).toBe("custom:LMStudio-Qwen-0");
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("droid falls back to the built-in catalog when settings.json is unreadable", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-droid-nosettings-"));
+    mkdirSync(join(scratch, ".factory"), { recursive: true });
+    writeFileSync(join(scratch, ".factory", "settings.json"), "{ not json");
+
+    const instance = await DroidAgentDriver.create({
+      instanceId: "droid-models-fallback",
+      displayName: undefined,
+      environment: { HOME: scratch },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect(instance.models.default).toBe("claude-opus-5");
+      expect(instance.models.options.every((o) => !o.id.startsWith("custom:"))).toBe(true);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("kimi resolves default credentials from the child HOME", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-kimi-home-"));
+    const credentialDir = join(scratch, ".kimi-code", "credentials");
+    mkdirSync(credentialDir, { recursive: true });
+    writeFileSync(join(credentialDir, "kimi-code.json"), "{}");
+
+    const instance = await KimiAgentDriver.create({
+      instanceId: "kimi-child-home",
+      displayName: undefined,
+      environment: { HOME: scratch },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("awaits an async isAuthenticated", async () => {
+    const instance = await AsyncAuthDriver.create({
+      instanceId: "async-auth",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      // without the await this is a Promise: truthy, but not `true`
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+    }
   });
 });

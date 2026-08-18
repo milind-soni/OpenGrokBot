@@ -63,7 +63,9 @@ export function OptionCard({
         ))}
       </div>
 
-      {!card.answered && (
+      {/* a permission ask has no free-text answer — the broker only accepts
+          allow/deny, so typing here used to fail silently */}
+      {!card.answered && !card.tool && (
         <input
           value={custom}
           onChange={(e) => setCustom(e.target.value)}

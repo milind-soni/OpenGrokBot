@@ -4,6 +4,7 @@
 // pure; everything async lives in the wrapped dispatch + SSE fold.
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -12,7 +13,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { EffortLevel } from "../../server/contracts.ts";
 import type { MausColor, MausMotion } from "@/lib/mascot";
+import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
+import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
+import { currentCall } from "@/lib/call";
+import { showNotification } from "@/lib/notify";
+import { speaker } from "@/lib/tts";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -24,6 +31,12 @@ export interface OptionCardData {
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */
   requestId?: string;
+  /** permission asks: the tool being requested (drives the approval box) */
+  tool?: string;
+  /** why auto mode stopped to ask anyway */
+  held?: string;
+  /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
+  allowKey?: string;
 }
 
 export interface Message {
@@ -32,8 +45,10 @@ export interface Message {
   kind: "text" | "options" | "activity" | "screen";
   text?: string;
   card?: OptionCardData;
-  /** activity messages: tool name + outcome */
-  tool?: { name: string; ok?: boolean };
+  /** activity messages: tool name + outcome. `spoken` is the server's
+   * narration of the same chip ("reading a file"), used by call mode. */
+  /** `setup` marks an error fixed by installing something, not by retrying. */
+  tool?: { name: string; ok?: boolean; spoken?: string; setup?: boolean };
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
@@ -41,16 +56,68 @@ export interface Message {
   /** the message this one follows; null = thread root. Edited messages
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
+  /** rooms: which member said this (sender attribution). */
+  from?: { botId: string; name: string; color: MausColor };
+  /** emoji reactions; by = "user" or a member botId. */
+  reactions?: Array<{ emoji: string; by: string }>;
+  /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
+  comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+}
+
+export type GroupDefaultResponder =
+  | { kind: "member"; botId: string }
+  | { kind: "everyone" }
+  | { kind: "mentions" };
+
+/** A room: several bots + you in one shared thread. */
+export interface Group {
+  id: string;
+  threadId: string;
+  name: string;
+  memberIds: string[];
+  defaultResponder: GroupDefaultResponder;
+  bulletin: string;
+  unread: boolean;
+  createdAt: number;
+  /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
+  dm?: boolean;
+  busyBotId?: string | null;
+  messages: Message[];
 }
 
 export interface ModelSelection {
   instanceId: string;
   model: string;
+  effort?: EffortLevel;
+}
+
+/** One of a bot's separate contexts: its own thread, transcript and
+ * provider session. The bot's threadId points at the active one. */
+export interface Task {
+  threadId: string;
+  title: string;
+  createdAt: number;
+  /** what this task has spent, banked once per settled turn */
+  usage?: TaskUsage;
+  /** folder this task's turns run in, pinned on its first turn; null =
+   * legacy home-folder session; absent = not pinned yet */
+  cwd?: string | null;
+}
+
+export interface TaskUsage {
+  input: number;
+  output: number;
+  /** null until any turn reported a cost — most engines never do; records
+   * from builds before cost existed lack the field entirely */
+  costUsd: number | null;
+  turns: number;
 }
 
 export interface Bot {
   id: string;
   threadId: string;
+  /** every context this bot has, newest first */
+  tasks?: Task[];
   name: string;
   title: string;
   description: string;
@@ -59,11 +126,31 @@ export interface Bot {
   mascotExpression?: string | null;
   unread: boolean;
   busy?: boolean;
+  /** what the bot is doing, as the harness sees it; busy is derived from it */
+  activity?: "working" | "waiting-on-you" | "idle" | "no-signal" | "dead";
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
-  computer?: "cloud" | "local" | "off";
+  computer?: "cloud" | "vm" | "local" | "off";
+  /** where new tasks run their shell tools; absent = the private bot workspace */
+  cwd?: string;
+  /** auto mode: the bot approves its own tool permissions */
+  autoApprove?: boolean;
+  /** tools this bot may always use without asking */
+  alwaysAllow?: string[];
+  /** speak this bot's replies aloud as they settle */
+  speakReplies?: boolean;
+  /** this bot's own voice id (falls back to the app-wide one) */
+  voice?: string;
   pinned?: boolean;
   hidden?: boolean;
+  /** The workspace's one primary coordinator. */
+  chiefOfStaff?: boolean;
+  /** When this bot wants to talk to another bot (ask_bot/delegate_bot),
+   * pause and ask the user first. Off by default. */
+  approvePeerComms?: boolean;
+  /** Whether this bot may use the workspace's connected apps. Unset means
+   * allowed for existing bots; imported bots start with this disabled. */
+  composio?: boolean;
   messages: Message[];
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
@@ -99,10 +186,25 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  composio: { configured: boolean; apiKeyConfigured?: boolean };
+  composio: { configured: boolean };
   box: { configured: boolean };
+  opencodeGo?: { configured: boolean };
+  /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
+   * a voice, which is what it takes to actually speak. The key itself is
+   * never echoed back. */
+  tts?: { configured: boolean; ready: boolean; voice: string };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
+}
+
+/** How an engine gets installed — declared by its driver, mirrors
+ * EngineInstall in server/contracts.ts. Absent for engines that need no
+ * local binary. `command` omits platforms that have no one-liner. */
+export interface EngineInstall {
+  command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
+  docsUrl?: string;
+  signInCommand?: string;
+  needsNode?: boolean;
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -115,23 +217,62 @@ export interface InstanceInfo {
     reason?: string;
     authenticated?: boolean;
     version?: string | null;
+    /** a reported cost on a subscription is notional; the UI says so */
+    billing?: "metered" | "subscription";
   };
-  models: { default: string; options: Array<{ id: string; label: string }> };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean }> };
+  capabilities?: {
+    computerMcp?: boolean;
+    agentsMcp?: boolean;
+    composioMcp?: boolean;
+    effortLevels?: readonly EffortLevel[];
+  };
+  /** `custom` agents sit below the rail divider — no subscription catalog. */
+  access?: "subscription" | "custom";
+  install?: EngineInstall;
+  /** Configured CLI path override — set ONLY when the user overrode it;
+   * absent means the driver default is in effect. */
+  cli?: string;
+  /** Driver's default binary name (e.g. "claude"). */
+  cliDefault?: string;
+  /** Absolute paths of every default binary found on PATH, PATH order. */
+  cliCandidates?: string[];
 }
 
-interface AppState {
+export type AppSettingsSection =
+  | "general"
+  | "connections"
+  | "engines"
+  | "companion"
+  | "voice"
+  | "computer"
+  | "usage";
+
+export interface AppState {
   bots: Bot[];
+  groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** selected chat — a bot id OR a group id */
   selectedId: string;
+  activeView: "chat" | "routines";
+  routines: Routine[];
+  routineRuns: RoutineRun[];
+  webhooks: WebhookTrigger[];
+  webhookAttempts: WebhookAttempt[];
+  webhookIngress: WebhookIngressStatus | null;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  appSettingsSection: AppSettingsSection;
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
+  /** a search hit to scroll to once its thread is on screen; nonce lets the
+   * same message be focused twice in a row */
+  focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean } | null;
   connected: boolean;
   error: string | null;
   mascotMotion: {
@@ -141,8 +282,35 @@ interface AppState {
   } | null;
 }
 
-type Action =
-  | { type: "hydrate"; bots: Bot[] }
+export type Action =
+  | { type: "hydrate"; bots: Bot[]; groups: Group[] }
+  | { type: "showRoutines" }
+  | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
+  | { type: "routinePatched"; routine: Routine }
+  | { type: "routineDeleted"; routineId: string }
+  | { type: "routineRunPatched"; run: RoutineRun }
+  | { type: "webhooksHydrated"; webhooks: WebhookTrigger[]; attempts: WebhookAttempt[]; ingress: WebhookIngressStatus }
+  | { type: "webhookPatched"; webhook: WebhookTrigger }
+  | { type: "webhookAttempted"; attempt: WebhookAttempt }
+  | { type: "webhookDeleted"; webhookId: string }
+  | { type: "createRoutine"; input: RoutineInput }
+  | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
+  | { type: "deleteRoutine"; routineId: string }
+  | { type: "runRoutine"; routineId: string }
+  | { type: "cancelRoutineRun"; runId: string }
+  | { type: "markRoutineRunSeen"; runId: string }
+  | { type: "groupPatched"; group: Partial<Group> & { id: string } }
+  | { type: "groupDeleted"; groupId: string }
+  | { type: "createGroup"; memberIds: string[]; name?: string }
+  | { type: "sendGroup"; groupId: string; text: string }
+  | {
+      type: "patchGroup";
+      groupId: string;
+      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder">>;
+    }
+  | { type: "deleteGroup"; groupId: string }
+  | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string }
+  | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -152,6 +320,22 @@ type Action =
   | { type: "threadActive"; threadId: string; activeLeafId: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
+  // permission cards answer by THREAD, so a request raised inside a room
+  // can be answered the same way as one in a 1:1 chat
+  | {
+      type: "decideRequest";
+      threadId: string;
+      requestId: string;
+      behavior: "allow" | "deny" | "answer";
+      message?: string;
+      /** remember this exact grant (the server's allowKey) for the bot */
+      alwaysAllow?: { botId: string; key: string };
+    }
+  | { type: "newTask"; botId: string }
+  | { type: "switchTask"; botId: string; threadId: string }
+  | { type: "taskSwitched"; bot: Bot }
+  | { type: "renameTask"; botId: string; threadId: string; title: string }
+  | { type: "deleteTask"; botId: string; threadId: string }
   | { type: "newBot" }
   | { type: "botAdded"; bot: Bot }
   | { type: "deleteBot"; botId: string }
@@ -169,14 +353,31 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "focusMessage"; threadId: string; messageId: string }
+  | { type: "focusMessageConsumed"; nonce: number }
+  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
   | {
       type: "updateBot";
       botId: string;
       patch: Partial<
         Pick<
           Bot,
-          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden"
+          | "name"
+          | "title"
+          | "description"
+          | "notifications"
+          | "computer"
+          | "color"
+          | "mascotExpression"
+          | "autoApprove"
+          | "speakReplies"
+          | "voice"
+          | "pinned"
+          | "hidden"
+          | "chiefOfStaff"
+          | "approvePeerComms"
+          | "composio"
+          | "modelSelection"
         >
       >;
     };
@@ -212,22 +413,94 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
-        action.bots.some((b) => b.id === state.selectedId) && state.selectedId
-          ? state.selectedId
-          : (action.bots[0]?.id ?? "");
-      return { ...state, bots: action.bots, selectedId };
+        state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+      return { ...state, bots: action.bots, groups: action.groups, selectedId };
+    }
+    case "showRoutines":
+      return {
+        ...state,
+        activeView: "routines",
+        settingsOpen: false,
+        computerOpen: false,
+        appSettingsOpen: false,
+        pluginsOpen: false,
+      };
+    case "routinesHydrated":
+      return { ...state, routines: action.routines, routineRuns: action.runs };
+    case "routinePatched": {
+      const exists = state.routines.some((routine) => routine.id === action.routine.id);
+      return {
+        ...state,
+        routines: exists
+          ? state.routines.map((routine) => (routine.id === action.routine.id ? action.routine : routine))
+          : [action.routine, ...state.routines],
+      };
+    }
+    case "routineDeleted":
+      return { ...state, routines: state.routines.filter((routine) => routine.id !== action.routineId) };
+    case "routineRunPatched": {
+      const exists = state.routineRuns.some((run) => run.id === action.run.id);
+      const runs = exists
+        ? state.routineRuns.map((run) => (run.id === action.run.id ? action.run : run))
+        : [action.run, ...state.routineRuns];
+      return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
+    }
+    case "webhooksHydrated":
+      return { ...state, webhooks: action.webhooks, webhookAttempts: action.attempts, webhookIngress: action.ingress };
+    case "webhookPatched": {
+      const exists = state.webhooks.some((webhook) => webhook.id === action.webhook.id);
+      return {
+        ...state,
+        webhooks: exists
+          ? state.webhooks.map((webhook) => (webhook.id === action.webhook.id ? action.webhook : webhook))
+          : [action.webhook, ...state.webhooks],
+      };
+    }
+    case "webhookDeleted":
+      return {
+        ...state,
+        webhooks: state.webhooks.filter((webhook) => webhook.id !== action.webhookId),
+        webhookAttempts: state.webhookAttempts.filter((attempt) => attempt.webhookId !== action.webhookId),
+      };
+    case "webhookAttempted": {
+      const attempts = state.webhookAttempts.some((attempt) => attempt.id === action.attempt.id)
+        ? state.webhookAttempts.map((attempt) => attempt.id === action.attempt.id ? action.attempt : attempt)
+        : [...state.webhookAttempts, action.attempt];
+      return { ...state, webhookAttempts: attempts.slice(-2_000) };
+    }
+    case "groupPatched": {
+      const exists = state.groups.some((g) => g.id === action.group.id);
+      const groups = exists
+        ? state.groups.map((g) => (g.id === action.group.id ? { ...g, ...action.group, messages: action.group.messages ?? g.messages } : g))
+        : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
+      return { ...state, groups };
+    }
+    case "groupDeleted": {
+      const groups = state.groups.filter((g) => g.id !== action.groupId);
+      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
+      return { ...state, groups, selectedId };
     }
     case "instances":
       return { ...state, instances: action.instances };
     case "configStatus":
       return { ...state, config: action.config };
-    case "select":
+    case "select": {
+      if (state.groups.some((g) => g.id === action.id)) {
+        return {
+          ...state,
+          activeView: "chat",
+          selectedId: action.id,
+          groups: state.groups.map((g) => (g.id === action.id ? { ...g, unread: false } : g)),
+        };
+      }
       return updateBot(
-        withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch"),
+        withMascotMotion({ ...state, activeView: "chat", selectedId: action.id }, action.id, "switch"),
         action.id,
         (b) => ({ ...b, unread: false }),
       );
+    }
     // optimistic card settle; the server's message.patch confirms it later
     case "answerCard":
       return withMascotMotion(
@@ -237,10 +510,15 @@ function reducer(state: AppState, action: Action): AppState {
       );
     case "dismissCard":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
+    case "decideRequest":
+      return state; // the server's request.resolved patch settles the card
     case "botAdded":
       return withMascotMotion({
         ...state,
-        bots: [action.bot, ...state.bots],
+        // An HTTP create/import response and its SSE broadcast can race. Fold
+        // both paths without ever showing the same bot twice.
+        bots: [action.bot, ...state.bots.filter((bot) => bot.id !== action.bot.id)],
+        activeView: "chat",
         selectedId: action.bot.id,
       }, action.bot.id, "arrive");
     case "deleteBot": {
@@ -253,6 +531,13 @@ function reducer(state: AppState, action: Action): AppState {
       return updateBot(withMascotMotion(state, action.botId, "surprise"), action.botId, (b) => ({ ...b, unread: true }));
     case "botPatched": {
       const before = state.bots.find((b) => b.id === action.bot.id);
+      // A bot event can announce a bot created by another app window (team
+      // import). Patch events for unknown partial records remain ignored.
+      if (!before) {
+        return Array.isArray(action.bot.messages)
+          ? { ...state, bots: [action.bot as Bot, ...state.bots] }
+          : state;
+      }
       const kind =
         action.bot.unread && !before?.unread
           ? "surprise"
@@ -261,12 +546,44 @@ function reducer(state: AppState, action: Action): AppState {
             : action.bot.busy === false && before?.busy
               ? "celebrate"
               : null;
-      const next = kind ? withMascotMotion(state, action.bot.id, kind) : state;
-      return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+      const animated = kind ? withMascotMotion(state, action.bot.id, kind) : state;
+      const next = action.bot.chiefOfStaff
+        ? {
+            ...animated,
+            bots: animated.bots.map((b) =>
+              b.id === action.bot.id ? b : { ...b, chiefOfStaff: false },
+            ),
+          }
+        : animated;
+      const switchedThread =
+        typeof action.bot.threadId === "string" && action.bot.threadId !== before.threadId;
+      return updateBot(next, action.bot.id, (b) => ({
+        ...b,
+        ...action.bot,
+        // Ordinary bot patches omit messages and must preserve the current
+        // transcript. A task switch is different: its full bot event carries
+        // the new transcript, which must replace the previous task before the
+        // webhook's streamed messages begin arriving.
+        messages:
+          switchedThread && Array.isArray(action.bot.messages)
+            ? action.bot.messages
+            : b.messages,
+      }));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        // room thread — plain linear append, no branching/mascot machinery
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        if (group.messages.some((m) => m.id === action.message.id)) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id ? { ...g, messages: [...g.messages, action.message] } : g,
+          ),
+        };
+      }
       // every server-side append chains onto (and becomes) the active leaf
       const next = updateBot(state, bot.id, (b) => {
         if (b.messages.some((m) => m.id === action.message.id)) {
@@ -303,7 +620,18 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "messagePatched": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
-      if (!bot) return state;
+      if (!bot) {
+        const group = state.groups.find((g) => g.threadId === action.threadId);
+        if (!group) return state;
+        return {
+          ...state,
+          groups: state.groups.map((g) =>
+            g.id === group.id
+              ? { ...g, messages: g.messages.map((m) => (m.id === action.message.id ? action.message : m)) }
+              : g,
+          ),
+        };
+      }
       const motion =
         action.message.kind === "activity"
           ? action.message.tool?.ok === false
@@ -352,6 +680,19 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "togglePlugins":
       return { ...state, pluginsOpen: action.open ?? !state.pluginsOpen };
+    case "focusMessage":
+      return {
+        ...state,
+        focusMessage: {
+          threadId: action.threadId,
+          messageId: action.messageId,
+          nonce: (state.focusMessage?.nonce ?? 0) + 1,
+          consumed: false,
+        },
+      };
+    case "focusMessageConsumed":
+      if (!state.focusMessage || state.focusMessage.nonce !== action.nonce) return state;
+      return { ...state, focusMessage: { ...state.focusMessage, consumed: true } };
     case "toggleComputer": {
       const open = action.open ?? !state.computerOpen;
       return {
@@ -366,6 +707,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsSection: action.section ?? state.appSettingsSection,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -375,9 +717,17 @@ function reducer(state: AppState, action: Action): AppState {
       const mascotChanged =
         Object.prototype.hasOwnProperty.call(action.patch, "color") ||
         Object.prototype.hasOwnProperty.call(action.patch, "mascotExpression");
-      const next = mascotChanged
+      const animated = mascotChanged
         ? withMascotMotion(state, action.botId, "customize")
         : state;
+      const next = action.patch.chiefOfStaff
+        ? {
+            ...animated,
+            bots: animated.bots.map((b) =>
+              b.id === action.botId ? b : { ...b, chiefOfStaff: false },
+            ),
+          }
+        : animated;
       return updateBot(next, action.botId, (b) => ({ ...b, ...action.patch }));
     }
     case "threadActive": {
@@ -400,13 +750,54 @@ function reducer(state: AppState, action: Action): AppState {
       }
       return updateBot(state, action.botId, (b) => ({ ...b, activeLeafId: cur }));
     }
+    // optimistic room edits; the server's group frame confirms them later
+    case "patchGroup":
+      return {
+        ...state,
+        groups: state.groups.map((g) => (g.id === action.groupId ? { ...g, ...action.patch } : g)),
+      };
+    case "toggleReaction": {
+      const toggle = (m: Message): Message => {
+        if (m.id !== action.messageId) return m;
+        const reactions = m.reactions ?? [];
+        const at = reactions.findIndex((r) => r.emoji === action.emoji && r.by === "user");
+        const next = at >= 0 ? reactions.filter((_, i) => i !== at) : [...reactions, { emoji: action.emoji, by: "user" }];
+        return { ...m, reactions: next.length ? next : undefined };
+      };
+      return {
+        ...state,
+        bots: state.bots.map((b) =>
+          b.threadId === action.threadId ? { ...b, messages: b.messages.map(toggle) } : b,
+        ),
+        groups: state.groups.map((g) =>
+          g.threadId === action.threadId ? { ...g, messages: g.messages.map(toggle) } : g,
+        ),
+      };
+    }
     // handled entirely by the async wrapper
     case "send":
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
+    case "newTask":
+    case "switchTask":
+    case "renameTask":
+    case "deleteTask":
+      return state;
+    case "taskSwitched":
+      return updateBot(state, action.bot.id, (bot) => ({ ...bot, ...action.bot, messages: action.bot.messages ?? [] }));
     case "newBot":
     case "duplicateBot":
     case "interrupt":
+    case "createGroup":
+    case "sendGroup":
+    case "deleteGroup":
+    case "interruptGroup":
+    case "createRoutine":
+    case "updateRoutine":
+    case "deleteRoutine":
+    case "runRoutine":
+    case "cancelRoutineRun":
+    case "markRoutineRunSeen":
       return state;
   }
 }
@@ -416,15 +807,24 @@ const MAX_KEPT_SCREEN_FRAMES = 8;
 
 const initialState: AppState = {
   bots: [],
+  groups: [],
   instances: [],
   config: null,
   selectedId: "",
+  activeView: "chat",
+  routines: [],
+  routineRuns: [],
+  webhooks: [],
+  webhookAttempts: [],
+  webhookIngress: null,
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
   appSettingsOpen: false,
+  appSettingsSection: "general",
   screens: {},
   provisioning: {},
+  focusMessage: null,
   connected: false,
   error: null,
   mascotMotion: null,
@@ -461,6 +861,8 @@ export function useStreaming() {
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  /** Re-fetch engine availability — after an install, without a restart. */
+  refreshInstances: () => Promise<void>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -473,13 +875,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [stream, setStream] = useState<StreamState>(EMPTY_STREAM);
   const deltaBuffer = useRef(new Map<string, { text: string; reasoning: string }>());
   const deltaFlush = useRef<number | null>(null);
-  const clearStream = (threadId: string) =>
+  const clearStream = (threadId: string) => {
+    // Drop the thread's un-flushed deltas too: the settled message that
+    // triggered this clear already contains them. Without this, the pending
+    // rAF re-creates a "ghost" stream bubble holding the tail fragment —
+    // it renders below any card/chip that settled next (so a permission
+    // card looks glued to the top), keeps the caret blinking while the bot
+    // is actually waiting, and the next block's deltas append onto the
+    // duplicated tail instead of starting a fresh bubble.
+    deltaBuffer.current.delete(threadId);
     setStream((prev) => {
       if (!(threadId in prev.streaming) && !(threadId in prev.reasoning)) return prev;
       const { [threadId]: _s, ...streaming } = prev.streaming;
       const { [threadId]: _r, ...reasoning } = prev.reasoning;
       return { streaming, reasoning };
     });
+  };
   const flushDeltas = () => {
     if (deltaFlush.current !== null) {
       cancelAnimationFrame(deltaFlush.current);
@@ -520,6 +931,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const wrapped: React.Dispatch<Action> = (action) => {
       rawDispatch(action);
       switch (action.type) {
+        case "createRoutine":
+          api("/api/routines", { method: "POST", body: JSON.stringify(action.input) }).catch(showError);
+          break;
+        case "updateRoutine":
+          api(`/api/routines/${action.routineId}`, {
+            method: "PATCH",
+            body: JSON.stringify(action.patch),
+          }).catch(showError);
+          break;
+        case "deleteRoutine":
+          api(`/api/routines/${action.routineId}`, { method: "DELETE" }).catch(showError);
+          break;
+        case "runRoutine":
+          api(`/api/routines/${action.routineId}/run`, { method: "POST" }).catch(showError);
+          break;
+        case "cancelRoutineRun":
+          api(`/api/routine-runs/${action.runId}/cancel`, { method: "POST" }).catch(showError);
+          break;
+        case "markRoutineRunSeen":
+          api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
+          break;
         case "send":
           api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
@@ -538,6 +970,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ messageId: action.messageId }),
           }).catch(showError);
           break;
+        case "decideRequest": {
+          const respond = () =>
+            api(`/api/threads/${action.threadId}/respond`, {
+              method: "POST",
+              body: JSON.stringify({
+                requestId: action.requestId,
+                behavior: action.behavior,
+                message: action.message,
+              }),
+            }).catch(showError);
+          if (action.alwaysAllow) {
+            const bot = stateRef.current.bots.find((b) => b.id === action.alwaysAllow!.botId);
+            const next = [...new Set([...(bot?.alwaysAllow ?? []), action.alwaysAllow.key])];
+            // save the grant BEFORE releasing the bot: it may ask again
+            // within milliseconds, and a grant that hasn't landed yet
+            // would make "always allow" ask a second time. A failed save
+            // still lets this one through — losing a preference must not
+            // strand the turn — but it says so.
+            void api(`/api/bots/${action.alwaysAllow.botId}`, {
+              method: "PATCH",
+              body: JSON.stringify({ alwaysAllow: next }),
+            })
+              .catch(showError)
+              .finally(respond);
+            break;
+          }
+          void respond();
+          break;
+        }
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
@@ -611,11 +1072,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "select": {
           const bot = stateRef.current.bots.find((b) => b.id === action.id);
+          const group = stateRef.current.groups.find((g) => g.id === action.id);
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
+          } else if (group?.unread) {
+            api(`/api/groups/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           break;
         }
+        case "createGroup":
+          api(`/api/groups`, {
+            method: "POST",
+            body: JSON.stringify({ memberIds: action.memberIds, name: action.name }),
+          })
+            .then(({ group }) => {
+              rawDispatch({ type: "groupPatched", group });
+              rawDispatch({ type: "select", id: group.id });
+            })
+            .catch(showError);
+          break;
+        case "sendGroup":
+          api(`/api/groups/${action.groupId}/messages`, {
+            method: "POST",
+            body: JSON.stringify({ text: action.text }),
+          }).catch(showError);
+          break;
+        case "patchGroup":
+          api(`/api/groups/${action.groupId}`, {
+            method: "PATCH",
+            body: JSON.stringify(action.patch),
+          }).catch(showError);
+          break;
+        case "deleteGroup":
+          api(`/api/groups/${action.groupId}`, { method: "DELETE" }).catch(showError);
+          break;
+        case "toggleReaction":
+          api(`/api/threads/${action.threadId}/messages/${action.messageId}/reactions`, {
+            method: "POST",
+            body: JSON.stringify({ emoji: action.emoji, by: "user" }),
+          }).catch(showError);
+          break;
         case "setModel":
           api(`/api/bots/${action.botId}`, {
             method: "PATCH",
@@ -624,6 +1120,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
+          break;
+        // tasks: the server answers with the bot AND the live transcript,
+        // because switching changes which conversation is on screen
+        case "newTask":
+          api(`/api/bots/${action.botId}/tasks`, { method: "POST", body: "{}" })
+            .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot }))
+            .catch(showError);
+          break;
+        case "switchTask":
+          api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "POST" })
+            .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot }))
+            .catch(showError);
+          break;
+        case "renameTask":
+          api(`/api/bots/${action.botId}/tasks/${action.threadId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ title: action.title }),
+          }).catch(showError);
+          break;
+        case "deleteTask":
+          api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "DELETE" })
+            .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot }))
+            .catch(showError);
+          break;
+        case "interruptGroup":
+          api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
           const timers = patchTimers.current;
@@ -649,38 +1171,90 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
     let alive = true;
-    const loadAll = () => {
-      api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
-        .catch(() => {});
-      api("/api/instances")
-        .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
-        .catch(() => {});
-      api("/api/config")
-        .then((config) => alive && rawDispatch({ type: "configStatus", config }))
-        .catch(() => {});
-    };
-    loadAll();
+    const loadAll = () =>
+      Promise.all([
+        api("/api/bots")
+          .then(({ bots, groups }) => alive && rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
+          .catch(() => {}),
+        api("/api/instances")
+          .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
+          .catch(() => {}),
+        api("/api/config")
+          .then((config) => alive && rawDispatch({ type: "configStatus", config }))
+          .catch(() => {}),
+        api("/api/routines")
+          .then(({ routines, runs }) => alive && rawDispatch({ type: "routinesHydrated", routines, runs }))
+          .catch(() => {}),
+        api("/api/webhooks")
+          .then(({ webhooks, attempts, ingress }) => alive && rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress }))
+          .catch(() => {}),
+      ]);
 
-    const es = new EventSource("/api/events");
-    es.onopen = () => {
-      rawDispatch({ type: "connected", value: true });
-      loadAll(); // resync anything missed while disconnected
-    };
-    es.onerror = () => rawDispatch({ type: "connected", value: false });
-    es.onmessage = (raw) => {
-      let frame: any;
-      try {
-        frame = JSON.parse(raw.data);
-      } catch {
+    // A snapshot and the live fold have to meet at a defined boundary. Start
+    // hydration only after the stream says hello, queue frames that arrive
+    // while the REST snapshot is in flight, then apply them on top. Otherwise
+    // a late hydrate can overwrite a newer event, or an event can land between
+    // an eager request and the stream opening and disappear entirely.
+    let hydrated = false;
+    let hydrating = false;
+    let rehydrateRequested = false;
+    const pendingFrames: any[] = [];
+    let handleFrame: (frame: any) => void;
+    const hydrate = () => {
+      if (hydrating) {
+        // A second non-resumable hello means this snapshot may have started
+        // before another connection gap. Run one more after it settles.
+        rehydrateRequested = true;
         return;
       }
+      hydrating = true;
+      hydrated = false;
+      void loadAll().finally(() => {
+        if (!alive) return;
+        hydrating = false;
+        if (rehydrateRequested) {
+          rehydrateRequested = false;
+          hydrate();
+          return;
+        }
+        hydrated = true;
+        for (const frame of pendingFrames.splice(0)) handleFrame(frame);
+      });
+    };
+    // If SSE is unavailable, the app should still show its saved state. A
+    // later first hello hydrates again because it cannot prove there was no
+    // gap before that connection opened.
+    const hydrationFallback = setTimeout(hydrate, 1_000);
+
+    const es = new EventSource("/api/events");
+    // The hydrate decision belongs to the hello frame, not to onopen: the
+    // server replays what we missed when it can, and re-downloading every
+    // transcript on a reconnect it already covered is pure waste.
+    es.onopen = () => rawDispatch({ type: "connected", value: true });
+    es.onerror = () => rawDispatch({ type: "connected", value: false });
+    handleFrame = (frame) => {
       switch (frame.kind) {
-        case "message":
+        case "message": {
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           // a settled assistant bubble replaces the in-flight stream
-          if (frame.message?.role === "bot" && frame.message?.kind === "text") clearStream(frame.threadId);
+          if (frame.message?.role === "bot" && frame.message?.kind === "text") {
+            clearStream(frame.threadId);
+            // Auto-speak lives HERE rather than in the chat view so a bot
+            // you switched away from still reads its answer out — which is
+            // the whole point of listening while you do something else. A
+            // Auto-speak is disabled during any call. Call mode owns both the
+            // singleton speaker and microphone ordering for its whole lifetime.
+            const owner = stateRef.current.bots.find((b) => b.threadId === frame.threadId);
+            if (owner?.speakReplies && currentCall() === null && frame.message.text?.trim()) {
+              void speaker.speak(frame.message.text, {
+                botId: owner.id,
+                messageId: frame.message.id,
+                voiceId: owner.voice,
+              });
+            }
+          }
           break;
+        }
         case "message.patch":
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           break;
@@ -703,6 +1277,51 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "botPatched", bot });
           break;
         }
+        case "group": {
+          const group = frame.group as Partial<Group> & { id: string };
+          // reading the selected room clears its badge immediately
+          if (group.unread && group.id === stateRef.current.selectedId) {
+            group.unread = false;
+            fetch(`/api/groups/${group.id}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ unread: false }),
+            }).catch(() => {});
+          }
+          rawDispatch({ type: "groupPatched", group });
+          break;
+        }
+        // the harness decided this was worth interrupting for; the toggle
+        // in each bot's settings is what gates it, server-side
+        case "notify":
+          // the wrapped dispatch, not rawDispatch: `select` clears the badge
+          // in local state either way, but only the wrapper PATCHes
+          // unread:false back. Opening a bot from its own notification and
+          // watching the badge return on the next hydration is exactly the
+          // bug that makes notifications feel broken.
+          showNotification(frame.notification, (botId) => dispatch({ type: "select", id: botId }));
+          break;
+        case "group.deleted":
+          rawDispatch({ type: "groupDeleted", groupId: frame.groupId });
+          break;
+        case "routine":
+          rawDispatch({ type: "routinePatched", routine: frame.routine });
+          break;
+        case "routine.deleted":
+          rawDispatch({ type: "routineDeleted", routineId: frame.routineId });
+          break;
+        case "routine.run":
+          rawDispatch({ type: "routineRunPatched", run: frame.run });
+          break;
+        case "webhook":
+          rawDispatch({ type: "webhookPatched", webhook: frame.webhook });
+          break;
+        case "webhook.attempt":
+          rawDispatch({ type: "webhookAttempted", attempt: frame.attempt });
+          break;
+        case "webhook.deleted":
+          rawDispatch({ type: "webhookDeleted", webhookId: frame.webhookId });
+          break;
         case "runtime": {
           const event = frame.event;
           if (event.type === "content.delta") {
@@ -741,7 +1360,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            config: {
+              xai: frame.xai,
+              composio: frame.composio,
+              box: frame.box,
+              tts: frame.tts,
+              profile: frame.profile,
+            },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))
@@ -749,13 +1374,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
       }
     };
+    es.onmessage = (raw) => {
+      let frame: any;
+      try {
+        frame = JSON.parse(raw.data);
+      } catch {
+        return;
+      }
+      // `hello` is the snapshot boundary. A false `resumed` means the server
+      // could not fill the gap, so queue subsequent frames behind a hydrate.
+      if (frame.kind === "hello") {
+        clearTimeout(hydrationFallback);
+        if (!frame.resumed) hydrate();
+        return;
+      }
+      if (hydrated) handleFrame(frame);
+      else pendingFrames.push(frame);
+    };
     return () => {
       alive = false;
+      clearTimeout(hydrationFallback);
       es.close();
     };
   }, []);
 
-  const value = useMemo(() => ({ state, dispatch }), [state, dispatch]);
+  // Re-probe the engines on demand. A CLI installed while the app is running
+  // is invisible until something asks again — the setup screens expose this
+  // as "Check again" so the user isn't told to restart when a refresh will do.
+  const refreshInstances = useCallback(async () => {
+    try {
+      const { instances } = await api("/api/instances");
+      rawDispatch({ type: "instances", instances });
+    } catch {
+      /* offline or server down — the existing list stays */
+    }
+  }, []);
+
+  // Installing a CLI or signing one in happens in a terminal, outside this
+  // window — so the moment the user comes back is exactly when our engine
+  // snapshot is most likely stale. Re-probe on focus, throttled so that
+  // ordinary alt-tabbing doesn't spawn a `--version` call per switch.
+  const lastFocusProbe = useRef(0);
+  useEffect(() => {
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusProbe.current < 3000) return;
+      lastFocusProbe.current = now;
+      void refreshInstances();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshInstances]);
+
+  const value = useMemo(() => ({ state, dispatch, refreshInstances }), [state, dispatch, refreshInstances]);
   return (
     <StoreContext.Provider value={value}>
       <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>

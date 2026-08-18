@@ -11,7 +11,7 @@
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
 
-import { execCli, killCliTree, spawnCli } from "../procs.ts";
+import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 
 import type {
   DriverCreateInput,
@@ -23,20 +23,14 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
+import { codexLocalProviderArgs } from "./local-inject.ts";
 import { augmentedPath } from "../env-path.ts";
 import { appendNative } from "./native.ts";
 
-const DRIVER_KIND = "codex";
+export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
-// catalog ported from upstream packages/contracts/src/model.ts
-const MODELS = {
-  default: "gpt-5.6-sol",
-  options: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { id: "gpt-5.4", label: "GPT-5.4" },
-  ],
-};
+const DRIVER_KIND = "codex";
 
 export interface CodexConfig {
   cli: string;
@@ -58,17 +52,50 @@ const DENY_TIMEOUT_NOTE =
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
-  models: MODELS,
+  install: {
+    command: {
+      darwin: "npm install -g @openai/codex",
+      linux: "npm install -g @openai/codex",
+      win32: "npm install -g @openai/codex",
+    },
+    needsNode: true,
+    docsUrl: "https://github.com/openai/codex",
+    signInCommand: "codex login",
+  },
+  models: STATIC_CODEX_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
   async create(input: DriverCreateInput<CodexConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
+    const childEnv = (): Record<string, string | undefined> => {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        ...input.environment,
+        PATH: augmentedPath(),
+        NPM_CONFIG_LOGLEVEL: "error",
+      };
+      // The CLI owns its own ChatGPT login; a leaked API key silently flips
+      // billing to pay-as-you-go (agentcal).
+      delete env.OPENAI_API_KEY;
+      return env;
+    };
+    const catalogEnv = childEnv();
+    let models = STATIC_CODEX_MODELS;
+    const refreshModels = async () => {
+      try {
+        const resolved = await readCodexModelCatalog(catalogEnv);
+        if (resolved.options.length) models = resolved;
+      } catch {
+        // Keep the last usable catalog when a local provider is down.
+      }
+    };
+    await refreshModels();
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
       turnId: string;
-      asks: Map<string, (behavior: string, message?: string) => void>;
+      asks: Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>;
     }
     const active = new Map<string, Turn>();
 
@@ -88,19 +115,23 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
 
-      const env: Record<string, string | undefined> = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
-      // the CLI owns its own ChatGPT login; a leaked API key silently flips
-      // billing to pay-as-you-go (agentcal)
-      delete env.OPENAI_API_KEY;
+      const env = childEnv();
 
-      const child = spawnCli(config.cli, ["app-server"], {
+      const child = spawnCli(config.cli, ["app-server", ...codexLocalProviderArgs(env, turn.model)], {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
       });
 
-      const state = { settled: false, lastText: "", sawStreamDelta: false };
-      const asks = new Map<string, (behavior: string, message?: string) => void>();
+      const state = {
+        settled: false,
+        lastText: "",
+        sawStreamDelta: false,
+        // codex reports token usage as a running THREAD total; the harness
+        // wants this turn's figure, so the last report is banked on settle
+        usage: undefined as { input: number; output: number } | undefined,
+      };
+      const asks = new Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>();
       let nextId = 1;
       const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 
@@ -110,10 +141,25 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         } catch {}
         appendNative(threadId, { dir: "out", source: "codex.app-server", msg: obj });
       };
-      const request = (method: string, params: unknown) =>
+      const request = (method: string, params: unknown, timeoutMs = 60_000) =>
         new Promise<any>((resolve, reject) => {
           const id = nextId++;
-          rpcPending.set(id, { resolve, reject });
+          // a wedged app-server can accept stdin and never reply; without this
+          // the handshake await hangs forever and the bot stays busy for good
+          const timer = setTimeout(() => {
+            if (rpcPending.delete(id)) reject(new Error(`codex ${method} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          if (typeof timer.unref === "function") timer.unref();
+          rpcPending.set(id, {
+            resolve: (v) => {
+              clearTimeout(timer);
+              resolve(v);
+            },
+            reject: (e) => {
+              clearTimeout(timer);
+              reject(e);
+            },
+          });
           send({ jsonrpc: "2.0", id, method, params });
         });
 
@@ -122,11 +168,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const settle = (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
         state.settled = true;
-        for (const finish of [...asks.values()]) finish("deny", "OpenMausBot: the turn ended");
+        for (const finish of [...asks.values()]) finish("deny", "OpenMausBot: the turn ended", "system");
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null, ...(state.usage ? { usage: state.usage } : {}) });
         stop(); // the app-server never exits on its own
       };
 
@@ -157,7 +203,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const choices = isQuestion
           ? (params.questions?.[0]?.options ?? []).map((o: any) => o.label).slice(0, 5)
           : undefined;
-        const finish = (behavior: string, message?: string) => {
+        const finish = (behavior: "allow" | "deny" | "answer", message?: string, source: "user" | "timeout" | "system" = "user") => {
           if (!asks.delete(requestId)) return;
           clearTimeout(timer);
           if (isQuestion) {
@@ -173,10 +219,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               result: { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
             });
           }
-          emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source: "user" });
+          emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source });
         };
         const timer = setTimeout(
-          () => (isQuestion ? finish("answer", QUESTION_TIMEOUT_NOTE) : finish("deny", DENY_TIMEOUT_NOTE)),
+          () => (isQuestion ? finish("answer", QUESTION_TIMEOUT_NOTE, "timeout") : finish("deny", DENY_TIMEOUT_NOTE, "timeout")),
           15 * 60_000,
         );
         timer.unref?.();
@@ -251,6 +297,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             break;
           }
           case "thread/tokenUsage/updated": {
+            // `last` is the most recent turn when the server sends it;
+            // `total` is the thread so far — a fresh app-server per turn
+            // makes that this turn's figure too
+            const turnUsage = p.tokenUsage?.last ?? p.tokenUsage?.total;
+            if (turnUsage) state.usage = { input: turnUsage.inputTokens ?? 0, output: turnUsage.outputTokens ?? 0 };
             const t = p.tokenUsage?.total;
             if (t) {
               emit({
@@ -279,6 +330,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       let buf = "";
+      // decode as UTF-8 across chunk boundaries — a raw `buf += chunk` splits
+      // multibyte characters that straddle two reads and corrupts the text
+      child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         buf += chunk;
         let nl;
@@ -313,7 +367,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (stderr.length > 8192) stderr = stderr.slice(-8192);
       });
       child.on("error", (e) => {
-        emit({ ...base(threadId, turnId), type: "runtime.error", message: `spawn failed: ${e.message}` });
+        emit({ ...base(threadId, turnId), type: "runtime.error", ...describeSpawnFailure(e, config.cli) });
         settle(false, "spawn_error");
       });
       child.on("close", (code) => {
@@ -347,9 +401,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             }
           }
           if (!codexThreadId) {
+            const selection = decodeCodexSelection(turn.model);
             const started = await request("thread/start", {
               cwd: turn.cwd ?? homedir(),
-              model: turn.model || null,
+              model: selection.model,
+              ...(selection.modelProvider ? { modelProvider: selection.modelProvider } : {}),
               sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
               approvalPolicy: config.fullAuto ? "never" : "on-request",
               ephemeral: false,
@@ -361,11 +417,28 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await request("turn/start", {
             threadId: codexThreadId,
             input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
+            // Spread, not `effort: turn.effort ?? null`. Probed against
+            // codex-cli 0.146.0: null is indistinguishable from an absent key
+            // — both leave the thread's current effort alone, emitting no
+            // thread/settings/updated, and thread/resume reads the old value
+            // back. The app-server offers no way to clear a level either:
+            // "" is rejected outright and thread/start takes no effort at
+            // all. So a thread keeps the last level it was sent until it is
+            // sent another, and choosing Default lands on the bot's next new
+            // thread rather than the current one.
+            ...(turn.effort ? { effort: turn.effort } : {}),
           });
         } catch (e) {
           if (!state.settled) {
-            emit({ ...base(threadId, turnId), type: "runtime.error", message: (e as Error).message });
-            settle(false, "rpc_error");
+            const message = e instanceof Error ? e.message : String(e);
+            const needsAuth = /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(message);
+            emit({
+              ...base(threadId, turnId),
+              type: "runtime.error",
+              message,
+              ...(needsAuth ? { setup: true } : {}),
+            });
+            settle(false, needsAuth ? "auth_required" : "rpc_error");
           }
         }
       })();
@@ -374,13 +447,20 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
+      const env = childEnv();
       const version = await new Promise<string | null>((resolve) => {
-        execCli(config.cli, ["--version"], { timeout: 8000, env: { ...process.env, PATH: augmentedPath() } }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      return { state: "available", version };
+      const authenticated = await new Promise<boolean>((resolve) => {
+        execCli(config.cli, ["login", "status"], { timeout: 8000, env }, (err, stdout) =>
+          resolve(!err && /logged in/i.test(stdout)),
+        );
+      });
+      // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login
+      return { state: "available", version, authenticated, billing: "subscription" };
     };
 
     return {
@@ -388,18 +468,25 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: MODELS,
+      get models() {
+        return models;
+      },
+      refreshModels,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "unsupported" },
+        capabilities: {
+          sessionModelSwitch: "unsupported",
+          effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
           const turn = active.get(threadId);
           const finish = turn?.asks.get(requestId);
-          if (!finish) throw new Error("no such pending request");
-          finish(decision.behavior, decision.message);
+          if (!finish) return "unavailable"; // settled, timed out, or turn gone
+          finish(decision.behavior, decision.message, "user");
+          return decision.behavior === "allow" ? "allowed-once" : decision.behavior === "answer" ? "answered" : "rejected";
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {

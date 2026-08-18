@@ -9,13 +9,15 @@
 // the packaged app ships no node_modules.
 import { app, ipcMain } from "electron";
 import { createRequire } from "node:module";
+import { createUpdaterCoordinator } from "./updater-coordinator.mjs";
 
 const require = createRequire(import.meta.url);
 
 let autoUpdater = null;
 let win = null;
-// status: idle | checking | available | downloading | downloaded | error
+// status: idle | checking | available | downloading | downloaded | installing | error
 let state = { status: "idle" };
+let updaterCoordinator = null;
 
 function setState(patch) {
   state = { ...state, ...patch };
@@ -26,29 +28,18 @@ function setState(patch) {
   }
 }
 
-function check() {
-  if (!autoUpdater) return;
-  try {
-    autoUpdater.checkForUpdates();
-  } catch (e) {
-    setState({ status: "error", message: String(e?.message ?? e) });
-  }
-}
-
 export function registerUpdaterIpc() {
   ipcMain.handle("update:get-state", () => state);
-  ipcMain.handle("update:check", () => check());
-  ipcMain.handle("update:download", () => {
-    try {
-      autoUpdater?.downloadUpdate();
-    } catch (e) {
-      setState({ status: "error", message: String(e?.message ?? e) });
-    }
-  });
+  ipcMain.handle("update:check", () => updaterCoordinator?.check(true));
+  ipcMain.handle("update:download", () => updaterCoordinator?.download());
   ipcMain.handle("update:install", () => {
+    if (!autoUpdater) return;
+    // Tearing down the window and relaunching takes a beat; announce it so the
+    // button greys out instead of looking like the click was swallowed.
+    setState({ status: "installing" });
     // isSilent, isForceRunAfter — relaunch straight into the new version
     try {
-      autoUpdater?.quitAndInstall(true, true);
+      autoUpdater.quitAndInstall(true, true);
     } catch (e) {
       setState({ status: "error", message: String(e?.message ?? e) });
     }
@@ -59,12 +50,14 @@ export function startUpdater(mainWindow) {
   win = mainWindow;
   // dev / unsigned builds can't auto-update — leave the banner dormant
   if (!app.isPackaged) {
+    updaterCoordinator = null;
     setState({ status: "idle" });
     return;
   }
   try {
     ({ autoUpdater } = require("./vendor/electron-updater.cjs"));
   } catch {
+    updaterCoordinator = null;
     setState({ status: "error", message: "updater unavailable" });
     return;
   }
@@ -72,20 +65,11 @@ export function startUpdater(mainWindow) {
   autoUpdater.autoInstallOnAppQuit = false; // button-driven install
   autoUpdater.logger = null;
 
-  autoUpdater.on("checking-for-update", () => setState({ status: "checking" }));
-  autoUpdater.on("update-available", (info) =>
-    setState({ status: "available", version: info?.version, message: undefined }),
-  );
-  autoUpdater.on("update-not-available", () => setState({ status: "idle" }));
-  autoUpdater.on("download-progress", (p) =>
-    setState({ status: "downloading", percent: Math.round(p?.percent ?? 0) }),
-  );
-  autoUpdater.on("update-downloaded", (info) =>
-    setState({ status: "downloaded", version: info?.version }),
-  );
-  autoUpdater.on("error", (e) => setState({ status: "error", message: String(e?.message ?? e) }));
+  updaterCoordinator = createUpdaterCoordinator(autoUpdater, setState);
 
-  // first check ~15s after launch (let the app settle), then hourly
-  setTimeout(check, 15_000).unref?.();
-  setInterval(check, 60 * 60 * 1000).unref?.();
+  // first check ~15s after launch (let the app settle), then hourly — both
+  // silent on failure, hence the arrow: a bare `check` would receive the
+  // timer's argument as `manual` and start reporting errors again.
+  setTimeout(() => void updaterCoordinator?.check(), 15_000).unref?.();
+  setInterval(() => void updaterCoordinator?.check(), 60 * 60 * 1000).unref?.();
 }

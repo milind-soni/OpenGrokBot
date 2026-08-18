@@ -36,7 +36,7 @@ import {
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type ModelCatalog, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -55,6 +55,7 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
+import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import {
   ensureWorkspace,
@@ -69,8 +70,12 @@ import {
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
+import { TurnLiveness } from "./liveness.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
+import { rebuildForModel } from "./compactor.ts";
+import { contextWindowFor } from "./context-window.ts";
+import { replayEntries } from "./context-rebuild.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
@@ -200,9 +205,23 @@ store.seedIfEmpty();
  * so a new broadcast cannot forget. */
 const wireTask = ({ resumeCursors, ...task }: TaskRecord) => task;
 
+/** threadId → when it went quiet; transient, rides on the bot broadcast */
+const quietSince = new Map<string, number>();
+
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  return { ...rest, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+  // a routine runs in a detached task thread, not the one open in chat —
+  // any of the bot's threads being quiet is the bot being quiet
+  const quiet = [bot.threadId, ...(tasks ?? []).map((t) => t.threadId)]
+    .map((threadId) => quietSince.get(threadId))
+    .find((v): v is number => v !== undefined);
+  return {
+    ...rest,
+    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
+    // transient: when the running turn last showed a sign of life, once it
+    // has been quiet long enough to say so. Never persisted — like busy.
+    ...(quiet !== undefined ? { quietSince: quiet } : {}),
+  };
 };
 
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
@@ -513,6 +532,13 @@ let routines: RoutineManager | null = null;
 // driving it simultaneously would mix clicks, keystrokes and screenshots,
 // so only one thread may lease it at a time.
 const localVmLease = new LocalVmLease(30 * 60_000);
+
+// A running turn that has gone quiet is SAID so after QUIET_AFTER (a note
+// next to Stop). Stopping a wedged turn is the TurnWatchdog's job below
+// (TURN_STALL_MS, waiting-on-human exempt); this is the earlier soft signal.
+// Env override exists so the e2e can exercise it without waiting.
+const QUIET_AFTER_MS = Number(process.env.OMB_TURN_QUIET_AFTER_MS) || 2 * 60_000;
+const liveness = new TurnLiveness({ quietAfterMs: QUIET_AFTER_MS });
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 let localVmLifecycleBusy = false;
 let localVmActiveThread: string | null = null;
@@ -546,9 +572,15 @@ void containerComputerStatus()
 bus.subscribe((event: RuntimeEvent) => {
   localVmLease.touch(event.threadId);
   if (localVmActiveThread === event.threadId) localVmIdle.touch();
+  liveness.touch(event.threadId, Date.now());
+  // parked on a person is not quiet — same exemption the watchdog applies
+  if (event.type === "request.opened") liveness.setWaitingOnHuman(event.threadId, true, Date.now());
+  else if (event.type === "request.resolved") liveness.setWaitingOnHuman(event.threadId, false, Date.now());
   if (event.type === "turn.completed") {
     localVmLease.release(event.threadId);
     if (localVmActiveThread === event.threadId) localVmActiveThread = null;
+    // a flagged thread settling drops its note with the bot broadcast below
+    if (liveness.settle(event.threadId)) quietSince.delete(event.threadId);
   }
   broadcast({ kind: "runtime", event });
   routines?.handleRuntimeEvent(event);
@@ -1060,13 +1092,11 @@ async function startTurn(
     userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
   }
 
-  // transcript for API-backed drivers: settled text turns on the ACTIVE
-  // branch only — abandoned forks never reach the model
-  const transcript = store
-    .activePath(threadId)
-    .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
-    .slice(-40)
-    .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+  // The model-facing view of the thread: the ACTIVE branch only (abandoned
+  // forks never reach the model), from the latest compaction onward. Text
+  // and tool activity both — a handed-over engine must see the work, not
+  // just the talk. Unbounded here; bounded below only if it will be sent.
+  const modelView = replayEntries(store.modelContext(threadId).messages, { excludeId: userMessage.id });
 
   // After a rewind (edit / branch switch) the provider's native session
   // still contains the abandoned branch: start a fresh session instead of
@@ -1075,18 +1105,44 @@ async function startTurn(
   // cleared only once the turn is actually dispatched — clearing it here
   // would cost the next attempt its history if this dispatch fails.
   const rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  const turnText =
-    rewound && instance.driverKind !== "grok" && transcript.length
-      ? [
-          "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
-          "",
-          ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
-          "",
-          "[Now reply to the user's latest message:]",
-          "",
-          text,
-        ].join("\n")
-      : text;
+  // A fresh engine — the user switched this bot's model mid-thread — has no
+  // current session here either, so it gets the same replay. Distinct from
+  // rewound: the OTHER instances' cursors are left alone (a rewind wipes
+  // them all), and "fresh" is decided by who ran the last turn, not by
+  // whether we hold a cursor — see engineIsFresh.
+  const fresh =
+    !rewound &&
+    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript: modelView });
+  const replaysNatively = instance.driverKind === "grok";
+  // Only a turn that will actually replay pays for a rebuild — and the
+  // rebuild is sized for THIS model's window, summarizing older turns
+  // through generateText (the bot's own engine, else any that has one)
+  // when it will not fit. A compaction is a record in the tree; the
+  // display path is untouched.
+  const willReplay = rewound || fresh || replaysNatively;
+  const summarizer = instance.generateText ?? registry.instances().find((i) => i.generateText)?.generateText;
+  const rebuilt = willReplay
+    ? await rebuildForModel({
+        store,
+        threadId,
+        contextWindow: contextWindowFor(model, instance.models),
+        generateText: summarizer,
+        excludeId: userMessage.id,
+      })
+    : { entries: [], summary: undefined, compacted: false };
+  if (rebuilt.compacted) {
+    const record = store.activePath(threadId).at(-1);
+    if (record?.kind === "compaction") broadcast({ kind: "message", threadId, message: record });
+  }
+  const transcript = rebuilt.entries;
+  const { turnText, resume } = buildTurnContext({
+    text,
+    transcript,
+    rewound,
+    fresh,
+    replaysNatively,
+    summary: rebuilt.summary,
+  });
 
   const persona = [
     `You are ${bot.name}, a personal bot in OpenMausBot.`,
@@ -1260,8 +1316,12 @@ async function startTurn(
         // a rewound thread never resumes the abandoned branch's session
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
-        resumeCursor: rewound ? undefined : task.resumeCursors[instanceId],
-        transcript,
+        resumeCursor: resume ? task.resumeCursors[instanceId] : undefined,
+        // transcript-replay drivers: the summary leads as an opening user
+        // line, since the transcript shape has no slot of its own for it
+        transcript: rebuilt.summary
+          ? [{ role: "user" as const, text: `[Summary of the earlier part of this conversation]\n${rebuilt.summary}` }, ...transcript]
+          : transcript,
         system:
           persona +
           (computerKind === "vm"
@@ -1294,6 +1354,9 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+      // and this engine now owns the thread's most recent turn
+      store.markTaskDispatched(bot.id, threadId, instanceId);
+      liveness.start(threadId, { at: Date.now() });
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy
@@ -1305,6 +1368,8 @@ async function startTurn(
       localVmLease.release(threadId);
       if (localVmActiveThread === threadId) localVmActiveThread = null;
       watchdog.settle(threadId);
+      liveness.settle(threadId);
+      quietSince.delete(threadId);
       turnUsage.delete(threadId);
       const message = e instanceof Error ? e.message : String(e);
       store.appendMessage(threadId, {
@@ -1319,6 +1384,18 @@ async function startTurn(
 }
 
 // ── routines: persisted definitions → detached bot tasks ───────────────
+// The liveness clock. Every 15s: flag threads gone quiet, clear ones that
+// woke up. Nothing is stopped here — that is the TurnWatchdog's call.
+setInterval(() => {
+  const now = Date.now();
+  for (const action of liveness.tick(now)) {
+    if (action.action === "flag") quietSince.set(action.threadId, action.quietSince);
+    else quietSince.delete(action.threadId);
+    const bot = store.botByThread(action.threadId);
+    if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+  }
+}, 15_000).unref();
+
 // The scheduler owns timing and receipts; the existing harness remains the
 // only owner of provider sessions, approvals, tools, computers and messages.
 routines = new RoutineManager({
@@ -1385,16 +1462,29 @@ const webhookIngressStatus = () => ({
 // fresh session with recent room context. A member's reply may @mention
 // teammates; those get one chained turn (hop 1), never deeper.
 const groupQueues = new Map<string, Promise<void>>();
-const GROUP_CONTEXT_MESSAGES = 30;
 const MAX_GROUP_HOPS = 1;
 
-function serializeRoomContext(threadId: string, userName: string): string {
-  return store
-    .messagesFor(threadId)
-    .filter((m) => m.kind === "text" && m.text)
-    .slice(-GROUP_CONTEXT_MESSAGES)
-    .map((m) => `${m.role === "user" ? userName : (m.from?.name ?? "Bot")}: ${m.text}`)
-    .join("\n");
+/** The room as the next speaker should see it: sized for THEIR model, with
+ * each member's lines attributed. Reads the active path (a room can be
+ * rewound too) and compacts through the responder's engine when needed. */
+async function serializeRoomContext(
+  threadId: string,
+  userName: string,
+  target: { model: string | undefined; catalog: ModelCatalog; generateText?: (prompt: string) => Promise<string> },
+): Promise<string> {
+  const rebuilt = await rebuildForModel({
+    store,
+    threadId,
+    contextWindow: contextWindowFor(target.model, target.catalog),
+    generateText: target.generateText ?? registry.instances().find((i) => i.generateText)?.generateText,
+    attribute: true,
+  });
+  if (rebuilt.compacted) {
+    const record = store.activePath(threadId).at(-1);
+    if (record?.kind === "compaction") broadcast({ kind: "message", threadId, message: record });
+  }
+  const lines = rebuilt.entries.map((e) => (e.role === "user" ? `${userName}: ${e.text}` : e.text));
+  return [rebuilt.summary ? `[Summary of the earlier conversation]\n${rebuilt.summary}` : "", ...lines].filter(Boolean).join("\n");
 }
 
 
@@ -1484,7 +1574,11 @@ async function runGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)`;
+  const text = `${await serializeRoomContext(group.threadId, userName, {
+    model: bot.modelSelection.model,
+    catalog: instance.models,
+    generateText: instance.generateText,
+  })}\n\n(Reply to the conversation above as ${bot.name}.)`;
 
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
@@ -1707,6 +1801,12 @@ async function reloadProviders() {
     if (vmLease?.botId === b.id) {
       localVmLease.release(vmLease.threadId);
       if (localVmActiveThread === vmLease.threadId) localVmActiveThread = null;
+    }
+    // the turn's terminal event may never come — drop its liveness clock
+    // too, or the tick would flag/stop a turn that is already gone
+    for (const threadId of new Set([b.threadId, ...store.tasks(b.id).map((t) => t.threadId)])) {
+      liveness.settle(threadId);
+      quietSince.delete(threadId);
     }
     stopScreenPoller(b.id);
     finalizeDelegationWatch(

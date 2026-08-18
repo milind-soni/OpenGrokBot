@@ -22,6 +22,7 @@ import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
 import { cn } from "@/lib/cn";
+import { CompactionDivider } from "./CompactionDivider";
 import { useFocusMessage } from "@/lib/focus-message";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
@@ -85,7 +86,9 @@ const Transcript = memo(function Transcript({
           // `tool` distinguishes a permission from a QUESTION — a question
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
-          m.kind === "options" && m.card?.requestId && m.card.tool ? (
+          m.kind === "compaction" ? (
+            <CompactionDivider message={m} />
+          ) : m.kind === "options" && m.card?.requestId && m.card.tool ? (
             <div className="flex justify-start">
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
             </div>

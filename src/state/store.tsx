@@ -42,7 +42,10 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "compaction";
+  /** compaction messages: the model-facing rebuild folded everything before
+   * `firstKeptId` into `summary`. A divider in the chat; nothing is gone. */
+  compaction?: { summary: string; firstKeptId: string; tokensBefore: number };
   text?: string;
   card?: OptionCardData;
   /** activity messages: tool name + outcome. `spoken` is the server's
@@ -118,6 +121,9 @@ export interface Bot {
   mascotExpression?: string | null;
   unread: boolean;
   busy?: boolean;
+  /** transient: when the running turn last showed a sign of life, once it
+   * has been quiet long enough for the harness to say so */
+  quietSince?: number;
   /** what the bot is doing, as the harness sees it; busy is derived from it */
   activity?: "working" | "waiting-on-you" | "idle" | "no-signal" | "dead";
   modelSelection: ModelSelection;

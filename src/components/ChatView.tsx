@@ -43,6 +43,8 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { CompactionDivider } from "./CompactionDivider";
+import { quietFor } from "@/lib/quiet";
 import { useFocusMessage } from "@/lib/focus-message";
 import { webhookMessageView } from "@/lib/webhook-message";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
@@ -584,6 +586,8 @@ const MessagesList = memo(function MessagesList({
               );
             case "screen":
               return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+            case "compaction":
+              return <CompactionDivider message={m} />;
             default:
               return (
                 <Bubble
@@ -825,6 +829,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
         </div>
         <div className="flex items-center gap-2" style={noDrag}>
+          {bot.busy && <QuietNote bot={bot} engine={state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)?.displayName} />}
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
@@ -978,6 +983,28 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+  );
+}
+
+/** The running turn has gone quiet. Informative, not a verdict — a long
+ * silent tool run looks exactly like a hung engine from out here — which is
+ * why it sits next to Stop and lets the human decide. Re-renders each
+ * minute so the duration keeps up. */
+function QuietNote({ bot, engine }: { bot: Bot; engine?: string }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!bot.quietSince) return;
+    const t = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [bot.quietSince]);
+  if (!bot.quietSince) return null;
+  return (
+    <span
+      className="flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-[12.5px] text-warning"
+      title={`No output from ${engine ?? "the engine"} since ${new Date(bot.quietSince).toLocaleTimeString()}. It may be running a long tool — or stuck. Stop if it should have replied by now.`}
+    >
+      Quiet for {quietFor(bot.quietSince)}
+    </span>
   );
 }
 

@@ -34,6 +34,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { quietFor } from "@/lib/quiet";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { RenameTitle } from "./RenameTitle";
@@ -130,10 +131,11 @@ function UpdateButton() {
 
 function preview(bot: Bot): string {
   if (bot.activity === "waiting-on-you") return "Waiting for you…";
-  if (bot.busy) return "Working…";
+  if (bot.busy) return bot.quietSince ? `Quiet for ${quietFor(bot.quietSince)}…` : "Working…";
   // the visible branch's tail — bot.messages holds every fork, so its last
   // entry can belong to a version the user switched away from
-  const last = visibleMessages(bot).at(-1);
+  // a compaction record is a divider, not something the bot said
+  const last = visibleMessages(bot).filter((m) => m.kind !== "compaction").at(-1);
   if (!last) return "";
   if (last.kind === "options" && last.card) return last.card.title;
   if (last.kind === "activity" && last.tool) return last.tool.name;
@@ -737,6 +739,15 @@ function ArchivedBotsPanel({
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useStore();
+  // "Quiet for 3m…" has to keep counting: re-render every 30s while any
+  // bot is quiet, since nothing else in state changes during a silence
+  const [, quietTick] = useState(0);
+  const anyQuiet = state.bots.some((b) => b.busy && b.quietSince);
+  useEffect(() => {
+    if (!anyQuiet) return;
+    const t = setInterval(() => quietTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [anyQuiet]);
   const { capabilities } = useDesktopCapabilities();
   const importReturnRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);

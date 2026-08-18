@@ -53,9 +53,14 @@ export interface OptionCardData {
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "compaction";
   text?: string;
   card?: OptionCardData;
+  /** compaction messages: the model-facing rebuild folded everything on
+   * the path before `firstKeptId` into `summary`. A record in the tree
+   * like any message — nothing behind it is deleted; the display path
+   * still reaches message one. Only modelContext() reads it. */
+  compaction?: { summary: string; firstKeptId: string; tokensBefore: number };
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent
@@ -118,6 +123,11 @@ export interface TaskRecord {
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
+  /** which instance dispatched the most recent turn. A cursor alone can't
+   * say whether an engine's session is current — another engine may have
+   * taken turns since — so this is what decides an inline replay. Absent
+   * on tasks from before the field existed. */
+  lastInstanceId?: string;
   /** cumulative token spend across this task's settled turns — providers
    * report running totals per turn; the fold adds each turn's final total
    * here when the turn completes. Informational, not billing. */
@@ -605,6 +615,37 @@ export class Store {
     return full;
   }
 
+  /** Fold the older part of the model-facing rebuild into a summary. The
+   * record is appended like any message (parentId = current leaf) so it
+   * sits in the tree and travels with the branch; a rewind to before it
+   * simply no longer sees it. */
+  appendCompaction(threadId: string, compaction: NonNullable<Message["compaction"]>): Message {
+    return this.appendMessage(threadId, { role: "bot", kind: "compaction", compaction });
+  }
+
+  /** What a model should be shown for this thread: the latest compaction's
+   * summary (if one is on the active path) plus every message from its
+   * firstKeptId onward, records themselves excluded. Without a compaction
+   * this is the whole active path. */
+  modelContext(threadId: string): { summary?: string; messages: Message[] } {
+    const path = this.activePath(threadId);
+    let latest = -1;
+    for (let i = path.length - 1; i >= 0; i--) {
+      if (path[i].kind === "compaction" && path[i].compaction) {
+        latest = i;
+        break;
+      }
+    }
+    if (latest < 0) return { messages: path.filter((m) => m.kind !== "compaction") };
+    const record = path[latest].compaction!;
+    const keptFrom = path.findIndex((m) => m.id === record.firstKeptId);
+    const start = keptFrom >= 0 && keptFrom < latest ? keptFrom : latest + 1;
+    return {
+      summary: record.summary,
+      messages: path.slice(start).filter((m) => m.kind !== "compaction"),
+    };
+  }
+
   /** Screen frames are ~100-500KB of base64 each; keeping every frame of a
    * long computer session bloats the transcript for nothing the client
    * would ever show. The newest few keep their pixels; older ones stay in
@@ -799,6 +840,16 @@ export class Store {
     if (!threadId || bot.threadId === threadId) bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
     this.emit({ type: "bot", botId });
+  }
+
+  /** Record which instance just took a turn on this task. Called at
+   * dispatch, not at cursor time — transcript-replay engines never
+   * produce a cursor, and they still count as having run last. */
+  markTaskDispatched(botId: string, threadId: string, instanceId: string) {
+    const task = this.taskByThread(botId, threadId);
+    if (!task || task.lastInstanceId === instanceId) return;
+    task.lastInstanceId = instanceId;
+    this.saveBots();
   }
 
   /** The folder a task's turn runs in. Pins on first call from the bot's

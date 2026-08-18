@@ -544,3 +544,65 @@ describe("Store task working folder — cloud runs", () => {
     expect(store.pinTaskCwd(bot.id, bot.threadId)).toBeNull();
   });
 });
+
+describe("Store compaction records", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  const seed = (store: Store, threadId: string, n: number) => {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      ids.push(store.appendMessage(threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: `m${i}` }).id);
+    }
+    return ids;
+  };
+
+  it("modelContext is the whole active path when nothing was compacted", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    seed(store, bot.threadId, 4);
+    const ctx = store.modelContext(bot.threadId);
+    expect(ctx.summary).toBeUndefined();
+    // the seeded greeting + card + 4 messages: everything on the path
+    expect(ctx.messages.length).toBe(store.activePath(bot.threadId).length);
+  });
+
+  it("a compaction record lives in the tree, keeps everything behind it, and modelContext starts at firstKeptId", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const ids = seed(store, bot.threadId, 6);
+    const record = store.appendCompaction(bot.threadId, { summary: "they discussed m0..m2", firstKeptId: ids[3], tokensBefore: 999 });
+    expect(record.kind).toBe("compaction");
+    expect(record.compaction).toEqual({ summary: "they discussed m0..m2", firstKeptId: ids[3], tokensBefore: 999 });
+    // nothing deleted: the display path still reaches message one
+    expect(store.activePath(bot.threadId).some((m) => m.text === "m0")).toBe(true);
+    // the model-facing view: summary + kept tail (m3..m5), no record itself
+    const ctx = store.modelContext(bot.threadId);
+    expect(ctx.summary).toBe("they discussed m0..m2");
+    expect(ctx.messages.map((m) => m.text)).toEqual(["m3", "m4", "m5"]);
+    // and later messages descend from the record
+    const later = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "m6" });
+    expect(later.parentId).toBe(record.id);
+    expect(store.modelContext(bot.threadId).messages.map((m) => m.text)).toEqual(["m3", "m4", "m5", "m6"]);
+  });
+
+  it("the latest compaction wins, and a rewind to before it ignores it", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const ids = seed(store, bot.threadId, 6);
+    store.appendCompaction(bot.threadId, { summary: "first", firstKeptId: ids[2], tokensBefore: 1 });
+    seed(store, bot.threadId, 2); // m6, m7 after the first record
+    const second = store.appendCompaction(bot.threadId, { summary: "second", firstKeptId: ids[5], tokensBefore: 2 });
+    expect(store.modelContext(bot.threadId).summary).toBe("second");
+    // rewind: switch the branch back to m3 — the records are downstream and no longer apply
+    store.setActiveLeaf(bot.threadId, ids[3]);
+    // setActiveLeaf descends to the newest leaf, which is past both records; branch instead
+    const fork = store.branchMessage(bot.threadId, ids[4], "edited m4")!;
+    expect(fork).toBeTruthy();
+    const ctx = store.modelContext(bot.threadId);
+    expect(ctx.summary).toBeUndefined();
+    expect(ctx.messages.map((m) => m.text)).toContain("edited m4");
+    expect(second.kind).toBe("compaction");
+  });
+});

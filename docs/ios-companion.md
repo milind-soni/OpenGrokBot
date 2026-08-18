@@ -217,8 +217,10 @@ distribution scope:
 2. **Desktop conversation parity:** task create/switch/rename/delete, SQLite
    search with exact-message landing, transcript export/share, reactions, and
    edit/version controls. Archived or hidden chat management remains desktop-only.
-3. **Notifications:** APNs credentials, a relay or another wake-up design,
-   notification actions, and background reconciliation.
+3. **Notifications:** native permission, live/replayed alerts, time-sensitive
+   approvals, badges, and background reconciliation are in the app. Closed-app
+   delivery still requires project-owned APNs credentials and a hosted relay;
+   Tailscale cannot wake a terminated iOS process.
 4. **Distribution:** signing, bundle ownership, privacy declarations,
    TestFlight, and App Store review material. Swift tests and an unsigned
    simulator build already run in the repository CI.

@@ -162,8 +162,11 @@ mean losing the ability to lock it out.
 
 ## Not in this version
 
-The app is foreground-only. There is no APNs delivery while it is closed, no
-voice/call mode, and no hosted relay. Task management, SQLite transcript search,
+The live connection is foreground-only. Notification frames produce native
+banners, sounds, time-sensitive approval alerts, and an app badge while connected;
+the resume cursor replays alerts missed during a short background pause. There is
+no APNs delivery after the app is terminated, no voice/call mode, and no hosted relay.
+Task management, SQLite transcript search,
 transcript sharing, reactions, and edit/version controls use narrow companion
 routes and the computer remains the source of truth. Tailscale is supported
 through manual MagicDNS entry; it is not a dependency and OpenMausBot does not

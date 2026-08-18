@@ -367,7 +367,10 @@ struct ChatView: View {
             if attachError != nil || !pending.isEmpty {
                 ComposerAttachBar(items: $pending, error: attachError)
             }
-            HStack(spacing: 10) {
+            // Bottom, not centre: a wrapping field used to grow into a
+            // stadium with the mic and send floating at its middle. Other
+            // chat apps pin the actions to the last line.
+            HStack(alignment: .bottom, spacing: 10) {
                 ComposerAttachMenu(
                     enabled: !dictation.isListening && !sendingAttachments,
                     onAttachImage: {
@@ -395,7 +398,14 @@ struct ChatView: View {
                 .lineLimit(1...5)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Capsule().fill(Color.secondary.opacity(0.16)))
+                // Capsule's radius is half the height, so a wrapped field
+                // becomes a fat oval. A fixed radius stays a pill on one
+                // line and a rounded rectangle on several — the iMessage
+                // shape, and the one the other chat apps use.
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.secondary.opacity(0.16))
+                )
                 .focused($composerFocused)
                 .submitLabel(.send)
                 // Typing while partials stream in would fight the next

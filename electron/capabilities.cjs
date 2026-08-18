@@ -32,10 +32,30 @@ function desktopCapabilities({
   env = process.env,
   packaged = false,
   localConnection = null,
+  homeDir = require("node:os").homedir(),
 } = {}) {
   const hostPlatform = normalizedPlatform(platform);
   const isMac = hostPlatform === "darwin";
   const localAvailable = localComputerReady(hostPlatform, localConnection);
+  const screenPreview = {
+    available: isMac,
+    interaction: isMac ? "direct" : "none",
+  };
+  if (!isMac) screenPreview.reasonCode = "unsupported-platform";
+  const dictation = {
+    available: isMac,
+    engine: isMac ? "apple-speech" : "none",
+    onDevice: isMac,
+  };
+  if (!isMac) dictation.reasonCode = "unsupported-platform";
+  const localComputer = {
+    available: localAvailable,
+    support: localAvailable ? "supported" : "unsupported",
+  };
+  if (!localAvailable) {
+    localComputer.reasonCode =
+      hostPlatform === "darwin" ? "cua-driver-unavailable" : "unsupported-platform";
+  }
 
   return {
     host: {
@@ -50,29 +70,14 @@ function desktopCapabilities({
               : "Desktop",
       session: linuxSession(hostPlatform, env),
       packaged: Boolean(packaged),
+      // so the renderer can show paths as ~/… without a Node builtin in
+      // the sandboxed preload
+      homeDir,
     },
     windowChrome: isMac ? "mac-inset" : "native",
-    screenPreview: {
-      available: isMac,
-      interaction: isMac ? "direct" : "none",
-      ...(!isMac ? { reasonCode: "unsupported-platform" } : {}),
-    },
-    dictation: {
-      available: isMac,
-      engine: isMac ? "apple-speech" : "none",
-      onDevice: isMac,
-      ...(!isMac ? { reasonCode: "unsupported-platform" } : {}),
-    },
-    localComputer: {
-      available: localAvailable,
-      support: localAvailable ? "supported" : "unsupported",
-      ...(!localAvailable
-        ? {
-            reasonCode:
-              hostPlatform === "darwin" ? "cua-driver-unavailable" : "unsupported-platform",
-          }
-        : {}),
-    },
+    screenPreview,
+    dictation,
+    localComputer,
   };
 }
 

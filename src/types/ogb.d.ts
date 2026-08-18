@@ -1,10 +1,12 @@
 // The narrow bridge the Electron preload exposes. Absent in the browser.
-export {};
+
 
 declare global {
   type DesktopCapabilities = {
     host: {
       platform: "darwin" | "linux" | "win32" | "other";
+      /** The user's home folder, for showing paths as ~/… */
+      homeDir?: string;
       label: string;
       session: "x11" | "wayland" | "headless" | "unknown";
       packaged: boolean;
@@ -59,6 +61,8 @@ declare global {
       openInstallTerminal?(command: string): Promise<boolean>;
       /** Opens an http(s) link in the user's default browser. */
       openExternal?(url: string): Promise<boolean>;
+      /** Native folder picker; resolves null when the user cancels. */
+      pickFolder?(current?: string): Promise<string | null>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(name: "composioApiKey", value: string): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). onState

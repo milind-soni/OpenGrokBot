@@ -36,6 +36,8 @@ export interface InjectedModel {
   host: string;
   model: string;
   label: string;
+  /** In VRAM / running on the host right now — Custom pins these first. */
+  loaded?: boolean;
 }
 
 export function encodeInjectId(host: string, model: string): string {
@@ -133,12 +135,12 @@ function idsFromModelsPayload(payload: unknown): string[] {
   });
 }
 
-async function probeHost(
-  host: LocalHost,
+async function timedJson(
+  url: string,
   env: Record<string, string | undefined>,
+  host: LocalHost,
   fetchImpl: typeof fetch,
-): Promise<string[]> {
-  const url = `${host.baseUrl.replace(/\/$/, "")}/models`;
+): Promise<unknown | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1200);
   timer.unref?.();
@@ -147,13 +149,88 @@ async function probeHost(
       signal: controller.signal,
       headers: { Authorization: `Bearer ${hostApiKey(host, env)}` },
     });
-    if (!response.ok) return [];
-    return idsFromModelsPayload(await response.json());
+    if (!response.ok) return null;
+    return await response.json();
   } catch {
-    return [];
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Which of this host's models are actually in memory / running. */
+export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra: unknown): Set<string> {
+  const loaded = new Set<string>();
+  const catalogIds = new Set(idsFromModelsPayload(catalog));
+  const add = (id: string) => {
+    const base = id.split(":")[0]!;
+    if (catalogIds.size && !catalogIds.has(id) && !catalogIds.has(base)) return;
+    if (!MODEL_ID.test(id)) return;
+    loaded.add(id);
+    if (catalogIds.has(base)) loaded.add(base);
+  };
+
+  if (extra && typeof extra === "object") {
+    const rec = extra as {
+      default_model?: unknown;
+      models?: unknown;
+      data?: unknown;
+    };
+    const running = Array.isArray(rec.models)
+      ? rec.models
+      : Array.isArray(rec.data)
+        ? rec.data
+        : [];
+    // oMLX /v1/models/status lists every model with loaded:true/false.
+    // /health only has default_model, which is the configured default — not
+    // necessarily what is in memory. Prefer explicit flags when present.
+    const hasLoadedFlags = running.some(
+      (row) => row && typeof row === "object" && ("loaded" in row || "state" in row),
+    );
+    if (!hasLoadedFlags && typeof rec.default_model === "string") add(rec.default_model);
+    for (const row of running) {
+      if (typeof row === "string") {
+        if (!hasLoadedFlags) add(row);
+        continue;
+      }
+      if (!row || typeof row !== "object") continue;
+      const item = row as { name?: unknown; model?: unknown; id?: unknown; state?: unknown; loaded?: unknown };
+      const id =
+        (typeof item.name === "string" && item.name) ||
+        (typeof item.model === "string" && item.model) ||
+        (typeof item.id === "string" && item.id) ||
+        "";
+      if (!id) continue;
+      const state = typeof item.state === "string" ? item.state.toLowerCase() : "";
+      if (item.loaded === false || state === "not-loaded" || state === "unloaded") continue;
+      if (item.loaded === true || state === "loaded" || state === "idle" || !hasLoadedFlags) {
+        add(id);
+      }
+    }
+  }
+
+  if (!loaded.size && catalog && typeof catalog === "object") {
+    const rec = catalog as { default_model?: unknown; data?: unknown };
+    if (typeof rec.default_model === "string") add(rec.default_model);
+    const records = Array.isArray(rec.data) ? rec.data : [];
+    for (const row of records) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as { id?: unknown; state?: unknown; loaded?: unknown };
+      if (typeof item.id !== "string") continue;
+      const state = typeof item.state === "string" ? item.state.toLowerCase() : "";
+      if (item.loaded === true || state === "loaded") add(item.id);
+    }
+  }
+
+  return loaded;
+}
+
+function loadedProbeUrl(host: LocalHost): string | null {
+  const origin = anthropicBaseUrl(host);
+  if (host.id === "omlx") return `${origin}/v1/models/status`;
+  if (host.id === "ollama" || host.id === "local_ollama") return `${origin}/api/ps`;
+  if (host.id === "lmstudio") return `${origin}/api/v0/models`;
+  return null;
 }
 
 /** Live models from the same local hosts the sidecar probed. */
@@ -169,14 +246,29 @@ export async function probeLocalInjects(
     return true;
   });
   const found: InjectedModel[] = [];
-  const pages = await Promise.all(hosts.map(async (host) => ({ host, ids: await probeHost(host, env, fetchImpl) })));
-  for (const { host, ids } of pages) {
+  const pages = await Promise.all(
+    hosts.map(async (host) => {
+      const catalogUrl = `${host.baseUrl.replace(/\/$/, "")}/models`;
+      const extraUrl = loadedProbeUrl(host);
+      const [catalog, extra] = await Promise.all([
+        timedJson(catalogUrl, env, host, fetchImpl),
+        extraUrl ? timedJson(extraUrl, env, host, fetchImpl) : Promise.resolve(null),
+      ]);
+      const catalogIds = catalog ? idsFromModelsPayload(catalog) : [];
+      const extraIds = extra ? idsFromModelsPayload(extra) : [];
+      const loaded = loadedIdsFromPayloads(host, catalog ?? extra, extra);
+      const ids = [...new Set([...catalogIds, ...extraIds, ...loaded])];
+      return { host, ids, loaded };
+    }),
+  );
+  for (const { host, ids, loaded } of pages) {
     for (const model of ids) {
       found.push({
         id: encodeInjectId(host.id, model),
         host: host.id,
         model,
         label: `${model} (${host.label})`,
+        loaded: loaded.has(model),
       });
     }
   }
@@ -189,17 +281,38 @@ export async function mergeLocalInject(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelCatalog> {
-  if (env.VITEST === "true" && env.OPENMAUSBOT_PROBE_LOCAL_INJECT !== "1") return catalog;
+  const vitest = env.VITEST ?? process.env.VITEST;
+  const probe = env.OPENMAUSBOT_PROBE_LOCAL_INJECT ?? process.env.OPENMAUSBOT_PROBE_LOCAL_INJECT;
+  if (vitest === "true" && probe !== "1") return catalog;
   const extras = await probeLocalInjects(env, fetchImpl);
   if (!extras.length) return catalog;
   const options = catalog.options.map((option) => ({ ...option }));
   const seen = new Set(options.map((option) => option.id));
   for (const extra of extras) {
-    if (seen.has(extra.id)) continue;
+    const existing = options.find((option) => option.id === extra.id);
+    if (existing) {
+      if (extra.loaded) existing.loaded = true;
+      continue;
+    }
     seen.add(extra.id);
-    options.push({ id: extra.id, label: extra.label, custom: true });
+    options.push({ id: extra.id, label: extra.label, custom: true, ...(extra.loaded ? { loaded: true } : {}) });
   }
   return { default: catalog.default, options };
+}
+
+/** Point an OpenAI-compatible CLI at the injected host. */
+export function applyOpenAIInject(
+  env: Record<string, string | undefined>,
+  modelId: string | null | undefined,
+): { model: string | null; injected: boolean } {
+  const inject = decodeInjectId(modelId);
+  if (!inject) return { model: modelId ?? null, injected: false };
+  const host = localHost(inject.host);
+  if (!host) return { model: modelId ?? null, injected: false };
+  const key = hostApiKey(host, env);
+  env.OPENAI_BASE_URL = host.baseUrl;
+  env.OPENAI_API_KEY = key;
+  return { model: inject.model, injected: true };
 }
 
 /** Point Claude Code at the injected host instead of Anthropic cloud. */

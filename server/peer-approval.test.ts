@@ -15,6 +15,7 @@ import {
   resolvePeerComms,
   type ApprovalBus,
 } from "./peer-approval.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { Store, type BotRecord } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "fake-model" });
@@ -39,6 +40,7 @@ describe("peer approval card lifecycle", () => {
   });
 
   afterEach(() => {
+    closeMessageDb();
     rmSync(DATA_DIR, { recursive: true, force: true });
   });
 

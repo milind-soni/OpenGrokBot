@@ -40,6 +40,10 @@ extraResources:
     to: ui
   - from: dist-server
     to: server
+  # the companion sidecar — a separate process because it is the only part
+  # of the app that listens off this machine, and it stays off until asked
+  - from: dist-companion
+    to: companion
 
 mac:
   target:

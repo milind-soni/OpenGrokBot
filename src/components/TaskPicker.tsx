@@ -6,8 +6,23 @@
 // long job and a quick question can sit side by side under one agent.
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
-import { useStore, formatTime, type Bot } from "@/state/store";
+import { useStore, formatTime, type Bot, type Task } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { formatTokens } from "@/lib/format-tokens";
+
+/** Quiet per-task token tally — input+output combined, because one honest
+ * total reads faster than a split; the split lives in the hover title. */
+function TaskUsage({ usage }: { usage: Task["usage"] }) {
+  if (!usage) return null;
+  const label = formatTokens(usage.input + usage.output);
+  if (!label) return null;
+  return (
+    <span title={`${usage.input.toLocaleString()} in · ${usage.output.toLocaleString()} out`}>
+      {" · "}
+      {label}
+    </span>
+  );
+}
 
 export function TaskPicker({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
@@ -22,6 +37,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
+      // SAFETY: a mousedown target inside a document is always a DOM Node
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -54,11 +70,20 @@ export function TaskPicker({ bot }: { bot: Bot }) {
     if (title) dispatch({ type: "renameTask", botId: bot.id, threadId, title });
   };
 
+  // the picker button stays as-is — a token count next to a truncated title
+  // and count would crowd it; the open task's tally rides the hover title
+  const u = current?.usage;
+  const currentLabel = u ? formatTokens(u.input + u.output) : null;
+  const switchTitle =
+    u && currentLabel
+      ? `Switch task · ${currentLabel} (${u.input.toLocaleString()} in · ${u.output.toLocaleString()} out)`
+      : "Switch task";
+
   return (
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
-        title="Switch task"
+        title={switchTitle}
         className="flex max-w-[220px] items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
       >
         <span className="truncate">{current?.title ?? "Task"}</span>
@@ -103,7 +128,10 @@ export function TaskPicker({ bot }: { bot: Bot }) {
                       title="Click to switch · double-click to rename"
                     >
                       <div className="truncate text-[13px] text-ink">{task.title}</div>
-                      <div className="text-[11px] text-ink-secondary">{formatTime(task.createdAt)}</div>
+                      <div className="text-[11px] text-ink-secondary">
+                        {formatTime(task.createdAt)}
+                        <TaskUsage usage={task.usage} />
+                      </div>
                     </button>
                   )}
                   <button

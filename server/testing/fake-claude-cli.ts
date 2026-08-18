@@ -55,7 +55,8 @@ if (argv[0] === "auth" && argv[1] === "status") {
 let stdin = "";
 process.stdin.on("data", (c) => (stdin += c));
 process.stdin.on("end", () => {
-  let prompt: unknown = null;
+  type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+  let prompt: JsonValue = null;
   try {
     prompt = JSON.parse(stdin.split("\n").find((l) => l.trim()) ?? "null");
   } catch {

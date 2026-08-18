@@ -5,12 +5,13 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -119,13 +120,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   boxStub?.close();
-  child?.kill("SIGTERM");
-  await new Promise<void>((resolve) => {
-    if (!child || child.exitCode !== null) return resolve();
-    child.on("close", () => resolve());
-    setTimeout(() => (child.kill("SIGKILL"), resolve()), 5_000).unref?.();
-  });
-  rmSync(home, { recursive: true, force: true });
+  // Upstream fixed this same Linux scratch-cleanup flake with an inline
+  // retry loop; these helpers are that fix plus the cause — the retry AND
+  // an exit that is actually waited for before the delete begins.
+  await waitForExit(child, { signal: "SIGTERM" });
+  await removeTempDir(home);
 });
 
 describe("harness HTTP API", () => {
@@ -206,6 +205,43 @@ describe("harness HTTP API", () => {
     expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
   });
 
+  it("searches transcripts and exports a conversation", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    // every new bot opens with a seeded greeting — a known searchable string
+    const hits = await api("GET", "/api/search?q=nice%20to%20meet");
+    expect(hits.status).toBe(200);
+    const hit = hits.body.hits.find((h: { botId?: string }) => h.botId === bot.id);
+    expect(hit).toMatchObject({
+      botId: bot.id,
+      threadId: bot.threadId,
+      name: bot.name,
+      kind: "text",
+      onActivePath: true,
+    });
+    expect(hit.snippet.toLowerCase()).toContain("nice to meet");
+    expect(hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength).toLowerCase()).toBe("nice to meet");
+    expect((await api("GET", "/api/search?q=")).body.hits).toEqual([]);
+
+    const markdown = await fetch(`${BASE}/api/threads/${bot.threadId}/export`);
+    expect(markdown.status).toBe(200);
+    expect(markdown.headers.get("content-type")).toContain("text/markdown");
+    expect(markdown.headers.get("content-disposition")).toContain("attachment");
+    const text = await markdown.text();
+    expect(text).toContain("Nice to meet you");
+
+    const asJson = await api("GET", `/api/threads/${bot.threadId}/export?format=json`);
+    expect(asJson.status).toBe(200);
+    expect(asJson.body.messages.length).toBeGreaterThan(0);
+    expect(JSON.stringify(asJson.body)).not.toContain('"png"');
+    expect((await api("GET", `/api/threads/${bot.threadId}/export?format=pdf`)).status).toBe(400);
+    expect((await api("GET", "/api/threads/nope/export")).status).toBe(404);
+
+    // deleted conversations drop out of search rather than 404ing it
+    await api("DELETE", `/api/bots/${bot.id}`);
+    const after = await api("GET", "/api/search?q=nice%20to%20meet");
+    expect(after.body.hits.find((h: { botId?: string }) => h.botId === bot.id)).toBeUndefined();
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
@@ -218,15 +254,32 @@ describe("harness HTTP API", () => {
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);
 
+    // persona fields are bounded at the write boundary — they reach system
+    // prompts (Chief roster, room rosters), so an unbounded PATCH is a
+    // token-burn and prompt-injection surface
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "N".repeat(101) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "   " })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { title: "T".repeat(201) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: 7 })).status).toBe(400);
+
+    // the per-bot composio gate is a boolean, and it round-trips
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: "yes" })).status).toBe(400);
+    const gated = await api("PATCH", `/api/bots/${bot.id}`, { composio: false });
+    expect(gated.status).toBe(200);
+    expect(gated.body.bot.composio).toBe(false);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).body.bot.composio).toBe(true);
+
     const deleted = await api("DELETE", `/api/bots/${bot.id}`);
     expect(deleted.status).toBe(200);
     const after = await api("GET", "/api/bots");
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
   });
 
-  it("exports selected bots without a room and imports the team with fresh IDs", async () => {
+  it("exports every visible bot and imports the team without creating a room", async () => {
     const first = (await api("POST", "/api/bots")).body.bot;
     const second = (await api("POST", "/api/bots")).body.bot;
+    const hidden = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${first.id}`, {
       name: "Mira",
       title: "Project Lead",
@@ -242,67 +295,83 @@ describe("harness HTTP API", () => {
       description: "Finds evidence",
       color: "cyan",
     });
+    await api("PATCH", `/api/bots/${hidden.id}`, { name: "Archived", hidden: true });
 
-    const roomsBeforeSelectionExport = (await api("GET", "/api/bots")).body.groups.length;
-    const selectedExport = await api("POST", "/api/teams/export", {
-      name: "Field Team",
-      memberIds: [first.id, second.id],
-    });
-    expect(selectedExport.status).toBe(200);
-    expect(selectedExport.body).toMatchObject({
-      format: "openmaus.team",
-      version: 1,
-      team: {
-        name: "Field Team",
-        members: [
-          { key: "mira", name: "Mira", title: "Project Lead", appearance: { color: "purple" } },
-          { key: "scout", name: "Scout", title: "Researcher", appearance: { color: "cyan" } },
-        ],
-        room: {
-          name: "Field Team",
-          bulletin: "",
-          defaultResponder: { kind: "everyone" },
-        },
-      },
-    });
-    expect(JSON.stringify(selectedExport.body)).not.toMatch(/autoApprove|alwaysAllow|modelSelection|threadId/);
-    expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBeforeSelectionExport);
-    expect((await api("POST", "/api/teams/export", { name: "", memberIds: [first.id] })).status).toBe(400);
-    expect((await api("POST", "/api/teams/export", { name: "Empty", memberIds: [] })).status).toBe(400);
-    expect((await api("POST", "/api/teams/export", { name: "Missing", memberIds: ["no-such-bot"] })).status).toBe(400);
-
-    const importManifest = structuredClone(selectedExport.body);
-    importManifest.team.room = {
-      name: "Launch Crew",
-      bulletin: "Prepare the launch together",
-      defaultResponder: { kind: "member", member: "scout" },
-    };
+    const stateBefore = (await api("GET", "/api/bots")).body;
+    const roomsBefore = stateBefore.groups.length;
+    const visibleNames = stateBefore.bots
+      .filter((bot: { hidden?: boolean }) => !bot.hidden)
+      .map((bot: { name: string }) => bot.name);
+    const exported = await api("POST", "/api/teams/export", { name: "Field Team" });
+    expect(exported.status).toBe(200);
+    expect(exported.body).toMatchObject({ format: "openmaus.team", version: 2, team: { name: "Field Team" } });
+    expect(exported.body.team.members.map((member: { name: string }) => member.name)).toEqual(visibleNames);
+    expect(exported.body.team.members).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "mira", name: "Mira", title: "Project Lead", appearance: { color: "purple", mascotExpression: "focused" } }),
+      expect.objectContaining({ key: "scout", name: "Scout", title: "Researcher", appearance: { color: "cyan" } }),
+    ]));
+    expect(exported.body.team).not.toHaveProperty("room");
+    expect(JSON.stringify(exported.body)).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
+    expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
+    expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My OpenMaus Team");
 
     const stream = await openSse(`${BASE}/api/events`);
     try {
       await stream.until((frame) => frame.kind === "hello");
-      const imported = await api("POST", "/api/teams/import", importManifest);
+      const imported = await api("POST", "/api/teams/import", exported.body);
       expect(imported.status).toBe(201);
-      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(["Mira", "Scout"]);
+      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(visibleNames);
       expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
       expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
-      expect(imported.body.group.memberIds).toEqual(imported.body.bots.map((bot: { id: string }) => bot.id));
-      expect(imported.body.group.defaultResponder).toEqual({ kind: "member", botId: imported.body.bots[1].id });
+      // imported bots arrive quiet and without reach: no seeded greeting
+      // in their name, and no access to the workspace's connected apps
+      // until the user grants it per bot
+      expect(imported.body.bots.every((bot: { messages: unknown[] }) => bot.messages.length === 0)).toBe(true);
+      expect(imported.body.bots.every((bot: { composio?: boolean }) => bot.composio === false)).toBe(true);
+      expect(imported.body).not.toHaveProperty("group");
 
-      await stream.until((frame) => frame.kind === "group" && frame.group?.id === imported.body.group.id);
+      const lastImported = imported.body.bots.at(-1)!;
+      await stream.until((frame) => frame.kind === "bot" && frame.bot?.id === lastImported.id);
       const importedBotIds = new Set(imported.body.bots.map((bot: { id: string }) => bot.id));
       const importFrames = stream.frames.filter(
-        (frame) =>
-          (frame.kind === "bot" && importedBotIds.has(frame.bot?.id)) ||
-          (frame.kind === "group" && frame.group?.id === imported.body.group.id),
+        (frame) => frame.kind === "bot" && importedBotIds.has(frame.bot?.id),
       );
-      expect(importFrames.map((frame) => frame.kind)).toEqual(["bot", "bot", "group"]);
+      // every imported bot is announced to other windows. The store emits
+      // on every write now, so a bot may produce more than one frame —
+      // the invariant is coverage, not an exact count.
+      for (const id of importedBotIds) expect(importFrames.some((frame) => frame.bot?.id === id)).toBe(true);
+      expect(importFrames.every((frame) => frame.kind === "bot")).toBe(true);
+      expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
 
-      const invalid = await api("POST", "/api/teams/import", { ...importManifest, version: 2 });
+      const invalid = await api("POST", "/api/teams/import", { ...exported.body, version: 3 });
       expect(invalid.status).toBe(400);
+      expect((await api("POST", "/api/teams/import?mode=erase", exported.body)).status).toBe(400);
 
-      expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
-      for (const bot of [first, second, ...imported.body.bots]) {
+      const beforeReplace = (await api("GET", "/api/bots")).body.bots.filter(
+        (bot: { hidden?: boolean }) => !bot.hidden,
+      );
+      const replaced = await api("POST", "/api/teams/import?mode=replace", exported.body);
+      expect(replaced.status).toBe(201);
+      expect(replaced.body.archived.map((bot: { id: string }) => bot.id).sort()).toEqual(
+        beforeReplace.map((bot: { id: string }) => bot.id).sort(),
+      );
+      expect(replaced.body.archivedBots.every((bot: { hidden?: boolean }) => bot.hidden)).toBe(true);
+      const afterReplace = (await api("GET", "/api/bots")).body.bots;
+      expect(afterReplace.filter((bot: { hidden?: boolean }) => !bot.hidden).map((bot: { id: string }) => bot.id).sort()).toEqual(
+        replaced.body.bots.map((bot: { id: string }) => bot.id).sort(),
+      );
+      expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
+
+      // Put the shared test harness back exactly as it was before exercising
+      // replace. This mirrors the UI's Undo action and preserves the seeded bot.
+      for (const bot of replaced.body.bots) await api("DELETE", `/api/bots/${bot.id}`);
+      for (const bot of replaced.body.archived.filter((item: { chiefOfStaff: boolean }) => !item.chiefOfStaff)) {
+        await api("PATCH", `/api/bots/${bot.id}`, { hidden: false });
+      }
+      const previousChief = replaced.body.archived.find((bot: { chiefOfStaff: boolean }) => bot.chiefOfStaff);
+      if (previousChief) await api("PATCH", `/api/bots/${previousChief.id}`, { hidden: false, chiefOfStaff: true });
+
+      for (const bot of [first, second, hidden, ...imported.body.bots]) {
         expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
       }
     } finally {
@@ -389,6 +458,28 @@ describe("harness HTTP API", () => {
     const res = await api("PATCH", `/api/bots/${bot.id}/cards/${card.id}`, { answered: card.card.options[0] });
     expect(res.status).toBe(200);
     expect(res.body.message.card.answered).toBe(card.card.options[0]);
+  });
+
+  it("validates approval decisions and reports a request that is no longer open", async () => {
+    const { body } = await api("GET", "/api/bots");
+    const bot = body.bots[0];
+
+    const invalid = await api("POST", `/api/bots/${bot.id}/respond`, {
+      requestId: "gone",
+      behavior: "approve-everything",
+    });
+    expect(invalid.status).toBe(400);
+
+    const unavailable = await api("POST", `/api/bots/${bot.id}/respond`, {
+      requestId: "gone",
+      behavior: "allow",
+    });
+    expect(unavailable.status).toBe(200);
+    expect(unavailable.body).toEqual({ ok: true, outcome: "unavailable" });
+
+    const reread = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
+    expect(reread.messages.at(-1).tool).toMatchObject({ ok: false });
+    expect(reread.messages.at(-1).tool.name).toContain("request is no longer open");
   });
 
   it("rejects an empty message and explains an unavailable provider", async () => {
@@ -624,6 +715,121 @@ describe("harness HTTP API", () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);
     expect(res.body.error).toContain("/api/definitely-not-a-route");
+  });
+});
+
+// The memory routes expose plain files in the bot's workspace. The
+// traversal cases matter more than the happy path here: a topic name in a
+// URL is hostile-adjacent input, and the only defensible answer to "../"
+// in any coat of encoding is a rejection before the filesystem is touched.
+describe("bot memory API", () => {
+  /** raw-path GET: fetch() normalizes "../" segments away client-side, and
+   * the traversal tests need the wire to carry exactly the bytes shown */
+  const rawGet = (rawPath: string): Promise<{ status: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const req = request({ hostname: "127.0.0.1", port: PORT, path: rawPath }, (res) => {
+        let text = "";
+        res.on("data", (c) => (text += c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  const workspaceOf = (botId: string) => join(home, ".openmausbot", "workspaces", botId);
+
+  it("reads empty memory for a fresh bot and 404s a bot that does not exist", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const fresh = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(fresh.status).toBe(200);
+      expect(fresh.body).toEqual({ text: "", truncated: false, topics: [] });
+      expect((await api("GET", "/api/bots/does-not-exist/memory")).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("round-trips a MEMORY.md edit and rejects non-string or oversized text", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const saved = await api("PUT", `/api/bots/${bot.id}/memory`, { text: "# Memory\n- prefers pnpm\n" });
+      expect(saved.status).toBe(200);
+      expect(saved.body.truncated).toBe(false);
+      const read = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(read.body.text).toBe("# Memory\n- prefers pnpm\n");
+      // the write lands in the same file the bot's own tools read
+      expect(readFileSync(join(workspaceOf(bot.id), "MEMORY.md"), "utf8")).toContain("prefers pnpm");
+
+      expect((await api("PUT", `/api/bots/${bot.id}/memory`, { text: 7 })).status).toBe(400);
+      expect((await api("PUT", `/api/bots/${bot.id}/memory`, {})).status).toBe(400);
+      const big = await api("PUT", `/api/bots/${bot.id}/memory`, { text: "x".repeat(256 * 1024 + 1) });
+      expect(big.status).toBe(400);
+      expect(big.body.error).toContain("256KB");
+      // a rejected write must leave the file exactly as it was
+      expect((await api("GET", `/api/bots/${bot.id}/memory`)).body.text).toBe("# Memory\n- prefers pnpm\n");
+      expect((await api("PUT", "/api/bots/does-not-exist/memory", { text: "x" })).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("lists memory/ topic files and serves one by (possibly encoded) name", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const memDir = join(workspaceOf(bot.id), "memory");
+      mkdirSync(memDir, { recursive: true });
+      writeFileSync(join(memDir, "deploys.md"), "- deploy = pnpm ship\n");
+      writeFileSync(join(memDir, "my notes.md"), "spaced");
+      writeFileSync(join(memDir, "notes.txt"), "not a topic");
+      const listed = await api("GET", `/api/bots/${bot.id}/memory`);
+      expect(listed.body.topics).toEqual([
+        { name: "deploys.md", bytes: 21 },
+        { name: "my notes.md", bytes: 6 },
+      ]);
+
+      const topic = await api("GET", `/api/bots/${bot.id}/memory/topics/deploys.md`);
+      expect(topic.status).toBe(200);
+      expect(topic.body).toEqual({ name: "deploys.md", text: "- deploy = pnpm ship\n" });
+      // a UI-sent name arrives percent-encoded and must resolve to the same file
+      expect((await api("GET", `/api/bots/${bot.id}/memory/topics/my%20notes.md`)).body.text).toBe("spaced");
+      expect((await api("GET", `/api/bots/${bot.id}/memory/topics/missing.md`)).status).toBe(404);
+      expect((await api("GET", "/api/bots/does-not-exist/memory/topics/deploys.md")).status).toBe(404);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("refuses every coat of path traversal without reading the target", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    try {
+      // plant real files where a traversal would land, so a hole would show
+      // as leaked content and not depend on what happens to exist
+      mkdirSync(workspaceOf(bot.id), { recursive: true });
+      writeFileSync(join(workspaceOf(bot.id), "MEMORY.md"), "TOP-SECRET-MARKER memory");
+      writeFileSync(join(home, ".openmausbot", "secret.md"), "TOP-SECRET-MARKER sibling");
+
+      for (const name of [
+        "..%2F..%2Fsecret.md", // encoded slashes
+        "%2e%2e%2fsecret.md", // dots encoded too
+        "..%2FMEMORY.md", // one level up, inside the workspace
+        "..%5C..%5Csecret.md", // encoded backslashes (Windows separators)
+        "secret%00.md", // null byte
+      ]) {
+        const res = await rawGet(`/api/bots/${bot.id}/memory/topics/${name}`);
+        expect(res.status, name).toBe(400);
+        expect(res.text, name).not.toContain("TOP-SECRET");
+      }
+      // a raw ../ segment is normalized away by URL parsing before routing —
+      // it can only miss the route, never reach a file
+      const raw = await rawGet(`/api/bots/${bot.id}/memory/topics/../../secret.md`);
+      expect(raw.status).toBe(404);
+      expect(raw.text).not.toContain("TOP-SECRET");
+      // malformed percent-encoding is a clean 400, not a crash
+      expect((await rawGet(`/api/bots/${bot.id}/memory/topics/%zz.md`)).status).toBe(400);
+    } finally {
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
   });
 });
 

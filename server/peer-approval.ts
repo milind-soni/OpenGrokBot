@@ -52,12 +52,9 @@ function settleCard(pending: Pending, behavior: string, source: "user" | "system
     .messagesFor(pending.threadId)
     .find((m) => m.id === pending.messageId);
   if (!existing?.card || existing.card.answered) return;
-  const patched = pending.bus.store.patchMessage(pending.threadId, pending.messageId, {
+  pending.bus.store.patchMessage(pending.threadId, pending.messageId, {
     card: { ...existing.card, answered: behavior, dismissed: source !== "user" },
   });
-  if (patched) {
-    pending.bus.broadcast({ kind: "message.patch", threadId: pending.threadId, message: patched });
-  }
 }
 
 /** requestId → pending ask. Lives only in memory — restarting the
@@ -95,7 +92,6 @@ function pushApprovalCard(
       allowKey: peerAllowKey(action, target.id),
     },
   });
-  bus.broadcast({ kind: "message", threadId: sourceThreadId, message: note });
   return note;
 }
 
@@ -189,10 +185,7 @@ export function dismissStalePeerCards(bus: ApprovalBus): number {
         const patched = bus.store.patchMessage(threadId, message.id, {
           card: { ...card, answered: "deny", dismissed: true },
         });
-        if (patched) {
-          bus.broadcast({ kind: "message.patch", threadId, message: patched });
-          dismissed += 1;
-        }
+        if (patched) dismissed += 1;
       }
     }
   }

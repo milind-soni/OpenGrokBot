@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +99,14 @@ async function secureComposioConfig() {
 // parent's stdio leads nowhere and a failed boot is otherwise undiagnosable.
 const LOG_DIR = app.getPath("logs");
 let logStream = null;
+import {
+  companionPairing,
+  companionRevoke,
+  companionState,
+  startCompanion,
+  stopCompanion,
+} from "./companion.mjs";
+
 function slog(line) {
   try {
     if (!logStream) {
@@ -299,6 +307,18 @@ ipcMain.handle("engine:open-terminal", async (_event, command) => {
 // click gesture has ended. Opening them through window.open can therefore be
 // rejected as a popup before setWindowOpenHandler ever sees the URL. Keep the
 // renderer sandboxed and let the main process open only ordinary web links.
+// A bot's working folder: the native picker, so the path is real and the
+// user never types one. Returns null when they cancel.
+ipcMain.handle("desktop:pick-folder", async (event, current) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const result = await dialog.showOpenDialog(win, {
+    title: "Choose a working folder",
+    properties: ["openDirectory", "createDirectory"],
+    ...(typeof current === "string" && current ? { defaultPath: current } : {}),
+  });
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+});
+
 ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");
   let url;
@@ -359,6 +379,18 @@ ipcMain.handle("speech:stop", () => {
 ipcMain.handle("speech:finish", () => {
   if (process.platform === "darwin") finishSpeech();
 });
+
+// ── companion sidecar ──────────────────────────────────────────────────
+// The renderer gets these five and nothing else: it can turn the companion
+// on and off, look at it, open or cancel a pairing window, and remove a
+// device. It cannot reach the sidecar's control port itself.
+ipcMain.handle("companion:state", () => companionState());
+ipcMain.handle("companion:start", () =>
+  startCompanion({ resourcesPath: process.resourcesPath, harnessPort: SERVER_PORT, log: slog }),
+);
+ipcMain.handle("companion:stop", () => stopCompanion());
+ipcMain.handle("companion:pairing", (_event, open) => companionPairing(Boolean(open)));
+ipcMain.handle("companion:revoke", (_event, deviceId) => companionRevoke(deviceId));
 
 ipcMain.handle("desktop:capabilities", async () =>
   desktopCapabilities({
@@ -453,6 +485,9 @@ app.on("before-quit", (e) => {
   try {
     serverProc?.kill();
   } catch {}
+  // the sidecar holds a socket that is reachable from off this machine —
+  // it should not outlive the window by even a moment
+  void stopCompanion();
   // a live dictation session runs its own helper child that holds the mic —
   // stop it here so quitting never orphans a recording process
   stopSpeech();

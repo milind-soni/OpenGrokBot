@@ -3,7 +3,7 @@
 // Composio API key is configured, a curated set otherwise. Icons resolve
 // logo → favicon → monogram.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 
@@ -39,20 +39,20 @@ function ServiceIcon({ card }: { card: ToolkitCard }) {
   // 0 = official logo, 1 = favicon by domain, 2 = monogram
   const [stage, setStage] = useState(card.logo ? 0 : card.domain ? 1 : 2);
   if (stage === 0 && card.logo) {
-    return <img src={card.logo} alt="" className="size-8 rounded-md" onError={() => setStage(1)} />;
+    return <img src={card.logo} alt="" className="size-11 rounded-xl object-contain" onError={() => setStage(1)} />;
   }
   if (stage === 1 && card.domain) {
     return (
       <img
         src={`https://www.google.com/s2/favicons?domain=${card.domain}&sz=64`}
         alt=""
-        className="size-8 rounded-md"
+        className="size-11 rounded-xl object-contain"
         onError={() => setStage(2)}
       />
     );
   }
   return (
-    <div className="flex size-8 items-center justify-center rounded-md bg-raised text-[13px] font-semibold text-ink-secondary">
+    <div className="flex size-11 items-center justify-center rounded-xl bg-raised text-[15px] font-semibold text-ink-secondary">
       {card.label.slice(0, 1).toUpperCase()}
     </div>
   );
@@ -70,6 +70,7 @@ export function PluginsPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
   const statusGenerations = useRef(new Map<string, number>());
@@ -225,14 +226,17 @@ export function PluginsPanel() {
       .finally(() => setBusySlug(null));
   };
 
-  const visible = (cards ?? []).filter(
+  const matching = (cards ?? []).filter(
     (c) => !search || `${c.label} ${c.slug} ${c.blurb}`.toLowerCase().includes(search.toLowerCase()),
   );
+  const visible = matching.filter((card) => tab === "marketplace" || status[card.slug]?.connected);
+  const connectedCount = Object.values(status).filter((service) => service.connected).length;
+  const close = () => dispatch({ type: "togglePlugins", open: false });
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-5 backdrop-blur-sm"
-      onClick={() => dispatch({ type: "togglePlugins", open: false })}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={(event) => event.target === event.currentTarget && close()}
     >
       <div
         ref={dialogRef}
@@ -240,78 +244,111 @@ export function PluginsPanel() {
         aria-modal="true"
         aria-labelledby="connected-apps-title"
         tabIndex={-1}
-        className="animate-pop-in flex max-h-[calc(100dvh-2.5rem)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="animate-pop-in flex h-[min(780px,calc(100dvh-2rem))] w-full max-w-[1040px] flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/50"
       >
-        <div className="flex items-center justify-between">
-          <div id="connected-apps-title" className="text-[17px] font-semibold text-ink">Connected apps</div>
+        <header className="flex items-start justify-between gap-4 px-6 pb-3 pt-6 sm:px-8 sm:pt-7">
+          <div>
+            <h2 id="connected-apps-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Plugins</h2>
+            <p className="mt-1 text-[13px] text-ink-secondary">Connect the apps your bots can use.</p>
+          </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => refreshStatus(visible.map((c) => c.slug).slice(0, 40))}
-              className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+              onClick={() => refreshStatus(matching.map((c) => c.slug).slice(0, 40))}
+              className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
               title="Refresh connection status"
             >
-              <RefreshCw size={15} className={cn(refreshing && "animate-spin")} />
+              <RefreshCw size={17} className={cn(refreshing && "animate-spin")} />
             </button>
             <button
-              onClick={() => dispatch({ type: "togglePlugins", open: false })}
-              aria-label="Close connected apps"
-              className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+              onClick={close}
+              aria-label="Close plugins"
+              className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
             >
-              <X size={18} />
+              <X size={21} />
             </button>
           </div>
-        </div>
-        <div className="mt-1 text-[13px] text-ink-secondary">
-          Apps your bots can use through Composio.
+        </header>
+
+        <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Plugin view">
+            <button
+              role="tab"
+              aria-selected={tab === "marketplace"}
+              onClick={() => setTab("marketplace")}
+              className={cn(
+                "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                tab === "marketplace" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
+              )}
+            >
+              Marketplace
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "connected"}
+              onClick={() => setTab("connected")}
+              className={cn(
+                "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                tab === "connected" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
+              )}
+            >
+              Connected{connectedCount > 0 ? ` ${connectedCount}` : ""}
+            </button>
+          </div>
+          <label className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-raised/70 px-3.5 sm:w-[320px]">
+            <Search size={17} className="shrink-0 text-ink-secondary" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search plugins"
+              aria-label="Search plugins"
+              className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
+            />
+          </label>
         </div>
 
         {!configured && (
-          <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">
-            Connect your own Composio project first —{" "}
+          <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
+            Add your Composio project key to connect apps.{" "}
             <button
-              className="underline"
+              className="font-medium underline underline-offset-2"
               onClick={() => {
-                dispatch({ type: "togglePlugins", open: false });
+                close();
                 dispatch({ type: "toggleAppSettings", open: true });
               }}
             >
-              add a project key in App Settings
-            </button>{" "}
-            to connect apps.
+              Open settings
+            </button>
           </div>
         )}
         {configured && source === "curated" && (
-          <div className="mt-3 text-[12px] text-ink-secondary">
-            Showing a curated set.{" "}
+          <div className="mx-6 mb-1 text-[12px] text-ink-secondary sm:mx-8">
+            Showing featured apps.{" "}
             <button
-              className="underline hover:text-ink"
+              className="underline underline-offset-2 hover:text-ink"
               onClick={() => {
-                dispatch({ type: "togglePlugins", open: false });
+                close();
                 dispatch({ type: "toggleAppSettings", open: true });
               }}
             >
-              Add a Composio API key
+              Use your Composio key
             </button>{" "}
-            to browse the full catalog.
+            for the full catalog.
           </div>
         )}
-        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+        {error && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{error}</div>}
 
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search apps"
-          className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-        />
-
-        <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-xl border border-hairline/40">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
           {cards === null ? (
-            <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-ink-secondary">
+            <div className="flex items-center justify-center gap-2 py-24 text-[13px] text-ink-secondary">
               <Loader2 size={14} className="animate-spin" /> Loading catalog…
             </div>
           ) : (
-            visible.map((card, i) => {
+            <div>
+              <div className="mb-3 text-[12px] font-medium text-ink-secondary">
+                {tab === "connected" ? "Your connections" : search ? "Search results" : "Available apps"}
+              </div>
+              <div className="grid grid-cols-1 gap-x-10 md:grid-cols-2">
+              {visible.map((card) => {
               const serviceStatus = status[card.slug];
               const connected = serviceStatus?.connected;
               const pending = serviceStatus?.pending;
@@ -320,18 +357,12 @@ export function PluginsPanel() {
               return (
                 <div
                   key={card.slug}
-                  className={cn(
-                    "flex items-center gap-3 bg-card px-4 py-3",
-                    i > 0 && "border-t border-hairline/40",
-                  )}
+                  className="flex min-h-[88px] items-center gap-3 border-b border-hairline/35 px-1 py-4"
                 >
                   <ServiceIcon card={card} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-[14px] font-medium text-ink">
-                      {card.label}
-                      {connected && <span className="size-1.5 rounded-full bg-success" />}
-                    </div>
-                    <div className="truncate text-[12px] text-ink-secondary">
+                    <div className="truncate text-[14px] font-medium text-ink">{card.label}</div>
+                    <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">
                       {pending ? "Finish setup in your browser" : failed ? "Authorization expired — try again" : card.blurb}
                     </div>
                   </div>
@@ -345,16 +376,17 @@ export function PluginsPanel() {
                       } else void connect(card.slug);
                     }}
                     className={cn(
-                      "w-[92px] rounded-lg py-1.5 text-[13px] disabled:opacity-50",
+                      "flex min-w-[88px] items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[12.5px] transition-colors disabled:opacity-40",
                       connected
-                        ? "bg-raised text-ink-secondary hover:text-danger"
+                        ? "bg-transparent text-success hover:bg-danger/10 hover:text-danger"
                         : "bg-raised text-ink hover:bg-raised-hover",
                     )}
+                    title={connected ? `Disconnect ${card.label}` : undefined}
                   >
                     {busy ? (
                       <Loader2 size={13} className="mx-auto animate-spin" />
                     ) : connected ? (
-                      "Disconnect"
+                      <><Check size={14} /> Connected</>
                     ) : pending ? (
                       "Continue"
                     ) : failed ? (
@@ -365,10 +397,19 @@ export function PluginsPanel() {
                   </button>
                 </div>
               );
-            })
+              })}
+              </div>
+            </div>
           )}
           {cards !== null && visible.length === 0 && (
-            <div className="py-8 text-center text-[13px] text-ink-secondary">No apps match.</div>
+            <div className="flex min-h-56 flex-col items-center justify-center text-center">
+              <div className="text-[14px] font-medium text-ink">
+                {tab === "connected" ? "No connected plugins yet" : "No plugins found"}
+              </div>
+              <div className="mt-1 text-[12.5px] text-ink-secondary">
+                {tab === "connected" ? "Connect an app from Marketplace and it will appear here." : "Try a different search."}
+              </div>
+            </div>
           )}
         </div>
       </div>

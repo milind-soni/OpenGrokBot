@@ -2,6 +2,7 @@ import { track } from "@/lib/analytics";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Archive,
   ArrowDownToLine,
   BellDot,
   Bot as BotIcon,
@@ -10,9 +11,8 @@ import {
   ClipboardCopy,
   Copy,
   Crown,
-  EyeOff,
-  FileUp,
   FolderPlus,
+  Library,
   Loader2,
   Pencil,
   Pin,
@@ -24,14 +24,19 @@ import {
   Puzzle,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import { api, useStore, formatTime, visibleMessages, type Bot, type Group } from "@/state/store";
+
 import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
-import { downloadSelectedTeam } from "@/lib/team-files";
+import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { MIN_QUERY, SearchResults } from "./SearchResults";
+import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
+import { RenameTitle } from "./RenameTitle";
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -124,6 +129,7 @@ function UpdateButton() {
 }
 
 function preview(bot: Bot): string {
+  if (bot.activity === "waiting-on-you") return "Waiting for you…";
   if (bot.busy) return "Working…";
   // the visible branch's tail — bot.messages holds every fork, so its last
   // entry can belong to a version the user switched away from
@@ -273,363 +279,6 @@ function RoomContextMenu({
   );
 }
 
-interface PendingTeamImport {
-  manifest: unknown;
-  name: string;
-  roomName: string;
-  members: Array<{ name: string; title: string }>;
-}
-
-function importPreview(manifest: unknown): PendingTeamImport {
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new Error("This file does not contain a team.");
-  }
-  const root = manifest as Record<string, unknown>;
-  if (root.format !== "openmaus.team") throw new Error("This is not an OpenMaus team file.");
-  if (root.version !== 1) throw new Error(`Team file version ${String(root.version)} is not supported.`);
-  if (!root.team || typeof root.team !== "object" || Array.isArray(root.team)) {
-    throw new Error("This team file is missing its team definition.");
-  }
-  const team = root.team as Record<string, unknown>;
-  if (typeof team.name !== "string" || !team.name.trim()) throw new Error("This team does not have a name.");
-  if (!Array.isArray(team.members) || team.members.length === 0) throw new Error("This team has no members.");
-  const members = team.members.map((member, index) => {
-    if (!member || typeof member !== "object" || Array.isArray(member)) {
-      throw new Error(`Team member ${index + 1} is invalid.`);
-    }
-    const value = member as Record<string, unknown>;
-    if (typeof value.name !== "string" || !value.name.trim()) {
-      throw new Error(`Team member ${index + 1} does not have a name.`);
-    }
-    return {
-      name: value.name.trim(),
-      title: typeof value.title === "string" ? value.title.trim() : "",
-    };
-  });
-  const room = team.room;
-  const roomName =
-    room && typeof room === "object" && !Array.isArray(room) && typeof (room as Record<string, unknown>).name === "string"
-      ? String((room as Record<string, unknown>).name).trim()
-      : team.name.trim();
-  return { manifest, name: team.name.trim(), roomName, members };
-}
-
-function ImportTeamPanel({
-  pending,
-  onClose,
-  onImported,
-  returnFocusRef,
-}: {
-  pending: PendingTeamImport;
-  onClose: () => void;
-  onImported: (name: string) => void;
-  returnFocusRef: React.RefObject<HTMLButtonElement | null>;
-}) {
-  const { dispatch } = useStore();
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    confirmRef.current?.focus();
-    return () => returnFocusRef.current?.focus();
-  }, [returnFocusRef]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !working) {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      );
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable.at(-1)!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, working]);
-
-  const importTeam = async () => {
-    setWorking(true);
-    setError("");
-    try {
-      const response = (await api("/api/teams/import", {
-        method: "POST",
-        body: JSON.stringify(pending.manifest),
-      })) as { bots: Bot[]; group: Group };
-      for (const bot of response.bots) dispatch({ type: "botAdded", bot });
-      dispatch({ type: "groupPatched", group: response.group });
-      dispatch({ type: "select", id: response.group.id });
-      track("team_imported", { members: response.bots.length });
-      onImported(pending.name);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45"
-      onMouseDown={(event) => event.target === event.currentTarget && !working && onClose()}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="import-team-title"
-        tabIndex={-1}
-        className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl border border-hairline/50 bg-card p-5 shadow-2xl"
-      >
-        <div id="import-team-title" className="text-[17px] font-semibold text-ink">Import {pending.name}?</div>
-        <div className="mt-1 text-[13px] text-ink-secondary">
-          This creates {pending.members.length} new {pending.members.length === 1 ? "bot" : "bots"} and the room “{pending.roomName}”.
-        </div>
-        <div className="mt-4 max-h-64 space-y-1 overflow-y-auto rounded-xl bg-raised/50 p-2">
-          {pending.members.map((member, index) => (
-            <div key={`${member.name}-${index}`} className="flex items-baseline gap-2 rounded-lg px-2.5 py-2">
-              <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{member.name}</span>
-              <span className="max-w-[190px] truncate text-[12.5px] text-ink-secondary">
-                {member.title || "General assistant"}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 text-[12.5px] leading-relaxed text-ink-secondary">
-          The bots will use your default engine. Conversations, permissions, and computer access are never imported.
-        </div>
-        {error && <div role="alert" className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={working}
-            className="rounded-lg px-3.5 py-2 text-[13.5px] text-ink-secondary hover:bg-raised disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            ref={confirmRef}
-            onClick={() => void importTeam()}
-            disabled={working}
-            className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-[13.5px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
-          >
-            {working ? <Loader2 size={15} className="animate-spin" /> : <FileUp size={15} />}
-            {working ? "Importing…" : "Import Team"}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-function ExportTeamPanel({
-  onClose,
-  onExported,
-  returnFocusRef,
-}: {
-  onClose: () => void;
-  onExported: (name: string) => void;
-  returnFocusRef: React.RefObject<HTMLButtonElement | null>;
-}) {
-  const { state } = useStore();
-  const [name, setName] = useState("");
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const bots = state.bots.filter((bot) => !bot.hidden);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    nameRef.current?.focus();
-    return () => returnFocusRef.current?.focus();
-  }, [returnFocusRef]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !working) {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      );
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable.at(-1)!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, working]);
-
-  const toggle = (id: string) => {
-    setPicked((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else if (next.size < 50) next.add(id);
-      return next;
-    });
-  };
-
-  const exportTeam = async () => {
-    const teamName = name.trim();
-    if (!teamName || picked.size === 0) return;
-    setWorking(true);
-    setError("");
-    try {
-      const exported = await downloadSelectedTeam(teamName, [...picked]);
-      track("team_exported", { members: exported.members });
-      onExported(exported.name);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45"
-      onMouseDown={(event) => event.target === event.currentTarget && !working && onClose()}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="export-team-title"
-        tabIndex={-1}
-        className="w-[380px] max-w-[calc(100vw-32px)] rounded-2xl border border-hairline/50 bg-card p-5 shadow-2xl"
-      >
-        <div id="export-team-title" className="text-[17px] font-semibold text-ink">Export Team</div>
-        <div className="mt-1 text-[13px] text-ink-secondary">
-          Choose any bots to share. You do not need to create a room first.
-        </div>
-        <input
-          ref={nameRef}
-          value={name}
-          maxLength={100}
-          disabled={working}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void exportTeam();
-          }}
-          placeholder="Team name"
-          aria-label="Team name"
-          className="mt-4 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none disabled:opacity-60"
-        />
-        <div className="mt-3 flex max-h-64 flex-col gap-0.5 overflow-y-auto rounded-xl bg-raised/30 p-1.5">
-          {bots.length === 0 && (
-            <div className="px-2 py-5 text-center text-[13px] text-ink-secondary">
-              Create a bot first, then it can be shared as part of a team.
-            </div>
-          )}
-          {bots.map((bot) => {
-            const selected = picked.has(bot.id);
-            const capped = !selected && picked.size >= 50;
-            return (
-              <button
-                key={bot.id}
-                type="button"
-                aria-pressed={selected}
-                disabled={working || capped}
-                onClick={() => toggle(bot.id)}
-                className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised/70 disabled:opacity-40"
-              >
-                <MausAvatar color={bot.color} state="happy" size={28} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] text-ink">{bot.name}</span>
-                  {bot.title && <span className="block truncate text-[11.5px] text-ink-secondary">{bot.title}</span>}
-                </span>
-                <span
-                  className={cn(
-                    "flex size-[18px] shrink-0 items-center justify-center rounded-full border",
-                    selected ? "border-accent bg-accent text-white" : "border-hairline/60",
-                  )}
-                >
-                  {selected && <Check size={12} />}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-3 text-[12.5px] leading-relaxed text-ink-secondary">
-          Messages, permissions, credentials, engines, and computer access are never included.
-        </div>
-        {error && (
-          <div role="alert" className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">
-            {error}
-          </div>
-        )}
-        <div className="mt-5 flex items-center justify-between gap-3">
-          <span className="text-[12.5px] text-ink-secondary">
-            {picked.size} {picked.size === 1 ? "bot" : "bots"} selected
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={working}
-              className="rounded-lg px-3.5 py-2 text-[13.5px] text-ink-secondary hover:bg-raised disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void exportTeam()}
-              disabled={working || !name.trim() || picked.size === 0}
-              className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-[13.5px] font-medium text-white hover:bg-accent/90 disabled:opacity-40"
-            >
-              {working ? <Loader2 size={15} className="animate-spin" /> : <ArrowDownToLine size={15} />}
-              {working ? "Exporting…" : "Export"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
 /** Pick members → Create. The room name is optional; the server defaults it. */
 function NewRoomPanel({ onClose }: { onClose: () => void }) {
   const { state, dispatch } = useStore();
@@ -702,7 +351,15 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
+function BotContextMenu({
+  menu,
+  onClose,
+  onArchive,
+}: {
+  menu: MenuState;
+  onClose: () => void;
+  onArchive: (bot: Bot) => void;
+}) {
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
@@ -724,6 +381,13 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
+  const visibleBotCount = state.bots.filter((candidate) => !candidate.hidden).length;
+  const archiveBlocked = Boolean(bot.chiefOfStaff) || visibleBotCount <= 1;
+  const archiveHint = bot.chiefOfStaff
+    ? "Choose another Chief of Staff first"
+    : visibleBotCount <= 1
+      ? "Keep at least one active bot"
+      : undefined;
   // keep the menu on-screen near the click
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - 380));
   const left = Math.min(menu.x, window.innerWidth - 240);
@@ -796,12 +460,12 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
         }),
         divider("d3"),
         item(
-          <EyeOff size={16} className="text-ink-secondary" />,
-          "Hide from sidebar",
-          () => dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } }),
+          <Archive size={16} className="text-ink-secondary" />,
+          "Archive",
+          () => onArchive(bot),
           {
-            disabled: Boolean(bot.chiefOfStaff),
-            hint: bot.chiefOfStaff ? "Choose another Chief of Staff first" : undefined,
+            disabled: archiveBlocked,
+            hint: archiveHint,
           },
         ),
         item(<Trash2 size={16} />, "Delete", () => dispatch({ type: "deleteBot", botId: bot.id }), {
@@ -812,31 +476,36 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
   );
 }
 
-function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => void }) {
+function BotListItem({
+  bot,
+  onMenu,
+  onArchive,
+  archiveDisabled,
+}: {
+  bot: Bot;
+  onMenu: (menu: MenuState) => void;
+  onArchive: (bot: Bot) => void;
+  archiveDisabled: boolean;
+}) {
   const { state, dispatch } = useStore();
+  const [renaming, setRenaming] = useState(false);
   const selected = state.activeView === "chat" && state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
-  return (
-    <button
-      onClick={() => dispatch({ type: "select", id: bot.id })}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
-      }}
-      className={cn(
-        "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left",
-        bot.chiefOfStaff
-          ? selected
-            ? "border-accent/40 bg-accent/15"
-            : "border-accent/25 bg-accent/5 hover:bg-accent/10"
-          : selected
-            ? "border-transparent bg-raised"
-            : "border-transparent hover:bg-raised/50",
-      )}
-    >
+  const rowClass = cn(
+    "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 pr-10 text-left",
+    bot.chiefOfStaff
+      ? selected
+        ? "border-accent/40 bg-accent/15"
+        : "border-accent/25 bg-accent/5 hover:bg-accent/10"
+      : selected
+        ? "border-transparent bg-raised"
+        : "border-transparent hover:bg-raised/50",
+  );
+  const body = (
+    <>
       <MausAvatar
         color={bot.color}
         state={stateForBot({ ...bot, messages: visible })}
@@ -848,10 +517,16 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
         <div className="flex items-baseline justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
-            <span className="truncate">{bot.name}</span>
+            <RenameTitle
+              value={bot.name}
+              onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
+              onEditingChange={setRenaming}
+              className="truncate"
+              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[15px] font-semibold"
+            />
           </span>
-          {selected && last && (
-            <span className="shrink-0 text-xs text-ink-secondary">
+          {selected && last && !renaming && (
+            <span className="shrink-0 text-xs text-ink-secondary transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
               {formatTime(last.at)}
             </span>
           )}
@@ -871,22 +546,212 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
           )}
         </div>
       </div>
-    </button>
+    </>
+  );
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    onMenu({ botId: bot.id, x: event.clientX, y: event.clientY });
+  };
+
+  // Keep the rename <input> out of role="button" — a button's descendants
+  // are presentational, which hides the field from assistive tech.
+  if (renaming) {
+    return (
+      <div className={rowClass} onContextMenu={onContextMenu}>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div className="group relative">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => dispatch({ type: "select", id: bot.id })}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            dispatch({ type: "select", id: bot.id });
+          }
+        }}
+        onContextMenu={onContextMenu}
+        className={rowClass}
+      >
+        {body}
+      </div>
+      <button
+        type="button"
+        disabled={archiveDisabled}
+        onClick={() => onArchive(bot)}
+        aria-label={`Archive ${bot.name}`}
+        title={
+          bot.chiefOfStaff
+            ? "Choose another Chief of Staff first"
+            : archiveDisabled
+              ? "Keep at least one active bot"
+              : `Archive ${bot.name}`
+        }
+        className="absolute right-2 top-2.5 flex size-7 items-center justify-center rounded-lg bg-card/90 text-ink-secondary opacity-0 shadow-sm transition hover:bg-raised hover:text-ink focus:opacity-100 disabled:cursor-default disabled:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100"
+      >
+        <Archive size={14} />
+      </button>
+    </div>
+  );
+}
+
+function ArchivedBotsPanel({
+  bots,
+  onClose,
+  onRestored,
+}: {
+  bots: Bot[];
+  onClose: () => void;
+  onRestored: (message: string) => void;
+}) {
+  const { dispatch } = useStore();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [restoringAll, setRestoringAll] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busyId && !restoringAll) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busyId, onClose, restoringAll]);
+
+  const restore = async (bot: Bot) => {
+    setBusyId(bot.id);
+    setError("");
+    try {
+      const response = await api(`/api/bots/${bot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ hidden: false }),
+      });
+      dispatch({ type: "botPatched", bot: response.bot });
+      dispatch({ type: "select", id: bot.id });
+      onRestored(`${bot.name} restored`);
+      if (bots.length === 1) onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const restoreAll = async () => {
+    setRestoringAll(true);
+    setError("");
+    try {
+      const responses = await Promise.all(
+        bots.map((bot) =>
+          api(`/api/bots/${bot.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ hidden: false }),
+          }),
+        ),
+      );
+      for (const response of responses) dispatch({ type: "botPatched", bot: response.bot });
+      const first = bots[0];
+      if (first) dispatch({ type: "select", id: first.id });
+      onRestored(`${bots.length} ${bots.length === 1 ? "bot" : "bots"} restored`);
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRestoringAll(false);
+    }
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={(event) => event.target === event.currentTarget && !busyId && !restoringAll && onClose()}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="archived-bots-title"
+        tabIndex={-1}
+        className="animate-pop-in flex max-h-[min(680px,calc(100dvh-2rem))] w-full max-w-[760px] flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/50 outline-none"
+      >
+        <header className="flex items-start justify-between gap-4 px-6 pb-4 pt-6 sm:px-8 sm:pt-7">
+          <div>
+            <h2 id="archived-bots-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Archived bots</h2>
+            <p className="mt-1 text-[13px] text-ink-secondary">Conversations are kept until you choose to delete a bot.</p>
+          </div>
+          <div className="flex items-center gap-1">
+            {bots.length > 1 && (
+              <button
+                onClick={() => void restoreAll()}
+                disabled={restoringAll || Boolean(busyId)}
+                className="flex items-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
+              >
+                {restoringAll && <Loader2 size={13} className="animate-spin" />}
+                Restore all
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              disabled={restoringAll || Boolean(busyId)}
+              className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40"
+              aria-label="Close archived bots"
+            >
+              <X size={21} />
+            </button>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-3 sm:px-8">
+          <div className="mb-3 text-[12px] font-medium text-ink-secondary">{bots.length} archived</div>
+          <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
+            {bots.map((bot) => (
+              <div key={bot.id} className="flex min-h-[82px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
+                <MausAvatar color={bot.color} state="happy" size={42} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-ink">{bot.name}</div>
+                  <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{bot.title || "Bot"}</div>
+                </div>
+                <button
+                  onClick={() => void restore(bot)}
+                  disabled={restoringAll || Boolean(busyId)}
+                  className="flex min-w-[78px] items-center justify-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
+                >
+                  {busyId === bot.id && <Loader2 size={13} className="animate-spin" />}
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+          {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
-  const importInputRef = useRef<HTMLInputElement>(null);
   const importReturnRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
-  const [exportTeamOpen, setExportTeamOpen] = useState(false);
-  const [pendingImport, setPendingImport] = useState<PendingTeamImport | null>(null);
-  const [teamFeedback, setTeamFeedback] = useState<{ error: boolean; text: string } | null>(null);
+  const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
+  const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  const [exportingTeam, setExportingTeam] = useState(false);
+  const [teamFeedback, setTeamFeedback] = useState<{
+    error: boolean;
+    text: string;
+    undo?: TeamImportResult;
+    restoreBot?: { id: string; name: string };
+  } | null>(null);
   const [query, setQuery] = useState("");
 
   // Esc closes the drawer, mirroring ApiKeys.tsx:75-85. Bound only while the
@@ -908,23 +773,99 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     return () => window.clearTimeout(timer);
   }, [teamFeedback]);
 
-  const chooseTeamFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
-    if (file.size > 1_000_000) {
-      setTeamFeedback({ error: true, text: "That team file is too large." });
-      return;
-    }
+  const exportAllBots = async () => {
+    setExportingTeam(true);
+    setTeamFeedback(null);
     try {
-      const manifest: unknown = JSON.parse(await file.text());
-      setPendingImport(importPreview(manifest));
-      setTeamFeedback(null);
+      const exported = await downloadAllBots();
+      track("team_exported", { members: exported.members, scope: "all_visible" });
+      setTeamFeedback({ error: false, text: `${exported.members} bots exported` });
     } catch (cause) {
       setTeamFeedback({
         error: true,
-        text: cause instanceof SyntaxError ? "That team file is not valid JSON." : cause instanceof Error ? cause.message : String(cause),
+        text: cause instanceof Error ? cause.message : String(cause),
       });
+    } finally {
+      setExportingTeam(false);
+    }
+  };
+
+  const undoTeamLoad = async (result: TeamImportResult) => {
+    setTeamFeedback(null);
+    try {
+      const archiveNew = await Promise.all(
+        result.importedBotIds.map((botId) =>
+          api(`/api/bots/${botId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ hidden: true, chiefOfStaff: false }),
+          }),
+        ),
+      );
+      for (const response of archiveNew) dispatch({ type: "botPatched", bot: response.bot });
+
+      const previousChief = result.archived.find((bot) => bot.chiefOfStaff);
+      const restoreOthers = await Promise.all(
+        result.archived
+          .filter((bot) => !bot.chiefOfStaff)
+          .map((bot) =>
+            api(`/api/bots/${bot.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ hidden: false }),
+            }),
+          ),
+      );
+      for (const response of restoreOthers) dispatch({ type: "botPatched", bot: response.bot });
+      if (previousChief) {
+        const response = await api(`/api/bots/${previousChief.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ hidden: false, chiefOfStaff: true }),
+        });
+        dispatch({ type: "botPatched", bot: response.bot });
+      }
+      const first = result.archived[0];
+      if (first) dispatch({ type: "select", id: first.id });
+      setTeamFeedback({ error: false, text: "Previous team restored" });
+    } catch (cause) {
+      setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const archiveBot = async (bot: Bot) => {
+    const activeBots = state.bots.filter((candidate) => !candidate.hidden);
+    if (bot.chiefOfStaff || activeBots.length <= 1) return;
+    setTeamFeedback(null);
+    try {
+      const response = await api(`/api/bots/${bot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ hidden: true }),
+      });
+      dispatch({ type: "botPatched", bot: response.bot });
+      if (state.selectedId === bot.id) {
+        const next = activeBots.find((candidate) => candidate.id !== bot.id);
+        if (next) dispatch({ type: "select", id: next.id });
+      }
+      setTeamFeedback({
+        error: false,
+        text: `${bot.name} archived`,
+        restoreBot: { id: bot.id, name: bot.name },
+      });
+    } catch (cause) {
+      setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const undoBotArchive = async (bot: { id: string; name: string }) => {
+    setTeamFeedback(null);
+    try {
+      const response = await api(`/api/bots/${bot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ hidden: false }),
+      });
+      dispatch({ type: "botPatched", bot: response.bot });
+      dispatch({ type: "select", id: bot.id });
+      setTeamFeedback({ error: false, text: `${bot.name} restored` });
+    } catch (cause) {
+      setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
     }
   };
 
@@ -932,6 +873,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const browser = capabilities.host.label === "Browser";
 
   const q = query.trim().toLowerCase();
+
+  // Message search rides the same box as the name filter: names match
+  // instantly from local state; transcript hits are the SearchResults
+  // section below the list (debounced, lands on the message).
+
   const matchingBots = state.bots
     .filter((b) => !b.hidden)
     .filter(
@@ -946,6 +892,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     .filter((bot) => !bot.chiefOfStaff)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
   const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q));
+  const activeBotCount = state.bots.filter((bot) => !bot.hidden).length;
+  const archivedBots = state.bots.filter((bot) => bot.hidden);
+  const pendingTeamUndo = teamFeedback?.undo;
+  const pendingBotUndo = teamFeedback?.restoreBot;
 
   return (
     <aside
@@ -1017,37 +967,42 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <button
                   onClick={() => {
                     setPlusOpen(false);
-                    setExportTeamOpen(true);
+                    void exportAllBots();
                   }}
+                  disabled={exportingTeam}
                   className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
                 >
-                  <ArrowDownToLine size={16} className="text-ink-secondary" />
-                  Export Team
+                  {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
+                  {exportingTeam ? "Exporting…" : "Export all bots"}
                 </button>
                 <button
                   onClick={() => {
                     setPlusOpen(false);
-                    importInputRef.current?.click();
+                    setTeamLibraryOpen(true);
                   }}
                   className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
                 >
-                  <FileUp size={16} className="text-ink-secondary" />
-                  Import Team
+                  <Library size={16} className="text-ink-secondary" />
+                  Teams
                 </button>
+                {archivedBots.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setPlusOpen(false);
+                      setArchivedBotsOpen(true);
+                    }}
+                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                  >
+                    <Archive size={16} className="text-ink-secondary" />
+                    <span className="flex-1">Archived bots</span>
+                    <span className="text-[11.5px] text-ink-secondary">{archivedBots.length}</span>
+                  </button>
+                )}
               </div>
             </>
           )}
         </div>
       </div>
-
-      <input
-        ref={importInputRef}
-        type="file"
-        accept=".json,.mausteam.json,application/json"
-        onChange={(event) => void chooseTeamFile(event)}
-        className="hidden"
-        aria-label="Choose an OpenMaus team file"
-      />
 
       {/* Search */}
       <div className="px-3 pt-2 pb-3">
@@ -1058,7 +1013,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
             placeholder="Search"
-            aria-label="Search bots"
+            aria-label="Search bots and messages"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
         </div>
@@ -1067,20 +1022,32 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {/* Bot list */}
       <div className="flex-1 overflow-y-auto px-2">
         <div className="flex flex-col gap-0.5">
-          {!chiefBot && visibleBots.length === 0 && visibleGroups.length === 0 && q && (
+          {!chiefBot && visibleBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">Nothing matches “{query}”</div>
           )}
           {chiefBot && (
             <div className="mb-1.5">
-              <BotListItem bot={chiefBot} onMenu={setMenu} />
+              <BotListItem
+                bot={chiefBot}
+                onMenu={setMenu}
+                onArchive={(bot) => void archiveBot(bot)}
+                archiveDisabled
+              />
             </div>
           )}
           {visibleGroups.map((g) => (
             <GroupListItem key={g.id} group={g} onMenu={setRoomMenu} />
           ))}
           {visibleBots.map((b) => (
-            <BotListItem key={b.id} bot={b} onMenu={setMenu} />
+            <BotListItem
+              key={b.id}
+              bot={b}
+              onMenu={setMenu}
+              onArchive={(bot) => void archiveBot(bot)}
+              archiveDisabled={activeBotCount <= 1}
+            />
           ))}
+          <SearchResults query={query} onLanded={() => setQuery("")} />
         </div>
       </div>
 
@@ -1127,7 +1094,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
 
-      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} onArchive={(bot) => void archiveBot(bot)} />}
       {roomMenu && (
         <RoomContextMenu
           menu={roomMenu}
@@ -1135,24 +1102,31 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         />
       )}
       {newRoom && <NewRoomPanel onClose={() => setNewRoom(false)} />}
-      {exportTeamOpen && (
-        <ExportTeamPanel
-          returnFocusRef={importReturnRef}
-          onClose={() => setExportTeamOpen(false)}
-          onExported={(name) => {
-            setExportTeamOpen(false);
-            setTeamFeedback({ error: false, text: `${name} exported` });
-          }}
+      {archivedBotsOpen && (
+        <ArchivedBotsPanel
+          bots={archivedBots}
+          onClose={() => setArchivedBotsOpen(false)}
+          onRestored={(message) => setTeamFeedback({ error: false, text: message })}
         />
       )}
-      {pendingImport && (
-        <ImportTeamPanel
-          pending={pendingImport}
+      {teamLibraryOpen && (
+        <TeamLibraryPanel
           returnFocusRef={importReturnRef}
-          onClose={() => setPendingImport(null)}
-          onImported={(name) => {
-            setPendingImport(null);
-            setTeamFeedback({ error: false, text: `${name} imported` });
+          onClose={() => setTeamLibraryOpen(false)}
+          onImported={(result) => {
+            setTeamLibraryOpen(false);
+            setTeamFeedback(
+              result.archived.length > 0
+                ? {
+                    error: false,
+                    text: `${result.name} loaded · ${result.members} ${result.members === 1 ? "bot" : "bots"}`,
+                    undo: result,
+                  }
+                : {
+                    error: false,
+                    text: `${result.name} loaded · ${result.members} ${result.members === 1 ? "bot" : "bots"}`,
+                  },
+            );
           }}
         />
       )}
@@ -1167,7 +1141,25 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 : "border-hairline/50 bg-card text-ink",
             )}
           >
-            {teamFeedback.text}
+            <div className="flex items-center gap-3">
+              <span>{teamFeedback.text}</span>
+              {pendingTeamUndo && (
+                <button
+                  onClick={() => void undoTeamLoad(pendingTeamUndo)}
+                  className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
+                >
+                  Undo
+                </button>
+              )}
+              {pendingBotUndo && (
+                <button
+                  onClick={() => void undoBotArchive(pendingBotUndo)}
+                  className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
+                >
+                  Undo
+                </button>
+              )}
+            </div>
           </div>,
           document.body,
         )}

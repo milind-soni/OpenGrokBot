@@ -11,6 +11,8 @@ import { GeminiAgentDriver } from "./acp/gemini.ts";
 import { KimiAgentDriver } from "./acp/kimi.ts";
 import { DroidAgentDriver } from "./acp/droid.ts";
 import { OpenCodeGoDriver } from "./acp/opencode-go.ts";
+import { QwenAgentDriver } from "./acp/qwen.ts";
+import { HermesAgentDriver } from "./acp/hermes.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   GrokDriver,
@@ -19,6 +21,8 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   KimiAgentDriver,
   DroidAgentDriver,
   OpenCodeGoDriver,
+  QwenAgentDriver,
+  HermesAgentDriver,
   ClaudeDriver,
   CodexDriver,
   AntigravityDriver,

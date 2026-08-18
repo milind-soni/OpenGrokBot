@@ -15,6 +15,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
+import { CommandPalette } from "@/components/CommandPalette";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -131,6 +132,9 @@ function Shell() {
       {state.inspectorOpen && bot && <InspectorPanel bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
+      {/* mounted after the modals: same z-50 tier, so DOM order keeps the
+          palette on top when one of them is open underneath */}
+      <CommandPalette />
       </div>
     </div>
   );

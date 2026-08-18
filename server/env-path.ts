@@ -35,6 +35,7 @@ function knownDirs(): string[] {
     join(home, ".npm-global", "bin"), // npm prefix ~/.npm-global (claude, opencode)
     join(home, ".kimi-code", "bin"), // kimi-code installer
     join(home, ".grok", "bin"), // x.ai installer
+    join(home, ".opencode", "bin"), // opencode installer
     join(home, ".claude", "local"), // claude "local install"
     "/opt/homebrew/bin", // brew, Apple silicon
     "/usr/local/bin", // brew Intel / classic installs
@@ -73,12 +74,19 @@ function windowsKnownDirs(): string[] {
 
 let cached: string | null = null;
 let probed = false;
+let loginShellPath: string | null = null;
 
 /** Drop the memoized PATH so the next augmentedPath() rescans. Called when
  * the app re-probes engines, so "check again" can find something installed
- * since launch instead of answering from the PATH we booted with. */
+ * since launch instead of answering from the PATH we booted with. `probed`
+ * must reset too: the login-shell probe merges rc-file PATH entries (e.g.
+ * ~/.kimi-code/bin exported from .zshrc) into the cache asynchronously,
+ * and without resetting it a rescan would rebuild the cache without those
+ * entries and never re-probe — "check again" would permanently lose
+ * anything only the login shell's rc file knows about. */
 export function resetPathCache(): void {
   cached = null;
+  probed = false;
 }
 
 /** Current best PATH, synchronously. Cheap after the first call. */
@@ -87,6 +95,10 @@ export function augmentedPath(): string {
     cached = mergePaths([
       ...(process.env.OMB_EXTRA_PATH ? process.env.OMB_EXTRA_PATH.split(delimiter) : []),
       ...(process.env.PATH ? process.env.PATH.split(delimiter) : []),
+      // Keep the last successful login-shell result while a rescan starts a
+      // fresh asynchronous probe. Otherwise resetPathCache() would make
+      // rc-only CLIs disappear again for the response that triggered it.
+      ...(loginShellPath ? loginShellPath.split(delimiter) : []),
       // Both platforms scan their standard install locations; only the
       // login-shell probe below stays unix-only, since Windows has no
       // equivalent rc file to source.
@@ -119,6 +131,7 @@ function probeLoginShellPath(): void {
       if (err || !stdout) return;
       const m = /__OMB_PATH__([^\n]*)/.exec(stdout);
       if (!m || !m[1]) return;
+      loginShellPath = m[1];
       cached = mergePaths([...(cached ?? "").split(delimiter), ...m[1].split(delimiter)]);
     },
   );
@@ -128,6 +141,7 @@ function probeLoginShellPath(): void {
 export function resetPathCacheForTests(): void {
   cached = null;
   probed = false;
+  loginShellPath = null;
 }
 
 /** Every `name` binary on the augmented PATH as absolute paths, in PATH

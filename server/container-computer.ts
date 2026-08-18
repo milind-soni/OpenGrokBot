@@ -706,7 +706,9 @@ export async function containerComputerAction(
   return containerComputerStatus(runner, platform);
 }
 
-function wholeScreenshot(bytes: Buffer): { ok: boolean; mime: "image/png" | "image/jpeg" } {
+type ScreenshotCheck = { ok: boolean; mime: "image/png" | "image/jpeg" };
+
+function wholeScreenshot(bytes: Buffer): ScreenshotCheck {
   if (bytes.length < 512) return { ok: false, mime: "image/png" };
   const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
   if (png) {
@@ -775,11 +777,13 @@ const containerMcpPath = (() => {
 /** Spawn contract handed directly to agent runtimes. The tiny host wrapper
  * only preserves stdio through the container CLI; Cua Driver owns the MCP
  * protocol and every computer tool. */
-export function containerComputerMcp(runtime: Runtime): {
+type ContainerMcpLaunch = {
   command: string;
   args: string[];
   env: Record<string, string>;
-} {
+};
+
+export function containerComputerMcp(runtime: Runtime): ContainerMcpLaunch {
   return {
     command: process.execPath,
     args: [containerMcpPath, runtime, CONTAINER, CUA_SOCKET],
@@ -842,6 +846,6 @@ export function setupCommands(
  * containerComputerMcp(). */
 export function computerProxyEnv(
   computer: { boxId?: string; token?: string },
-): Record<string, string> {
+): NodeJS.ProcessEnv {
   return { OGB_BOX_ID: computer.boxId ?? "", OGB_BOX_TOKEN: computer.token ?? "" };
 }

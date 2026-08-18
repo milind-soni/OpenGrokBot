@@ -4,29 +4,62 @@
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
+
+const optionalText = z.string().optional();
+const instanceConfigSchema = z.object({
+  driver: z.string().min(1),
+  displayName: optionalText,
+  accentColor: optionalText,
+  environment: z.record(z.string(), z.string()).optional(),
+  enabled: z.boolean().optional(),
+  config: z.json().optional(),
+});
+const instanceConfigMapSchema = z.record(z.string(), instanceConfigSchema);
+const appConfigSchema = z.object({
+  xai: z.object({ key: optionalText, url: optionalText }).optional(),
+  /** Project key used for Sessions, catalog and agent tools. userId/sessionId
+   * are non-secret local identifiers used to reuse one Composio Session. */
+  composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
+  box: z.object({ token: optionalText }).optional(),
+  /** OpenCode Go key; persisted write-only and passed only to its child. */
+  opencodeGo: z.object({ apiKey: optionalText }).optional(),
+  /** Voice credentials and the selected voice id. */
+  tts: z.object({ key: optionalText, voice: optionalText }).optional(),
+  /** Non-secret profile details shown in the sidebar. */
+  profile: z.object({ name: optionalText, email: optionalText }).optional(),
+  instances: instanceConfigMapSchema.optional(),
+});
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
+const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
-  /** Project key used for Sessions, catalog and agent tools. userId/sessionId
-   * are non-secret local identifiers used to reuse one Composio Session. */
-  composio?: {
-    apiKey?: string;
-    userId?: string;
-    sessionId?: string;
-  };
+  composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
-  /** OpenCode Go key; persisted write-only and passed only to its child. */
   opencodeGo?: { apiKey?: string };
-  /** Voice (ElevenLabs). `key` is the credential and is never echoed back;
-   * `voice` is the chosen voice id, which is a setting, not a secret. */
   tts?: { key?: string; voice?: string };
-  /** The person using the app (collected in onboarding, shown in the
-   * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
   instances?: InstanceConfigMap;
+}
+export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
+
+export function parseStoredConfig(value: JsonValue): AppConfig {
+  const parsed = appConfigSchema.safeParse(value);
+  if (!parsed.success) throw new Error(schemaIssue(parsed.error, "Invalid stored configuration"));
+  return parsed.data;
+}
+
+export function parseConfigPatch(value: JsonValue): ConfigPatch {
+  const parsed = appConfigPatchSchema.safeParse(value);
+  if (!parsed.success) {
+    throw Object.assign(new Error(schemaIssue(parsed.error, "Invalid configuration")), { status: 400 });
+  }
+  return parsed.data;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -51,15 +84,13 @@ export function ensureDirs() {
 export function loadConfig(): AppConfig {
   let cfg: AppConfig = {};
   try {
-    cfg = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    cfg = parseStoredConfig(parseJson(readFileSync(join(DATA_DIR, "config.json"), "utf8")));
   } catch {
     /* first run — env fallbacks below */
   }
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
-  cfg.composio = {
-    ...cfg.composio,
-    ...(process.env.COMPOSIO_API_KEY !== undefined ? { apiKey: process.env.COMPOSIO_API_KEY } : {}),
-  };
+  cfg.composio = { ...cfg.composio };
+  if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
   cfg.opencodeGo = { apiKey: process.env.OPENCODE_API_KEY, ...cfg.opencodeGo };
   cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
@@ -70,21 +101,30 @@ export function loadConfig(): AppConfig {
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");
-  let disk: Record<string, unknown> = {};
+  let disk: JsonObject = {};
   try {
-    disk = JSON.parse(readFileSync(p, "utf8"));
+    const parsed = jsonObjectSchema.safeParse(parseJson(readFileSync(p, "utf8")));
+    if (parsed.success) disk = parsed.data;
   } catch {
     /* first write */
   }
+  const checkedPatch = appConfigSchema.partial().parse(patch);
   for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile"] as const) {
-    if (patch[key] && typeof patch[key] === "object") {
-      disk[key] = { ...(disk[key] as object), ...patch[key] };
-    }
+    const section = checkedPatch[key];
+    if (!section) continue;
+    const current = jsonObjectSchema.safeParse(disk[key]);
+    const merged: JsonObject = current.success ? { ...current.data } : {};
+    Object.assign(merged, section);
+    disk[key] = merged;
   }
-  if (patch.instances && typeof patch.instances === "object") {
-    const diskInstances = (disk.instances ?? {}) as Record<string, unknown>;
-    for (const [instanceId, entry] of Object.entries(patch.instances)) {
-      diskInstances[instanceId] = { ...(diskInstances[instanceId] as object), ...entry };
+  if (checkedPatch.instances) {
+    const currentInstances = jsonObjectSchema.safeParse(disk.instances);
+    const diskInstances: JsonObject = currentInstances.success ? currentInstances.data : {};
+    for (const [instanceId, entry] of Object.entries(checkedPatch.instances)) {
+      const current = jsonObjectSchema.safeParse(diskInstances[instanceId]);
+      const merged: JsonObject = current.success ? { ...current.data } : {};
+      Object.assign(merged, entry);
+      diskInstances[instanceId] = merged;
     }
     disk.instances = diskInstances;
   }
@@ -104,7 +144,7 @@ export function withInstanceCli(
   cfg: AppConfig,
   instanceId: string,
   cli: string,
-): { ok: boolean; config: AppConfig } {
+): InstanceCliUpdate {
   const next: AppConfig = structuredClone(cfg);
   const injected = injectedEnvironment(next);
   const map = instanceConfigs(next);
@@ -115,16 +155,20 @@ export function withInstanceCli(
   if (!Object.hasOwn(map, instanceId)) return { ok: false, config: cfg };
   const entry = map[instanceId];
   const cliKey = cli.trim();
-  if (cliKey) entry.config = { ...(entry.config as object), cli: cliKey };
-  else if (entry.config && typeof entry.config === "object" && "cli" in (entry.config as object)) {
-    const rest = { ...(entry.config as Record<string, unknown>) };
+  const currentConfig = jsonObjectSchema.safeParse(entry.config);
+  if (cliKey) {
+    const nextConfig: JsonObject = currentConfig.success ? { ...currentConfig.data } : {};
+    nextConfig.cli = cliKey;
+    entry.config = nextConfig;
+  } else if (currentConfig.success && Object.hasOwn(currentConfig.data, "cli")) {
+    const rest = { ...currentConfig.data };
     delete rest.cli;
     entry.config = Object.keys(rest).length ? rest : undefined;
   }
   for (const e of Object.values(map)) {
     if (!e.environment) continue;
     for (const [k, v] of Object.entries(e.environment)) {
-      if (injected[k] === v) delete e.environment[k];
+      if (injected.get(k) === v) delete e.environment[k];
     }
     if (!Object.keys(e.environment).length) delete e.environment;
   }
@@ -132,13 +176,18 @@ export function withInstanceCli(
   return { ok: true, config: next };
 }
 
+interface InstanceCliUpdate {
+  ok: boolean;
+  config: AppConfig;
+}
+
 /** The credential env instanceConfigs() injects — same keys, same rule. */
-function injectedEnvironment(cfg: AppConfig): Record<string, string> {
-  return {
-    ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-    ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
-    ...(cfg.opencodeGo?.apiKey ? { OPENCODE_API_KEY: cfg.opencodeGo.apiKey } : {}),
-  };
+function injectedEnvironment(cfg: AppConfig): Map<string, string> {
+  const environment = new Map<string, string>();
+  if (cfg.xai?.key) environment.set("XAI_API_KEY", cfg.xai.key);
+  if (cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
+  if (cfg.opencodeGo?.apiKey) environment.set("OPENCODE_API_KEY", cfg.opencodeGo.apiKey);
+  return environment;
 }
 
 // Default fleet: one instance per built-in driver (upstream
@@ -159,28 +208,42 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // CLI"), so a default `gemini` instance could only ever show unavailable.
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
-  const map: InstanceConfigMap =
-    cfg.instances && Object.keys(cfg.instances).length
-      ? cfg.instances
-      : {
-          grok: { driver: "grokAgent" },
-          kimi: { driver: "kimiAgent" },
-          droid: { driver: "droidAgent" },
-          claude: { driver: "claudeAgent" },
-          codex: { driver: "codex" },
-          antigravity: { driver: "antigravityAgent" },
-          opencodeGo: { driver: "opencodeGo" },
-          computer: { driver: "boxAgent" },
-        };
+  const DEFAULT_FLEET: InstanceConfigMap = {
+    grok: { driver: "grokAgent" },
+    kimi: { driver: "kimiAgent" },
+    droid: { driver: "droidAgent" },
+    claude: { driver: "claudeAgent" },
+    codex: { driver: "codex" },
+    antigravity: { driver: "antigravityAgent" },
+    opencodeGo: { driver: "opencodeGo" },
+    computer: { driver: "boxAgent" },
+    qwen: { driver: "qwenAgent" },
+    hermes: { driver: "hermesAgent" },
+  };
+  const CUSTOM_ONLY = {
+    qwen: { driver: "qwenAgent" },
+    hermes: { driver: "hermesAgent" },
+  } as const;
+  const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
+  const map: InstanceConfigMap = configured ? { ...configured } : { ...DEFAULT_FLEET };
+  // Product fleets pick up newly shipped custom-only engines. A one-off
+  // test/shadow map (no claude/grok/codex) is left exactly as written.
+  if (
+    configured &&
+    (Object.hasOwn(configured, "claude") || Object.hasOwn(configured, "grok") || Object.hasOwn(configured, "codex"))
+  ) {
+    for (const [id, entry] of Object.entries(CUSTOM_ONLY)) {
+      if (!Object.hasOwn(map, id)) map[id] = { ...entry };
+    }
+  }
   for (const entry of Object.values(map)) {
-    entry.environment = {
-      ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-      ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
-      ...(entry.driver === "opencodeGo" && cfg.opencodeGo?.apiKey
-        ? { OPENCODE_API_KEY: cfg.opencodeGo.apiKey }
-        : {}),
-      ...entry.environment,
-    };
+    const environment = { ...entry.environment };
+    if (cfg.xai?.key) environment.XAI_API_KEY = cfg.xai.key;
+    if (cfg.box?.token) environment.BOX_TOKEN = cfg.box.token;
+    if (entry.driver === "opencodeGo" && cfg.opencodeGo?.apiKey) {
+      environment.OPENCODE_API_KEY = cfg.opencodeGo.apiKey;
+    }
+    entry.environment = environment;
   }
   return map;
 }

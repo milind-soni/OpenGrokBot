@@ -1,23 +1,8 @@
 // Turning the inspector's two record shapes into one-line summaries. Pure
 // so the panel stays a thin renderer and the labels can be tested.
 import type { RuntimeEvent } from "../../server/contracts.ts";
-import type { InspectorPage as WireInspectorPage } from "../../server/thread-events.ts";
-
-export type InspectorEntry =
-  | { kind: "runtime"; at: string; data: RuntimeEvent }
-  | { kind: "native"; at: string; data: NativeRecord };
-
-/** One line of native/<threadId>.ndjson (server/drivers/native.ts). */
-export interface NativeRecord {
-  at: string;
-  dir: "in" | "out";
-  source: string;
-  msg: unknown;
-}
-
-export interface InspectorPage extends Omit<WireInspectorPage, "entries"> {
-  entries: InspectorEntry[];
-}
+import type { InspectorEntry, NativeRecord } from "../../server/thread-events.ts";
+export type { InspectorEntry, InspectorPage, NativeRecord } from "../../server/thread-events.ts";
 
 interface FoldPreview {
   text: string;

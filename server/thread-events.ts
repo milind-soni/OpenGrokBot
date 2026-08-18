@@ -13,10 +13,19 @@
 // thousands of native lines and the panel wants the recent ones first.
 import { closeSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
 import { join } from "node:path";
+import type { RuntimeEvent } from "./contracts.ts";
+
+/** One line of native/<threadId>.ndjson (server/drivers/native.ts). */
+export interface NativeRecord {
+  at: string;
+  dir: "in" | "out";
+  source: string;
+  msg: unknown;
+}
 
 export type InspectorEntry =
-  | { kind: "runtime"; at: string; data: unknown }
-  | { kind: "native"; at: string; data: unknown };
+  | { kind: "runtime"; at: string; data: RuntimeEvent }
+  | { kind: "native"; at: string; data: NativeRecord };
 
 export interface InspectorPage {
   entries: InspectorEntry[];
@@ -86,14 +95,17 @@ function countLines(fd: number, file: string, stat: FileStat): number {
   return complete + Number(trailing);
 }
 
-function parseRecent(text: string, includeFirst: boolean, limit: number): unknown[] {
+type RecordGuard<T> = (value: unknown) => value is T;
+
+function parseRecent<T>(text: string, includeFirst: boolean, limit: number, valid: RecordGuard<T>): T[] {
   const lines = text.split("\n");
   if (!includeFirst) lines.shift();
-  const out: unknown[] = [];
+  const out: T[] = [];
   for (const raw of lines) {
     if (!raw) continue;
     try {
-      out.push(JSON.parse(raw));
+      const value: unknown = JSON.parse(raw);
+      if (valid(value)) out.push(value);
     } catch {
       // A torn line during a write, or a hand-edited record. Keep looking
       // farther back until we still have `limit` valid recent entries.
@@ -102,7 +114,7 @@ function parseRecent(text: string, includeFirst: boolean, limit: number): unknow
   return out.slice(-limit);
 }
 
-function readRecentLines(file: string, limit: number): { lines: unknown[]; total: number } {
+function readRecentLines<T>(file: string, limit: number, valid: RecordGuard<T>): { lines: T[]; total: number } {
   let fd: number;
   try {
     fd = openSync(file, "r");
@@ -114,7 +126,7 @@ function readRecentLines(file: string, limit: number): { lines: unknown[]; total
     const total = countLines(fd, file, stat);
     let position = stat.size;
     let bytes = Buffer.alloc(0);
-    let lines: unknown[] = [];
+    let lines: T[] = [];
     while (position > 0 && bytes.length < MAX_TAIL_BYTES) {
       const remaining = MAX_TAIL_BYTES - bytes.length;
       const start = Math.max(0, position - Math.min(READ_CHUNK, remaining));
@@ -129,12 +141,12 @@ function readRecentLines(file: string, limit: number): { lines: unknown[]; total
       // walking backwards rather than returning fewer valid rows.
       const text = bytes.toString("utf8");
       if (position === 0 || text.split("\n").length - 1 >= limit) {
-        lines = parseRecent(text, position === 0, limit);
+        lines = parseRecent(text, position === 0, limit, valid);
         if (lines.length >= limit || position === 0) break;
       }
     }
     if (lines.length === 0 && bytes.length > 0) {
-      lines = parseRecent(bytes.toString("utf8"), position === 0, limit);
+      lines = parseRecent(bytes.toString("utf8"), position === 0, limit, valid);
     }
     return { lines, total };
   } finally {
@@ -142,11 +154,84 @@ function readRecentLines(file: string, limit: number): { lines: unknown[]; total
   }
 }
 
-const timeOf = (value: unknown, key: "createdAt" | "at"): string => {
-  const record = value as Record<string, unknown> | null;
-  const at = record?.[key];
-  return typeof at === "string" ? at : "";
-};
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const stringOrMissing = (value: unknown) => value === undefined || typeof value === "string";
+const stringOrNullOrMissing = (value: unknown) => value === undefined || value === null || typeof value === "string";
+const numberOrNullOrMissing = (value: unknown) => value === undefined || value === null || typeof value === "number";
+const stringsOrMissing = (value: unknown) => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
+
+function isRuntimeEvent(value: unknown): value is RuntimeEvent {
+  if (
+    !isRecord(value) ||
+    typeof value.eventId !== "string" ||
+    typeof value.provider !== "string" ||
+    typeof value.threadId !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.type !== "string" ||
+    !stringOrMissing(value.providerInstanceId) ||
+    !stringOrMissing(value.turnId) ||
+    !stringOrMissing(value.itemId) ||
+    !stringOrMissing(value.requestId)
+  ) return false;
+  switch (value.type) {
+    case "session.started":
+      return (value.sessionId === null || typeof value.sessionId === "string") && stringOrNullOrMissing(value.model);
+    case "session.exited":
+      return stringOrMissing(value.reason);
+    case "turn.started":
+      return true;
+    case "turn.completed":
+      return (
+        typeof value.ok === "boolean" &&
+        stringOrNullOrMissing(value.stopReason) &&
+        numberOrNullOrMissing(value.cost) &&
+        stringsOrMissing(value.denials) &&
+        (value.usage === undefined ||
+          (isRecord(value.usage) && typeof value.usage.input === "number" && typeof value.usage.output === "number"))
+      );
+    case "item.started":
+      return (value.itemType === "tool" || value.itemType === "reasoning") && stringOrMissing(value.title);
+    case "item.updated":
+      return (value.itemType === "tool" || value.itemType === "reasoning") && numberOrNullOrMissing(value.tokens);
+    case "item.completed":
+      return value.itemType === "assistant_text" ? typeof value.text === "string" : value.itemType === "tool" && typeof value.ok === "boolean";
+    case "content.delta":
+      return (value.streamKind === "assistant_text" || value.streamKind === "reasoning_text") && typeof value.delta === "string";
+    case "request.opened":
+      return (
+        (value.requestType === "permission" || value.requestType === "question") &&
+        typeof value.tool === "string" &&
+        typeof value.summary === "string" &&
+        stringsOrMissing(value.choices)
+      );
+    case "request.resolved":
+      return (
+        (value.behavior === "allow" || value.behavior === "deny" || value.behavior === "answer") &&
+        (value.source === "user" ||
+          value.source === "auto" ||
+          value.source === "timeout" ||
+          value.source === "system" ||
+          value.source === "unavailable" ||
+          value.source === "peer")
+      );
+    case "thread.token-usage.updated":
+      return typeof value.input === "number" && typeof value.output === "number";
+    case "runtime.error":
+      return typeof value.message === "string" && (value.setup === undefined || typeof value.setup === "boolean");
+    default:
+      return false;
+  }
+}
+
+function isNativeRecord(value: unknown): value is NativeRecord {
+  return (
+    isRecord(value) &&
+    typeof value.at === "string" &&
+    (value.dir === "in" || value.dir === "out") &&
+    typeof value.source === "string" &&
+    Object.hasOwn(value, "msg")
+  );
+}
 
 export function readThreadEvents(input: {
   eventsDir: string;
@@ -159,15 +244,15 @@ export function readThreadEvents(input: {
   const requested = input.limit ?? DEFAULT_LIMIT;
   const limit = Number.isFinite(requested) ? Math.max(1, Math.min(Math.trunc(requested), MAX_LIMIT)) : DEFAULT_LIMIT;
 
-  const runtime = readRecentLines(join(eventsDir, `${threadId}.ndjson`), limit);
-  const native = readRecentLines(join(nativeDir, `${threadId}.ndjson`), limit);
+  const runtime = readRecentLines(join(eventsDir, `${threadId}.ndjson`), limit, isRuntimeEvent);
+  const native = readRecentLines(join(nativeDir, `${threadId}.ndjson`), limit, isNativeRecord);
 
   // cap each log on its own, then merge: the native tee is several times
   // chattier than the runtime stream, and one shared cap would leave the
   // Events lens with a handful of rows behind hundreds of raw ones
   const merged: InspectorEntry[] = [
-    ...runtime.lines.map((data): InspectorEntry => ({ kind: "runtime", at: timeOf(data, "createdAt"), data })),
-    ...native.lines.map((data): InspectorEntry => ({ kind: "native", at: timeOf(data, "at"), data })),
+    ...runtime.lines.map((data): InspectorEntry => ({ kind: "runtime", at: data.createdAt, data })),
+    ...native.lines.map((data): InspectorEntry => ({ kind: "native", at: data.at, data })),
   ];
   // stable sort: ties keep file order, which is emit order
   merged.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));

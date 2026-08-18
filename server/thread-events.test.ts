@@ -16,6 +16,7 @@ afterEach(() => {
 });
 
 const line = (o: unknown) => JSON.stringify(o) + "\n";
+const runtime = (event: Record<string, unknown>) => ({ provider: "test", threadId: "t1", ...event });
 
 describe("readThreadEvents", () => {
   it("returns an empty page when neither log exists", () => {
@@ -32,8 +33,8 @@ describe("readThreadEvents", () => {
     const nativeDir = tmp();
     writeFileSync(
       join(eventsDir, "t1.ndjson"),
-      line({ eventId: "e1", type: "turn.started", threadId: "t1", createdAt: "2026-08-17T10:00:00.000Z" }) +
-        line({ eventId: "e2", type: "turn.completed", threadId: "t1", createdAt: "2026-08-17T10:00:02.000Z", ok: true }),
+      line(runtime({ eventId: "e1", type: "turn.started", createdAt: "2026-08-17T10:00:00.000Z" })) +
+        line(runtime({ eventId: "e2", type: "turn.completed", createdAt: "2026-08-17T10:00:02.000Z", ok: true })),
     );
     writeFileSync(
       join(nativeDir, "t1.ndjson"),
@@ -56,7 +57,7 @@ describe("readThreadEvents", () => {
     const nativeDir = tmp();
     let body = "";
     for (let i = 0; i < 10; i++) {
-      body += line({ eventId: `e${i}`, type: "content.delta", threadId: "t1", createdAt: `2026-08-17T10:00:${String(i).padStart(2, "0")}.000Z` });
+      body += line(runtime({ eventId: `e${i}`, type: "content.delta", createdAt: `2026-08-17T10:00:${String(i).padStart(2, "0")}.000Z`, streamKind: "assistant_text", delta: String(i) }));
     }
     writeFileSync(join(eventsDir, "t1.ndjson"), body);
     const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 3 });
@@ -69,9 +70,9 @@ describe("readThreadEvents", () => {
     const nativeDir = tmp();
     writeFileSync(
       join(eventsDir, "t1.ndjson"),
-      line({ eventId: "e1", type: "turn.started", threadId: "t1", createdAt: "2026-08-17T10:00:00.000Z" }) +
+      line(runtime({ eventId: "e1", type: "turn.started", createdAt: "2026-08-17T10:00:00.000Z" })) +
         "{not json\n" +
-        line({ eventId: "e2", type: "turn.completed", threadId: "t1", createdAt: "2026-08-17T10:00:02.000Z", ok: true }),
+        line(runtime({ eventId: "e2", type: "turn.completed", createdAt: "2026-08-17T10:00:02.000Z", ok: true })),
     );
     const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1" });
     expect(page.entries).toHaveLength(2);
@@ -80,11 +81,29 @@ describe("readThreadEvents", () => {
     expect(page.total.runtime).toBe(3);
   });
 
+  it("discards JSON-valid records that do not satisfy the inspector wire contract", () => {
+    const eventsDir = tmp();
+    const nativeDir = tmp();
+    writeFileSync(
+      join(eventsDir, "t1.ndjson"),
+      line(null) +
+        line({ eventId: "incomplete", provider: "claude", threadId: "t1", createdAt: "1", type: "content.delta", streamKind: "assistant_text" }) +
+        line({ eventId: "valid", provider: "claude", threadId: "t1", createdAt: "2", type: "content.delta", streamKind: "assistant_text", delta: "ok" }),
+    );
+    writeFileSync(join(nativeDir, "t1.ndjson"), line(null) + line({ at: "2", dir: "in", source: "claude", msg: {} }));
+    const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1" });
+    expect(page.entries.map((entry) => [entry.kind, (entry.data as { eventId?: string }).eventId])).toEqual([
+      ["runtime", "valid"],
+      ["native", undefined],
+    ]);
+    expect(page.total).toEqual({ runtime: 3, native: 2 });
+  });
+
   it("keeps walking backward when a corrupt tail record would otherwise consume the limit", () => {
     const eventsDir = tmp();
     const nativeDir = tmp();
     const body = Array.from({ length: 20 }, (_, i) =>
-      line({ eventId: `e${i}`, type: "content.delta", threadId: "t1", createdAt: `2026-08-17T10:00:${String(i).padStart(2, "0")}.000Z` }),
+      line(runtime({ eventId: `e${i}`, type: "content.delta", createdAt: `2026-08-17T10:00:${String(i).padStart(2, "0")}.000Z`, streamKind: "assistant_text", delta: String(i) })),
     ).join("");
     writeFileSync(join(eventsDir, "t1.ndjson"), body + "{broken}\n");
     const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 3 });
@@ -95,7 +114,7 @@ describe("readThreadEvents", () => {
   it("normalizes non-finite and fractional limits at the helper boundary", () => {
     const eventsDir = tmp();
     const nativeDir = tmp();
-    writeFileSync(join(eventsDir, "t1.ndjson"), line({ eventId: "e1", createdAt: "1" }) + line({ eventId: "e2", createdAt: "2" }));
+    writeFileSync(join(eventsDir, "t1.ndjson"), line(runtime({ eventId: "e1", createdAt: "1", type: "turn.started" })) + line(runtime({ eventId: "e2", createdAt: "2", type: "turn.started" })));
     expect(readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: Number.NaN }).entries).toHaveLength(2);
     expect(readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 1.9 }).entries).toHaveLength(1);
   });
@@ -104,10 +123,10 @@ describe("readThreadEvents", () => {
     const eventsDir = tmp();
     const nativeDir = tmp();
     const file = join(eventsDir, "t1.ndjson");
-    writeFileSync(file, line({ eventId: "large", createdAt: "1", text: "🐭".repeat(40_000) }));
+    writeFileSync(file, line(runtime({ eventId: "large", createdAt: "1", type: "turn.started", text: "🐭".repeat(40_000) })));
     expect(readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 2 }).total.runtime).toBe(1);
 
-    appendFileSync(file, line({ eventId: "latest", createdAt: "2" }));
+    appendFileSync(file, line(runtime({ eventId: "latest", createdAt: "2", type: "turn.started" })));
     const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 2 });
     expect(page.total.runtime).toBe(2);
     expect(page.entries.map((entry) => (entry.data as { eventId: string }).eventId)).toEqual(["large", "latest"]);

@@ -324,6 +324,73 @@ describe("ensureKimiInjectAlias", () => {
     expect(text).not.toContain("max_context_size = 262144");
   });
 
+  it("treats a quoted protocol key as already set and does not duplicate it", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-quoted-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        '"protocol" = "openai"',
+        "",
+      ].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text.match(/protocol/g)?.length).toBe(1);
+    expect(text).toContain("max_context_size = 262144");
+  });
+
+  it("finds a heading with a trailing comment and does not append a second table", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-heading-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      ['[models."omlx/GLM-5.2-fp8"] # keep', 'provider = "omlx"', 'model = "GLM-5.2-fp8"', ""].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text.match(/\[models\./g)?.length).toBe(1);
+    expect(text).toContain("# keep");
+    expect(text).toContain('protocol = "openai"');
+  });
+
+  it("does not treat a bracket line inside a multiline string as a table", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-ml-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        'notes = """',
+        "[providers.evil]",
+        'protocol = "skip"',
+        '"""',
+        "",
+      ].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text).toContain('protocol = "skip"');
+    expect(text).toContain('protocol = "openai"');
+    const notesOpen = text.indexOf('"""', text.indexOf("notes"));
+    const notesClose = text.indexOf('"""', notesOpen + 3);
+    const protocolAt = text.indexOf('protocol = "openai"');
+    expect(protocolAt).toBeGreaterThan(notesClose);
+    expect(text).toContain("[providers.omlx]");
+    expect(text).toContain("[providers.evil]");
+  });
+
   it("treats USERPROFILE as the same home for credentials and config", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-kimi-userprofile-"));
     scratchDirs.push(home);

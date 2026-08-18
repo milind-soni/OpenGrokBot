@@ -39,41 +39,236 @@ function credentialsPath(env: Record<string, string | undefined>) {
   return join(kimiDataRoot(env), "credentials", "kimi-code.json");
 }
 
+/** Quote a TOML string value. */
 function quoteToml(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Quote a TOML key when it is not a bare identifier. */
 function quoteTomlKey(key: string): string {
   if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
   return quoteToml(key);
 }
 
-function hasTomlTable(text: string, heading: string): boolean {
-  return text.split(/\r?\n/).some((line) => line.trim() === heading);
+/** Strip a `#` comment that is not inside a quoted string. */
+function stripTomlLineComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) {
+      if (quote === '"' && c === "\\") {
+        i += 1;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "#") return line.slice(0, i);
+    if (c === '"' || c === "'") quote = c;
+  }
+  return line;
 }
 
+/** Canonical `a.b.c` form of a `[table]` heading, quotes and comments removed. */
+function canonicalizeTomlHeading(heading: string): string | null {
+  const trimmed = stripTomlLineComment(heading).trim();
+  const match = trimmed.match(/^\[([^[\]]+)\]$/);
+  if (!match) return null;
+  const parts: string[] = [];
+  const inner = match[1]!;
+  let i = 0;
+  while (i < inner.length) {
+    if (inner[i] === ".") {
+      i += 1;
+      continue;
+    }
+    const q = inner[i];
+    if (q === '"' || q === "'") {
+      i += 1;
+      let value = "";
+      while (i < inner.length && inner[i] !== q) {
+        if (q === '"' && inner[i] === "\\") {
+          value += inner[i + 1] ?? "";
+          i += 2;
+          continue;
+        }
+        value += inner[i];
+        i += 1;
+      }
+      if (inner[i] === q) i += 1;
+      parts.push(value);
+      continue;
+    }
+    let value = "";
+    while (i < inner.length && inner[i] !== ".") {
+      value += inner[i];
+      i += 1;
+    }
+    parts.push(value);
+  }
+  return parts.join(".");
+}
+
+/** Unwrap `"key"` / `'key'` so a quoted assignment matches the bare name. */
+function unquoteTomlKey(raw: string): string {
+  const key = raw.trim();
+  if (key.length >= 2 && ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'")))) {
+    return key.slice(1, -1);
+  }
+  return key;
+}
+
+/** Bare key on the left of `key = value`. */
+function tomlRowKey(row: string): string {
+  const eq = row.indexOf("=");
+  return unquoteTomlKey(eq < 0 ? row : row.slice(0, eq));
+}
+
+/** Walk `text` and yield tables, skipping `[` inside strings (including multiline). */
+function tomlTables(text: string): Array<{ name: string; headingStart: number; bodyStart: number; end: number }> {
+  type Mode = "out" | "basic" | "literal" | "mlbasic" | "mllit";
+  const headings: Array<{ name: string; lineStart: number; lineEnd: number }> = [];
+  let mode: Mode = "out";
+  let i = 0;
+  const atLineStart = (idx: number) => idx === 0 || text[idx - 1] === "\n";
+  while (i < text.length) {
+    if (mode === "mlbasic") {
+      if (text.startsWith('"""', i)) {
+        mode = "out";
+        i += 3;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === "mllit") {
+      if (text.startsWith("'''", i)) {
+        mode = "out";
+        i += 3;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === "basic") {
+      if (text[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (text[i] === '"') mode = "out";
+      i += 1;
+      continue;
+    }
+    if (mode === "literal") {
+      if (text[i] === "'") mode = "out";
+      i += 1;
+      continue;
+    }
+    if (text.startsWith('"""', i)) {
+      mode = "mlbasic";
+      i += 3;
+      continue;
+    }
+    if (text.startsWith("'''", i)) {
+      mode = "mllit";
+      i += 3;
+      continue;
+    }
+    if (text[i] === '"') {
+      mode = "basic";
+      i += 1;
+      continue;
+    }
+    if (text[i] === "'") {
+      mode = "literal";
+      i += 1;
+      continue;
+    }
+    if (atLineStart(i)) {
+      let j = i;
+      while (j < text.length && (text[j] === " " || text[j] === "\t")) j += 1;
+      if (text[j] === "[") {
+        const nl = text.indexOf("\n", j);
+        const lineEnd = nl < 0 ? text.length : nl;
+        const name = canonicalizeTomlHeading(text.slice(j, lineEnd).replace(/\r$/, ""));
+        if (name) headings.push({ name, lineStart: i, lineEnd });
+        i = lineEnd + (nl < 0 ? 0 : 1);
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return headings.map((heading, index) => ({
+    name: heading.name,
+    headingStart: heading.lineStart,
+    bodyStart: heading.lineEnd + (text[heading.lineEnd] === "\n" ? 1 : 0),
+    end: index + 1 < headings.length ? headings[index + 1]!.lineStart : text.length,
+  }));
+}
+
+/** Keys assigned at line start in a table body, including `"quoted"` keys. */
+function tomlKeys(block: string): Set<string> {
+  const keys = new Set<string>();
+  let lineStart = 0;
+  let mode: "out" | "mlbasic" | "mllit" = "out";
+  const take = (end: number) => {
+    if (mode !== "out") return;
+    const line = stripTomlLineComment(block.slice(lineStart, end));
+    const eq = line.indexOf("=");
+    if (eq > 0) keys.add(unquoteTomlKey(line.slice(0, eq)));
+  };
+  for (let i = 0; i < block.length; i++) {
+    if (mode === "mlbasic") {
+      if (block.startsWith('"""', i)) {
+        mode = "out";
+        i += 2;
+      }
+    } else if (mode === "mllit") {
+      if (block.startsWith("'''", i)) {
+        mode = "out";
+        i += 2;
+      }
+    } else if (block.startsWith('"""', i)) {
+      mode = "mlbasic";
+      i += 2;
+    } else if (block.startsWith("'''", i)) {
+      mode = "mllit";
+      i += 2;
+    } else if (block[i] === "\n") {
+      take(i);
+      lineStart = i + 1;
+    }
+  }
+  take(block.length);
+  return keys;
+}
+
+/** Whether `text` already has this table, ignoring quotes and trailing comments. */
+function hasTomlTable(text: string, heading: string): boolean {
+  const name = canonicalizeTomlHeading(heading);
+  return name !== null && tomlTables(text).some((table) => table.name === name);
+}
+
+/** Whether a table body already assigns `key` (`protocol` or `"protocol"`). */
 function tomlTableHasKey(block: string, key: string): boolean {
-  return block.split(/\r?\n/).some((line) => {
-    const stripped = line.trim();
-    if (!stripped || stripped.startsWith("#")) return false;
-    const eq = stripped.indexOf("=");
-    return eq > 0 && stripped.slice(0, eq).trim() === key;
-  });
+  return tomlKeys(block).has(key);
 }
 
 /** Insert missing keys into an existing table. Does not overwrite set values. */
 function patchTomlTable(text: string, heading: string, rows: string[]): string {
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === heading);
-  if (start < 0) return text;
-  let end = start + 1;
-  while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
-  const block = lines.slice(start, end).join("\n");
-  const missing = rows.filter((row) => !tomlTableHasKey(block, row.split("=")[0]!.trim()));
+  const name = canonicalizeTomlHeading(heading);
+  if (!name) return text;
+  const table = tomlTables(text).find((entry) => entry.name === name);
+  if (!table) return text;
+  const keys = tomlKeys(text.slice(table.bodyStart, table.end));
+  const missing = rows.filter((row) => !keys.has(tomlRowKey(row)));
   if (!missing.length) return text;
-  let insertAt = end;
-  while (insertAt > start + 1 && lines[insertAt - 1] === "") insertAt--;
-  return [...lines.slice(0, insertAt), ...missing, ...lines.slice(insertAt)].join("\n");
+  let insertAt = table.end;
+  while (insertAt > table.bodyStart && (text[insertAt - 1] === "\n" || text[insertAt - 1] === "\r")) insertAt -= 1;
+  const before = text.slice(0, insertAt);
+  const after = text.slice(insertAt);
+  const pad = before.endsWith("\n") || before.length === 0 ? "" : "\n";
+  return `${before}${pad}${missing.join("\n")}${after.startsWith("\n") ? "" : "\n"}${after}`;
 }
 
 /** Write [providers.host] + [models."host/alias"] so `kimi -m` hits the local host. */
@@ -170,6 +365,7 @@ export function applyKimiLocalModelEnv(
   env.KIMI_MODEL_DISPLAY_NAME = `${inject.model} (${host.label})`;
 }
 
+/** Drop leftover shell `KIMI_MODEL_*` so they cannot steal a cloud turn. */
 function stripKimiModelEnv(env: Record<string, string | undefined>): void {
   for (const key of KIMI_MODEL_ENV) delete env[key];
 }

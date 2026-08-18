@@ -51,9 +51,6 @@ export function isCloudDesktopJoin(method: string, path: string): boolean {
  * fails to match and is denied rather than forwarded — the failure mode of
  * a strict pattern is a closed door, which is the one to have. */
 const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
-  // liveness — not used by the app, but it is the first thing anyone curls
-  // when pairing will not work, and it discloses nothing
-  { method: "GET", path: /^\/api\/health$/ },
   // configured-or-not booleans. The write side is refused below: reading
   // which providers are set up is not reading their keys.
   { method: "GET", path: /^\/api\/config$/ },
@@ -126,6 +123,11 @@ const EXPLAINED: ReadonlyArray<{ path: RegExp; error: string }> = [
 export function denyReason({ path, method, authenticated }: RouteRequest): Denial | null {
   // Pairing is the one thing a device does before it has a credential.
   if (method === "POST" && path === "/api/pair") return null;
+  // Liveness is the other: it exists to be the first thing anyone curls when
+  // pairing will not work, and behind the token check it answered 401 to
+  // exactly the person it was for — which reads as "broken" rather than
+  // "unpaired". It discloses nothing a port scan would not.
+  if (method === "GET" && path === "/api/health") return null;
 
   if (!authenticated) {
     return { status: 401, error: "pair this device from the OpenMausBot companion on your computer" };

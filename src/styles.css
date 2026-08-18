@@ -48,40 +48,19 @@ body {
   overflow: hidden;
 }
 
-/* ── focus ───────────────────────────────────────────────────────────────
-   Nine components clear the UA outline with `outline-none` and nothing
-   put a ring back, so every text field in the app — composer, search, the
-   answer box on an approval card, both onboarding fields, all three API
-   key fields — focused invisibly. Buttons kept the browser default, which
-   is legible but looks like an unstyled page inside a hand-tuned dark UI.
-
-   These rules are deliberately UNLAYERED. Tailwind ships its utilities in
-   @layer utilities, and unlayered styles beat every layer regardless of
-   specificity, so this lands on top of `outline-none` without !important
-   and without touching the nine components (all of which have open PRs
-   against them). Everything is :focus-visible, so a mouse click never
-   paints a ring — only keyboard and programmatic focus do.
-
-   The ring deliberately sets no border-radius: an outline already follows
-   the element's own corners, and 26 controls in here are `rounded-full`,
-   which a fixed radius would square off. */
+/* Keep focus visible after components clear the browser outline. These
+   unlayered rules outrank Tailwind utilities without needing !important. */
 :focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* Text fields fill their container edge to edge — the composer and the
-   sidebar search sit flush inside a padded surface — so an outline drawn
-   outside them is clipped by the parent. Draw this one just inside the
-   edge instead, where it always survives.
-
-   Most fields already carry a radius and the outline picks it up. The
-   composer input has none, so its ring came out a hard rectangle sitting
-   inside a pill; the radius here only ever softens that corner, and text
-   fields are never the `rounded-full` controls. */
-:is(input, textarea, select):focus-visible {
+/* Chromium intentionally matches :focus-visible on text controls after a
+   pointer click too. Make that behavior explicit: every focused editor has
+   a clear inset ring, while retaining each control's own border radius. */
+:is(input, textarea, select):focus {
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
-  border-radius: var(--radius-xl);
 }
 
 ::selection {
@@ -130,6 +109,10 @@ body {
 @keyframes shimmer {
   from { background-position: 200% 50%; }
   to { background-position: -200% 50%; }
+}
+@keyframes reduced-loader-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 .thinking-shimmer {
   background: linear-gradient(90deg, var(--color-ink-secondary) 40%, var(--color-ink) 50%, var(--color-ink-secondary) 60%);
@@ -609,21 +592,19 @@ body {
 
   .maus-eyes { transform: none; }
 
-  /* The mascot was the only thing that honoured this. Panels still flew in
-     from the right, cards still popped, and every hover transition still
-     ran — the settings drawer and the computer panel are the big ones. A
-     user who asked the OS for less motion gets a still app now.
-
-     Not `animation: none`: a spinner that never advances reads as a hung
-     app. Collapse the duration instead, so anything looping still ticks
-     over without travelling. */
+  /* Stop spatial motion instead of accelerating infinite animations. Loading
+     icons keep a slow opacity pulse, so progress remains visible without
+     rotation, bounce, or flicker. */
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-delay: 0ms !important;
+    animation: none !important;
     transition-duration: 0.01ms !important;
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation: reduced-loader-pulse 1.6s ease-in-out infinite !important;
   }
 }

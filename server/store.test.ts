@@ -29,6 +29,38 @@ describe("Store", () => {
     expect(bot.modelSelection).toEqual(selection());
   });
 
+  it("createBot with seedMessages:false starts with an empty transcript", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Imported" }, { seedMessages: false });
+    expect(store.messagesFor(bot.threadId)).toHaveLength(0);
+  });
+
+  it("addTaskUsage accumulates settled-turn totals per task and survives a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 1200, output: 300, costUsd: null })).toEqual({
+      input: 1200,
+      output: 300,
+      costUsd: null,
+      turns: 1,
+    });
+    store.addTaskUsage(bot.id, bot.threadId, { input: 800, output: 100, costUsd: null });
+    store.addTaskUsage(bot.id, bot.threadId, { input: Number.NaN, output: -20, costUsd: null });
+    // a different thread never inherits another task's tally
+    expect(store.addTaskUsage(bot.id, "no-such-thread", { input: 5, output: 5, costUsd: null })).toBeNull();
+
+    const reloaded = new Store(selection);
+    expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, costUsd: null, turns: 3 });
+  });
+
+  it("persists the per-bot composio gate", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.patchBot(bot.id, { composio: false });
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.composio).toBe(false);
+  });
+
   it("rotates colors across created bots", () => {
     const store = new Store(selection);
     const first = store.createBot();
@@ -252,21 +284,6 @@ describe("Store", () => {
     expect(store.messagesFor(bot.threadId)).toHaveLength(0);
   });
 
-  it("addTaskUsage accumulates settled-turn totals per task and survives a restart", () => {
-    const store = new Store(selection);
-    const bot = store.createBot();
-    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 1200, output: 300 })).toMatchObject({
-      usage: { input: 1200, output: 300, turns: 1 },
-    });
-    store.addTaskUsage(bot.id, bot.threadId, { input: 800, output: 100 });
-    store.addTaskUsage(bot.id, bot.threadId, { input: Number.NaN, output: -20 });
-    // a different thread never inherits another task's tally
-    expect(store.addTaskUsage(bot.id, "no-such-thread", { input: 5, output: 5 })).toBeNull();
-
-    const reloaded = new Store(selection);
-    expect(reloaded.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 2000, output: 400, turns: 3 });
-  });
-
   it("persists the per-bot composio gate", () => {
     const store = new Store(selection);
     const bot = store.createBot();
@@ -373,7 +390,7 @@ describe("Store change stream", () => {
     store.renameTask(bot.id, bot.threadId, "renamed");
     store.setResumeCursor(bot.id, "claude", "s1", bot.threadId);
     store.pinTaskCwd(bot.id, bot.threadId, "/private/workspace");
-    store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 5 });
+    store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 5, costUsd: null });
     expect(events.every((e) => e.type === "bot" && e.botId === bot.id)).toBe(true);
     expect(events).toHaveLength(7);
     store.deleteBot(bot.id);
@@ -477,6 +494,50 @@ describe("Store redacts bot-authored secrets on write", () => {
     // and the stored copy is what was masked, not just the returned one
     const again = new Store(selection);
     expect(again.messagesFor(bot.threadId).find((m) => m.id === reply.id)?.text).not.toContain(key);
+  });
+});
+
+describe("Store task usage", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("banks each turn's tokens and cost on the task, counting turns", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 100, output: 20, costUsd: 0.01 })).toEqual({
+      input: 100,
+      output: 20,
+      costUsd: 0.01,
+      turns: 1,
+    });
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 50, output: 5, costUsd: 0.005 })).toEqual({
+      input: 150,
+      output: 25,
+      costUsd: 0.015,
+      turns: 2,
+    });
+    expect(store.taskByThread(bot.id, bot.threadId)?.usage).toEqual({ input: 150, output: 25, costUsd: 0.015, turns: 2 });
+  });
+
+  it("keeps cost null until some turn reports one, then sums only reported costs", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 1, costUsd: null })?.costUsd).toBeNull();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 1, costUsd: 0.02 })?.costUsd).toBe(0.02);
+    expect(store.addTaskUsage(bot.id, bot.threadId, { input: 10, output: 1, costUsd: null })?.costUsd).toBe(0.02);
+  });
+
+  it("counts a turn that reported no tokens at all", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, bot.threadId, { costUsd: null })).toEqual({ input: 0, output: 0, costUsd: null, turns: 1 });
+  });
+
+  it("ignores an unknown task", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    expect(store.addTaskUsage(bot.id, "nope", { input: 1, output: 1, costUsd: null })).toBeNull();
   });
 });
 

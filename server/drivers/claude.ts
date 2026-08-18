@@ -476,7 +476,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
 
       let settled = false;
-      const settle = (ok: boolean, stopReason: string | null, cost: number | null = null) => {
+      const settle = (
+        ok: boolean,
+        stopReason: string | null,
+        cost: number | null = null,
+        usage?: { input: number; output: number },
+      ) => {
         if (settled) return;
         settled = true;
         broker?.close();
@@ -487,7 +492,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           } catch {}
         }
         active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost, ...(usage ? { usage } : {}) });
       };
 
       // token streaming: true while --include-partial-messages is delivering
@@ -560,7 +565,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             break;
           case "result":
-            settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
+            // result.usage is this invocation's total — one process per turn,
+            // so it is the turn's figure. cache reads count as input: they
+            // are billed (at the cache rate) and they fill the window.
+            settle(
+              o.is_error !== true,
+              o.stop_reason ?? o.terminal_reason ?? null,
+              o.total_cost_usd ?? null,
+              o.usage
+                ? {
+                    input: (o.usage.input_tokens || 0) + (o.usage.cache_read_input_tokens || 0) + (o.usage.cache_creation_input_tokens || 0),
+                    output: o.usage.output_tokens || 0,
+                  }
+                : undefined,
+            );
             break;
         }
       };
@@ -623,7 +641,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
       const authenticated = await claudeSignedIn(config.cli, env);
-      return { state: "available", version, authenticated };
+      // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
+      // CLI's own login (Pro/Max): the cost it reports is what the call
+      // WOULD bill, not a charge
+      return { state: "available", version, authenticated, billing: "subscription" };
     };
 
     return {

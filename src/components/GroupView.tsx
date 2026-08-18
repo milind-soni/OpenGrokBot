@@ -24,10 +24,17 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
+import { useFocusMessage } from "@/lib/focus-message";
 import { shortPath } from "@/lib/short-path";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { showWorkingDots } from "@/lib/turn-tail";
-import { expandWindowStart, resolveTranscriptWindow, tailWindowStart } from "@/lib/transcript-window";
+import {
+  TRANSCRIPT_WINDOW_SIZE,
+  expandWindowStart,
+  focusWindowRange,
+  resolveTranscriptWindow,
+  tailWindowStart,
+} from "@/lib/transcript-window";
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -119,7 +126,7 @@ const Transcript = memo(function Transcript({
           ) : null;
         if (!row) return null;
         return (
-          <div key={m.id} className="contents">
+          <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && (
               <div className="py-3 text-center text-[13px] text-ink-secondary">
                 {dayLabel(m.at)} {formatTime(m.at)}
@@ -331,20 +338,27 @@ export function GroupView({ group }: { group: Group }) {
   // the anchored boundary re-tails on a render-phase reset when the room (or
   // its thread) changes. Working dots below stay on the FULL list's tail.
   const transcriptKey = `${group.id}:${group.threadId}`;
-  const [transcriptWindow, setTranscriptWindow] = useState(() => ({
+  const [transcriptWindow, setTranscriptWindow] = useState<{
+    key: string;
+    start: number;
+    end: number | null;
+  }>(() => ({
     key: transcriptKey,
     start: tailWindowStart(group.messages.length),
+    end: null,
   }));
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length) });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length), end: null });
   }
   const {
     visible: windowedMessages,
     hiddenCount,
+    laterCount,
     startIndex,
+    endIndex,
   } = useMemo(
-    () => resolveTranscriptWindow(group.messages, transcriptWindow.start),
-    [group.messages, transcriptWindow.start],
+    () => resolveTranscriptWindow(group.messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
+    [group.messages, transcriptWindow.start, transcriptWindow.end],
   );
 
   const setBottomFollow = useCallback((next: boolean) => {
@@ -353,6 +367,20 @@ export function GroupView({ group }: { group: Group }) {
   }, []);
 
   useEffect(() => setBottomFollow(true), [group.id, setBottomFollow]);
+
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    const focus = state.focusMessage;
+    if (!focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
+    const targetIndex = group.messages.findIndex((message) => message.id === focus.messageId);
+    if (targetIndex < 0) return;
+    appliedFocus.current = focus.nonce;
+    const range = focusWindowRange(group.messages.length, targetIndex);
+    setBottomFollow(false);
+    setTranscriptWindow({ key: transcriptKey, start: range.start, end: range.end });
+  }, [group.messages, group.threadId, setBottomFollow, state.focusMessage, transcriptKey]);
+  useFocusMessage(group.threadId, group.messages.length > 0);
+
   useEffect(() => setBulletinDraft(group.bulletin), [group.id, group.bulletin]);
   // an open folder editor belongs to the room it was opened in
   useEffect(() => setFolderOpen(false), [group.id]);
@@ -375,7 +403,7 @@ export function GroupView({ group }: { group: Group }) {
     // event pin the viewport back to the bottom
     setBottomFollow(false);
     const start = expandWindowStart(startIndex);
-    setTranscriptWindow((w) => ({ key: w.key, start }));
+    setTranscriptWindow((w) => ({ ...w, start }));
   };
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -386,6 +414,12 @@ export function GroupView({ group }: { group: Group }) {
     // downward user scroll
     previousScrollTop.current = el.scrollTop;
   }, [transcriptWindow.start]);
+
+  const showLater = () => {
+    setBottomFollow(false);
+    const nextEnd = Math.min(group.messages.length, endIndex + TRANSCRIPT_WINDOW_SIZE);
+    setTranscriptWindow((w) => ({ ...w, end: nextEnd >= group.messages.length ? null : nextEnd }));
+  };
 
   const atEnd = () => {
     const el = scrollRef.current;
@@ -554,6 +588,16 @@ export function GroupView({ group }: { group: Group }) {
             </div>
           )}
           <Transcript group={group} members={members} messages={windowedMessages} />
+          {laterCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                onClick={showLater}
+                className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+              >
+                Show later messages ({laterCount} more)
+              </button>
+            </div>
+          )}
           {speaker && showWorkingDots(true, streaming, group.messages.at(-1), speaker.id) && (
             <>
               <ClusterLabel bot={speaker} name={speaker.name} color={speaker.color} />
@@ -579,7 +623,10 @@ export function GroupView({ group }: { group: Group }) {
         <button
           onClick={() => {
             setBottomFollow(true);
-            scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+            setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length), end: null });
+            requestAnimationFrame(() => {
+              scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+            });
           }}
           aria-label="Jump to latest messages"
           className="animate-pop-in absolute bottom-24 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"

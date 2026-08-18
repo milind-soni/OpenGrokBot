@@ -8,6 +8,8 @@ import { isIP } from "node:net";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { z } from "zod";
+
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -55,7 +57,16 @@ import {
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
-import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
+import {
+  ensureWorkspace,
+  listMemoryTopics,
+  isMemoryTopicName,
+  memorySystemPrompt,
+  readMemoryFile,
+  readMemoryTopic,
+  writeMemoryFile,
+  MEMORY_FILE_MAX_BYTES,
+} from "./workspace.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease } from "./local-vm-lease.ts";
@@ -720,13 +731,22 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
-      const usage = turnUsage.get(event.threadId);
+      const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       // group turns run on the room's thread — the speaking bot's task
       // tally is not the right home for a shared room's spend, so only
       // 1:1 task turns are tallied for now.
-      if (bot && usage) store.addTaskUsage(bot.id, event.threadId, usage);
       if (bot) {
+        // bank what this turn spent before the bot broadcast carries the
+        // task list to every window. The driver's own per-turn figure
+        // (turn.completed.usage) is authoritative; a driver that only
+        // streams the running indicator falls back to its last value.
+        const tokens = event.usage ?? lastReported;
+        store.addTaskUsage(bot.id, event.threadId, {
+          input: tokens?.input,
+          output: tokens?.output,
+          costUsd: event.cost ?? null,
+        });
         // settled → idle; a setup failure already marked it dead, keep that
         if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
         store.patchBot(bot.id, { unread: true });
@@ -2145,15 +2165,25 @@ const server = createServer(async (req, res) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      // whether each hit sits on its thread's visible branch — a click on
+      // one that does not has to switch versions first (and only then)
+      const activePaths = new Map<string, Set<string>>();
+      const onActivePath = (threadId: string, messageId: string) => {
+        let ids = activePaths.get(threadId);
+        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        return ids.has(messageId);
+      };
       const hits = searchMessages(q, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
+          if (!bot && !group) return null;
+          const active = onActivePath(hit.threadId, hit.messageId);
           if (bot) {
             const task = store.taskByThread(bot.id, hit.threadId);
-            return { ...hit, botId: bot.id, name: bot.name, task: task?.title };
+            return { ...hit, botId: bot.id, name: bot.name, task: task?.title, onActivePath: active };
           }
-          if (group) return { ...hit, groupId: group.id, name: group.name };
+          if (group) return { ...hit, groupId: group.id, name: group.name, onActivePath: active };
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);
@@ -2353,6 +2383,7 @@ const server = createServer(async (req, res) => {
         patch.defaultResponder = responder;
       }
       if (body.cwd !== undefined) {
+        if (existing.dm) return json(res, 400, { error: "direct-message channels cannot have a working folder" });
         const checked = validateBotCwd(body.cwd);
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.cwd ?? undefined;
@@ -2573,6 +2604,49 @@ const server = createServer(async (req, res) => {
         } catch {}
       }
       return json(res, 200, { ok: true });
+    }
+
+    // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
+    // The files already belong to the user (plain markdown in the bot's
+    // workspace); these routes only make them visible without a trip to
+    // the filesystem. Reads never create the workspace — a bot that has
+    // not run yet simply has nothing to show.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { ...readMemoryFile(m[1]), topics: listMemoryTopics(m[1]) });
+    }
+    if (m && method === "PUT") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req));
+      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
+      if (Buffer.byteLength(parsed.data.text, "utf8") > MEMORY_FILE_MAX_BYTES) {
+        return json(res, 400, {
+          error: `memory is capped at ${MEMORY_FILE_MAX_BYTES / 1024}KB — move longer notes into memory/<topic>.md files`,
+        });
+      }
+      writeMemoryFile(m[1], parsed.data.text);
+      // truncated echoes back so the editor can warn about the load budget
+      return json(res, 200, { ok: true, truncated: readMemoryFile(m[1]).truncated });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
+    if (m && method === "GET") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      // Decode before validating: a UI-sent name arrives percent-encoded
+      // ("my notes.md" → "my%20notes.md"), and an encoded traversal
+      // ("..%2F..") must be judged by what it decodes TO, not slip through
+      // as an opaque token. The name gate then rejects anything that is not
+      // a single plain-markdown path segment.
+      let name: string;
+      try {
+        name = decodeURIComponent(m[2]);
+      } catch {
+        return json(res, 400, { error: "invalid topic name" });
+      }
+      if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
+      const text = readMemoryTopic(m[1], name);
+      if (text === null) return json(res, 404, { error: "no such topic file" });
+      return json(res, 200, { name, text });
     }
 
     // onboarding/ask cards persist their answered/dismissed state

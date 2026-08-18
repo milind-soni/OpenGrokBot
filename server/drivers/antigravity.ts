@@ -209,12 +209,17 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // exiting, the bot would stay busy forever (agy's own --print-timeout 10m
       // is the only other net). Assigned just below; settle() always clears it.
       let watchdog: ReturnType<typeof setTimeout> | undefined;
-      const settle = (ok: boolean, stopReason: string | null, cost: number | null = null) => {
+      const settle = (
+        ok: boolean,
+        stopReason: string | null,
+        cost: number | null = null,
+        usage?: { input: number; output: number },
+      ) => {
         if (settled) return;
         settled = true;
         clearTimeout(watchdog);
         active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost, ...(usage ? { usage } : {}) });
       };
 
       // agy's print mode is argv-only, so a prompt beyond ARG_MAX would fail the
@@ -313,7 +318,19 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
                 output: payload.usage.output_tokens || 0,
               });
             }
-            settle(payload.status === "SUCCESS", payload.status ?? null, null);
+            // result.usage is the turn total (the per-step agent_response
+            // figures above are its parts, not additions to it)
+            settle(
+              payload.status === "SUCCESS",
+              payload.status ?? null,
+              null,
+              payload.usage
+                ? {
+                    input: (payload.usage.input_tokens || 0) + (payload.usage.cache_read_tokens || 0),
+                    output: payload.usage.output_tokens || 0,
+                  }
+                : undefined,
+            );
             break;
           }
         }

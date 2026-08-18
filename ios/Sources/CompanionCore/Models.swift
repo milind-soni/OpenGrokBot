@@ -216,6 +216,36 @@ public struct ThreadPage: Codable, Sendable {
     public var hasMore: Bool?
 }
 
+public struct SearchHit: Codable, Hashable, Identifiable, Sendable {
+    public var threadId: String
+    public var messageId: String
+    public var at: Double
+    public var role: Message.Role
+    public var kind: Message.Kind
+    public var snippet: String
+    public var matchStart: Int
+    public var matchLength: Int
+    public var botId: String?
+    public var groupId: String?
+    public var name: String
+    public var task: String?
+    public var onActivePath: Bool
+
+    public var id: String { "\(threadId):\(messageId)" }
+}
+
+public struct TranscriptExport: Sendable {
+    public var data: Data
+    public var filename: String
+    public var contentType: String
+
+    public init(data: Data, filename: String, contentType: String) {
+        self.data = data
+        self.filename = filename
+        self.contentType = contentType
+    }
+}
+
 public struct PairedDevice: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var name: String
@@ -306,4 +336,20 @@ public struct ScreenFrame: Hashable, Sendable {
 /// `POST /api/bots` — the harness answers with the bot it made.
 public struct CreatedBot: Codable, Sendable {
     public var bot: Bot
+}
+
+struct SearchResponse: Codable, Sendable {
+    var hits: [SearchHit]
+}
+
+struct MessageResponse: Codable, Sendable {
+    var message: Message
+}
+
+struct ActiveBranchResponse: Codable, Sendable {
+    var activeLeafId: String
+}
+
+struct BotResponse: Codable, Sendable {
+    var bot: Bot
 }

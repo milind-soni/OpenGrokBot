@@ -361,8 +361,9 @@ messages **per thread** to `join(home, ".openmausbot", "native",
 entries whose `msg.method === "session/prompt"`, and tell the prompts apart
 by **order and content**: prompt 1 (first engine) carries no replay
 wrapper; prompt 2 (second engine) matches
-`/joining this conversation[\s\S]*User: my dog is named Biscuit/`; and — as
-built — a prompt 3 after switching back to the first engine replays too.
+`/joining this conversation[\s\S]*User: my dog is named Biscuit/`; and prompt 3
+after switching back to the first engine must match
+`/joining this conversation[\s\S]*User: my dog is named Biscuit/` too.
 (There is no per-instance log; the tee is per thread.)
 
 Run: `pnpm vitest run server/branching.test.ts`

@@ -20,6 +20,8 @@ struct ChatView: View {
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
+    @State private var showingTasks = false
+    @State private var shareFile: ShareFile?
     @FocusState private var composerFocused: Bool
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -129,6 +131,20 @@ struct ChatView: View {
                     guard length > 0 else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
                 }
+                .onChange(of: session.focusedMessageId) { _, messageId in
+                    guard let messageId,
+                          messages.contains(where: { $0.id == messageId })
+                    else { return }
+                    withAnimation { proxy.scrollTo(messageId, anchor: .center) }
+                    session.consumeFocus(messageId)
+                }
+                .task {
+                    guard let messageId = session.focusedMessageId,
+                          messages.contains(where: { $0.id == messageId })
+                    else { return }
+                    proxy.scrollTo(messageId, anchor: .center)
+                    session.consumeFocus(messageId)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -174,6 +190,31 @@ struct ChatView: View {
                     .accessibilityLabel("Watch \(bot.name)'s computer")
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if case let .bot(bot) = current {
+                        Button("Tasks", systemImage: "square.stack") { showingTasks = true }
+                            .disabled(bot.busy == true)
+                    }
+                    Button("Share as Markdown", systemImage: "doc.plaintext") {
+                        Task {
+                            if let url = await session.export(threadId: current.threadId, format: "markdown") {
+                                shareFile = ShareFile(url: url)
+                            }
+                        }
+                    }
+                    Button("Share as JSON", systemImage: "curlybraces") {
+                        Task {
+                            if let url = await session.export(threadId: current.threadId, format: "json") {
+                                shareFile = ShareFile(url: url)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("Conversation actions")
+            }
             if current.busy, case let .bot(bot) = current {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Stop") { Task { await session.interrupt(bot: bot) } }
@@ -189,6 +230,12 @@ struct ChatView: View {
             // initial task above will not run again, so clear that new unread
             // bit here rather than leaving a badge on an open conversation.
             if unread { Task { await session.markRead(current) } }
+        }
+        .sheet(isPresented: $showingTasks) {
+            if case let .bot(bot) = current { TaskManagerView(bot: bot) }
+        }
+        .sheet(item: $shareFile) { file in
+            ActivityShareSheet(items: [file.url])
         }
     }
 
@@ -255,8 +302,87 @@ struct ChatView: View {
 struct MessageRow: View {
     let chat: Chat
     let message: Message
+    @EnvironmentObject private var session: Session
+    @State private var editingText = ""
+    @State private var showingEdit = false
+
+    private static let reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"]
+
+    private var versions: [Message] {
+        session.state.versions(of: message, inThread: chat.threadId)
+    }
 
     var body: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            content
+
+            if let comm = message.comm {
+                Label("Messaged \(comm.withName)", systemImage: "arrow.up.right.bubble")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.secondary)
+            }
+
+            if let reactions = message.reactions, !reactions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(reactionGroups(reactions), id: \.emoji) { group in
+                        Button("\(group.emoji) \(group.count)") {
+                            Task { await session.react(to: message, in: chat.threadId, emoji: group.emoji) }
+                        }
+                        .font(.system(size: 13))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .tint(group.mine ? Color.accentColor : Color.secondary)
+                    }
+                }
+            }
+
+            if versions.count > 1, let index = versions.firstIndex(where: { $0.id == message.id }),
+               case let .bot(bot) = chat {
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await session.switchVersion(to: versions[index - 1], for: bot) }
+                    } label: { Image(systemName: "chevron.left") }
+                    .disabled(index == 0 || bot.busy == true)
+                    Text("\(index + 1) of \(versions.count)")
+                    Button {
+                        Task { await session.switchVersion(to: versions[index + 1], for: bot) }
+                    } label: { Image(systemName: "chevron.right") }
+                    .disabled(index + 1 >= versions.count || bot.busy == true)
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.secondary)
+            }
+        }
+        .contextMenu {
+            ForEach(Self.reactionChoices, id: \.self) { emoji in
+                Button(emoji) { Task { await session.react(to: message, in: chat.threadId, emoji: emoji) } }
+            }
+            if message.role == .user, message.kind == .text, case let .bot(bot) = chat {
+                Divider()
+                Button("Edit and retry", systemImage: "pencil") {
+                    editingText = message.text ?? ""
+                    showingEdit = true
+                }
+                .disabled(bot.busy == true)
+            }
+        }
+        .alert("Edit and retry", isPresented: $showingEdit) {
+            TextField("Message", text: $editingText)
+            Button("Cancel", role: .cancel) {}
+            if case let .bot(bot) = chat {
+                Button("Send") {
+                    let text = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return }
+                    Task { await session.edit(message, for: bot, text: text) }
+                }
+            }
+        } message: {
+            Text("This creates a new version and continues from there.")
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch message.kind {
         case .text:
             TextBubble(message: message)
@@ -277,6 +403,27 @@ struct MessageRow: View {
             }
         }
     }
+
+    private func reactionGroups(_ reactions: [Reaction]) -> [(emoji: String, count: Int, mine: Bool)] {
+        Dictionary(grouping: reactions, by: \.emoji)
+            .map { (emoji: $0.key, count: $0.value.count, mine: $0.value.contains { $0.by == "user" }) }
+            .sorted { $0.emoji < $1.emoji }
+    }
+}
+
+private struct ShareFile: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+private struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 struct TextBubble: View {

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
   Crown,
   Folder,
@@ -18,6 +19,7 @@ import {
   Webhook,
   X,
 } from "lucide-react";
+import { costCaption, formatTokens, formatUsd, usageChip } from "@/lib/usage";
 import {
   useStore,
   useStreaming,
@@ -396,6 +398,13 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
+      {/* busy-gated so a flag stranded by a server restart shows nothing */}
+      {user && message.queued && bot.busy && (
+        <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
+          <Clock size={11} aria-hidden="true" />
+          <span>Queued — sends when this turn finishes</span>
+        </div>
+      )}
       <ReactionChips threadId={bot.threadId} message={message} align={user ? "right" : "left"} />
       {versions.length > 1 && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
@@ -836,6 +845,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
+          <UsageChip bot={bot} />
           <WorkingFolderChip bot={bot} />
           <ModelPicker bot={bot} />
           <CallButton bot={bot} />
@@ -978,6 +988,32 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+  );
+}
+
+/** What the open task has spent — quiet until the first turn settles.
+ * Click opens the bot's settings, where the Usage card has the breakdown. */
+function UsageChip({ bot }: { bot: Bot }) {
+  const { state, dispatch } = useStore();
+  const usage = bot.tasks?.find((t) => t.threadId === bot.threadId)?.usage;
+  const text = usage ? usageChip(usage) : "";
+  if (!usage || !text) return null;
+  const billing = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)?.snapshot.billing;
+  const detail = [
+    `${usage.turns} turn${usage.turns === 1 ? "" : "s"}`,
+    `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`,
+    usage.costUsd !== null ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <button
+      onClick={() => dispatch({ type: "toggleSettings", open: true })}
+      className="rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12px] tabular-nums text-ink-secondary hover:bg-raised hover:text-ink"
+      title={detail}
+    >
+      {text}
+    </button>
   );
 }
 

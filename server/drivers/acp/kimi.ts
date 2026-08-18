@@ -249,11 +249,6 @@ function hasTomlTable(text: string, heading: string): boolean {
   return name !== null && tomlTables(text).some((table) => table.name === name);
 }
 
-/** Whether a table body already assigns `key` (`protocol` or `"protocol"`). */
-function tomlTableHasKey(block: string, key: string): boolean {
-  return tomlKeys(block).has(key);
-}
-
 /** Insert missing keys into an existing table. Does not overwrite set values. */
 function patchTomlTable(text: string, heading: string, rows: string[]): string {
   const name = canonicalizeTomlHeading(heading);

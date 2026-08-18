@@ -304,6 +304,33 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
   });
 
+  it("kills a child that prints result but never exits on its own (#211)", async () => {
+    await create("result-then-hang");
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-lingering", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+
+    const { pid } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(typeof pid).toBe("number");
+
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 5_000;
+    while (alive() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(alive()).toBe(false);
+  }, 10_000);
+
   it("an exit before result becomes runtime.error + failed turn", async () => {
     await create("exit-early");
     await instance.adapter.sendTurn({ threadId: "t-crash", text: "go" });

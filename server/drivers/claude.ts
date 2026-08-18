@@ -477,6 +477,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       ) => {
         if (settled) return;
         settled = true;
+        // A one-shot `-p` process is expected to exit right after printing
+        // `result`, but a backgrounded MCP grandchild can keep it (or itself)
+        // alive — leaving a live process with a live broker connection that
+        // can raise a permission ask nobody can ever answer (issue #211). A
+        // no-op when the process already exited.
+        killCliTree(child);
         broker?.close();
         // the config file holds live credentials — it must not outlive the turn
         if (mcpConfigPath) {

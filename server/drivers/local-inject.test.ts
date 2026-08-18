@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DroidAgentDriver, ensureDroidInjectModel } from "./acp/droid.ts";
+import { applyDroidLocalAuthEnv, DroidAgentDriver, ensureDroidInjectModel } from "./acp/droid.ts";
 import { ensureGrokInjectSlug } from "./acp/grok.ts";
 import { applyKimiLocalModelEnv, ensureKimiInjectAlias, KimiAgentDriver } from "./acp/kimi.ts";
 import { ensureOpenCodeInjectModel } from "./acp/opencode-go.ts";
@@ -526,6 +526,62 @@ describe("ensureDroidInjectModel", () => {
     expect(id).toBe("custom:openmausbot-omlx-MiniMax-M3-4bit");
     expect(settings.customModels).toHaveLength(1);
     expect(settings.customModels[0]?.id).toBe(id);
+  });
+});
+
+describe("applyDroidLocalAuthEnv", () => {
+  it("fills a placeholder Factory key only for a local inject pick", () => {
+    const env: Record<string, string | undefined> = {};
+    applyDroidLocalAuthEnv(env, "ollama::ornith:35b-bf16");
+    expect(env.FACTORY_API_KEY).toBe("openmausbot-local");
+    applyDroidLocalAuthEnv(env, "ollama::ornith:35b-bf16");
+    expect(env.FACTORY_API_KEY).toBe("openmausbot-local");
+  });
+
+  it("leaves a real Factory key and cloud slugs alone", () => {
+    const kept: Record<string, string | undefined> = { FACTORY_API_KEY: "fk-real" };
+    applyDroidLocalAuthEnv(kept, "ollama::ornith:35b-bf16");
+    expect(kept.FACTORY_API_KEY).toBe("fk-real");
+    const cloud: Record<string, string | undefined> = {};
+    applyDroidLocalAuthEnv(cloud, "claude-opus-5");
+    applyDroidLocalAuthEnv(cloud, undefined);
+    expect(cloud.FACTORY_API_KEY).toBeUndefined();
+  });
+
+  it("puts the placeholder on the Droid child only for a local inject pick", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-droid-overlay-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".factory"), { recursive: true });
+    const dump = join(home, "dump.json");
+    const instance = await DroidAgentDriver.create({
+      instanceId: "droid-overlay",
+      displayName: "Droid",
+      environment: { HOME: home, FACTORY_HOME_OVERRIDE: home, FAKE_ACP_DUMP: dump, FACTORY_API_KEY: "" },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: false },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({
+        threadId: "t-inject",
+        text: "hi",
+        model: "ollama::ornith:35b-bf16",
+      });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.FACTORY_API_KEY).toBe("openmausbot-local");
+
+      await instance.adapter.sendTurn({
+        threadId: "t-cloud",
+        text: "hi",
+        model: "claude-opus-5",
+      });
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-cloud");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.FACTORY_API_KEY).not.toBe(
+        "openmausbot-local",
+      );
+    } finally {
+      await instance.dispose();
+    }
   });
 });
 

@@ -70,6 +70,7 @@ if (process.env.FAKE_ACP_DUMP) {
       "OPENROUTER_API_KEY",
       "ANTHROPIC_API_KEY",
       "XAI_API_KEY",
+      "FACTORY_API_KEY",
       "UNSLOTH_STUDIO_AUTH_TOKEN",
       "KIMI_MODEL_NAME",
       "KIMI_MODEL_API_KEY",

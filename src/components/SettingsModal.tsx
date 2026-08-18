@@ -13,6 +13,7 @@ import { CompanionSection } from "./CompanionSection";
 import { Card } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
 import { VoiceSettings } from "./VoiceSettings";
+import { SkinPicker } from "./SkinPicker";
 import { cn } from "@/lib/cn";
 
 const SECTIONS: Array<{ id: AppSettingsSection; label: string; icon: typeof User }> = [
@@ -201,6 +202,9 @@ export function SettingsModal() {
               <>
                 <Card title="Profile" subtitle="Shown in the sidebar. Saved as you go.">
                   <ProfileFields />
+                </Card>
+                <Card title="Skin" subtitle="Applies instantly and is remembered on this machine.">
+                  <SkinPicker />
                 </Card>
                 <UpdatesRow />
               </>

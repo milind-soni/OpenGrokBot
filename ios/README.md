@@ -44,11 +44,13 @@ ios/
     SSE.swift                    line parser + URLSession event stream
     Client.swift                 every call the phone is allowed to make
     Store.swift                  the fold: frames → state
+    Dictation.swift              composer text + transcript join
   Tests/CompanionCoreTests/
     Fixtures/                    captured from a real server — do not hand-edit
     DecodingTests.swift          the contract with the harness
     SSETests.swift               the parser, which is where this goes wrong
     StoreTests.swift             the fold
+    DictationTests.swift         partials replace, they do not stack
   App/                           SwiftUI, and everything that needs a device
     CompanionApp.swift           entry; owns when the stream lives and dies
     Session.swift                connection, lifecycle, actions
@@ -58,6 +60,7 @@ ios/
     PairingView.swift            find a computer, type the six digits
     ChatListView.swift           roster, with "waiting on you" pulled to the top
     ChatView.swift               transcript, approval cards, composer
+    SpeechDictation.swift        SFSpeechRecognizer, press-to-stop
     ComputerView.swift           opt-in live view of a bot's computer
     MarkdownText.swift           the supported Markdown presentation layer
     SettingsView.swift           status, and unpair
@@ -154,14 +157,17 @@ mean losing the ability to lock it out.
   `.ignored` for the shifted case hands the keypress back to the text field,
   which is the only thing that can insert the newline once Return is claimed.
   Software keyboards have no Shift+Return, so there `.onSubmit` sends.
-- **No affordance without a feature behind it.** The reference design this was
-  modelled on has a composer mic; there is no dictation here, so it is not
-  drawn. Search and the roster's "+" are real: the latter creates the same
-  basic bot the desktop endpoint creates, then opens it.
+- **Composer dictation is the mic.** Tap to talk, tap to stop, then send or
+  edit — the same press-to-stop shape as the desktop composer, on-device
+  `SFSpeechRecognizer` when the phone supports it. The mic stays next to
+  send so you can add another sentence by voice, and so you can stop
+  without an Escape key. Search and the roster's "+" are real: the latter
+  creates the same basic bot the desktop endpoint creates, then opens it.
 
 ## Not in this version
 
 The app is foreground-only. There is no APNs delivery while it is closed, no
-voice/call mode, no task-management or SQLite transcript-search UI, and no
-hosted relay. Tailscale is supported through manual MagicDNS entry; it is not a
-dependency and OpenMausBot does not operate a cloud copy of local data.
+call mode or spoken replies, no task-management or SQLite transcript-search UI,
+and no hosted relay. Composer dictation is in. Tailscale is supported through
+manual MagicDNS entry; it is not a dependency and OpenMausBot does not operate
+a cloud copy of local data.

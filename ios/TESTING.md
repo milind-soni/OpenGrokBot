@@ -196,7 +196,14 @@ On the phone, in order:
    then come back. The transcript should catch up *without* a visible reload —
    that is the resumable stream doing its job. Watch the harness log to confirm
    it replayed rather than re-hydrated.
-6. **Revoke.** Remove the device in Settings → Companion on the computer. The
+6. **Dictate.** Open a chat, tap the mic, speak, tap the mic again. The words
+   should land in the field as you talk (not only after you stop), survive
+   an edit, and send like anything you typed. The first tap prompts for
+   Microphone and Speech Recognition; a denial is silent until you tap again,
+   which then names Settings → OpenMausMobile. Backgrounding the app must
+   stop the mic — lock the phone mid-sentence and confirm it is not still
+   listening when you come back.
+7. **Revoke.** Remove the device in Settings → Companion on the computer. The
    phone should land on "This phone was unpaired" rather than silently failing.
 
 ---
@@ -247,7 +254,7 @@ port — only the route to it is different.
 Not built yet, so not bugs:
 
 - **Nothing arrives while the app is closed.** No push until APNs.
-- **No voice, routines, task management, or transcript search.**
+- **No call mode, spoken replies, routines, task management, or transcript search.** Composer dictation is in.
 
 (Two entries that used to sit on this list have since shipped: replies stream
 token by token as the provider emits them, and each bot has a computer panel —

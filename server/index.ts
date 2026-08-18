@@ -142,6 +142,15 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
   };
 }
 
+function connectedAppsIntegration(botId: string, threadId: string) {
+  return composio.mcpIntegration(cfg, {
+    harnessUrl: `http://127.0.0.1:${PORT}`,
+    commsToken: COMMS_TOKEN,
+    botId,
+    threadId,
+  });
+}
+
 /** Run a turn on `targetBotId` and resolve with its assistant text — the
  * synchronous half of ask_bot. Subscribes to the bus, folds assistant_text
  * for that thread, resolves on turn.completed (or a 4-min ceiling). */
@@ -1068,6 +1077,10 @@ async function startTurn(
     automationSource?: RoutineRunTrigger;
     /** the caller was already running unattended, so this turn is too */
     unattended?: boolean;
+    /** Resume an agent after the user completed an inline connection card.
+     * The prompt is control-plane context: it reaches the provider without
+     * masquerading as another message authored by the user. */
+    connectorContinuation?: boolean;
     onDispatchError?: (message: string) => void;
   },
 ) {
@@ -1078,12 +1091,12 @@ async function startTurn(
   // a webhook turn, or one inherited from a bot already running unattended
   if (opts?.automationSource === "webhook" || opts?.unattended) markUnattended(bot.id);
   // a person typing into this bot ends the unattended window immediately
-  else if (opts?.automationSource === undefined && !opts?.commsDepth) clearUnattended(bot.id);
+  else if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
   // a task takes its name from the first thing you asked it to do
-  if (text.trim()) store.titleTaskFromFirstMessage(bot.id, text, threadId);
+  if (text.trim() && !opts?.connectorContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
   const instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
@@ -1115,7 +1128,9 @@ async function startTurn(
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
   if (!userMessage) {
-    userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
+    userMessage = opts?.connectorContinuation
+      ? { id: `connector-${randomUUID()}`, at: Date.now(), role: "user", kind: "text", text }
+      : store.appendMessage(threadId, { role: "user", kind: "text", text });
   }
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
@@ -1171,8 +1186,8 @@ async function startTurn(
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (bot.composio !== false && cfg.composio?.apiKey && instance.adapter.capabilities.composioMcp === true) {
-        const connection = await composio.mcpIntegration(cfg);
+      if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+        const connection = await connectedAppsIntegration(bot.id, threadId);
         if (connection) integrations.composio = connection;
       }
       // CLI engines work inside the bot's own workspace directory rather
@@ -1500,6 +1515,7 @@ async function runGroupMemberTurn(
   // bots that already spoke for this user message — "@Scout ask @Pixel"
   // must not run Pixel twice (once chained, once as a direct responder)
   spoken: Set<string> = new Set(),
+  connectorContinuation?: string,
 ): Promise<boolean> {
   const group = store.group(groupId);
   const bot = store.bot(botId);
@@ -1529,6 +1545,21 @@ async function runGroupMemberTurn(
     });
     return true;
   }
+  const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
+  try {
+    if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      const connection = await connectedAppsIntegration(bot.id, group.threadId);
+      if (connection) integrations.composio = connection;
+    }
+  } catch (error) {
+    store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "activity",
+      from: { botId: bot.id, name: bot.name, color: bot.color },
+      tool: { name: `error: connected apps are unavailable — ${error instanceof Error ? error.message : String(error)}`, ok: false },
+    });
+    return true;
+  }
   store.setActivity(bot.id, "working");
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -1550,7 +1581,9 @@ async function runGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)`;
+  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)${
+    connectorContinuation ? `\n\n${connectorContinuation}` : ""
+  }`;
 
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
@@ -1599,6 +1632,7 @@ async function runGroupMemberTurn(
         text,
         system: roomSystem,
         cwd,
+        integrations,
         ...memberTurnSelection(bot.modelSelection),
       })
       .catch((err) => {
@@ -1678,6 +1712,102 @@ function startGroupTurn(groupId: string, text: string) {
   groupQueues.set(groupId, next.catch(() => {}));
 }
 
+const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
+const pendingConnectorResumes = new Map<
+  string,
+  { botId: string; threadId: string; resumeKey: string; labels: string[] }
+>();
+
+function connectorThread(botId: string, threadId: string) {
+  const bot = store.bot(botId);
+  if (!bot) return null;
+  if (store.taskByThread(botId, threadId)) return { bot, group: undefined };
+  const group = store.groupByThread(threadId);
+  if (group?.memberIds.includes(botId)) return { bot, group };
+  return null;
+}
+
+function connectorMessage(botId: string, threadId: string, messageId: string) {
+  if (!connectorThread(botId, threadId)) return null;
+  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  return message?.kind === "connector" && message.connector ? message : null;
+}
+
+function connectorCards(threadId: string, resumeKey: string) {
+  return store.messagesFor(threadId).filter(
+    (message) => message.kind === "connector" && message.connector?.resumeKey === resumeKey,
+  );
+}
+
+function markConnectorResumeFailed(threadId: string, resumeKey: string, error: string) {
+  for (const message of connectorCards(threadId, resumeKey)) {
+    if (!message.connector) continue;
+    store.patchMessage(threadId, message.id, {
+      connector: { ...message.connector, resumed: false, error: error.slice(0, 180) },
+    });
+  }
+}
+
+function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] }) {
+  const owner = connectorThread(entry.botId, entry.threadId);
+  if (!owner) return;
+  const names = entry.labels.join(", ");
+  const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
+  if (owner.bot.busy) {
+    pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    return;
+  }
+  if (owner.group) {
+    const previous = groupQueues.get(owner.group.id) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      const current = connectorThread(entry.botId, entry.threadId);
+      if (!current?.group) return;
+      if (current.bot.busy) {
+        pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+        return;
+      }
+      await runGroupMemberTurn(current.group.id, entry.botId, 0, new Set(), prompt);
+    });
+    groupQueues.set(owner.group.id, next.catch((error) => {
+      markConnectorResumeFailed(entry.threadId, entry.resumeKey, error instanceof Error ? error.message : String(error));
+    }));
+    return;
+  }
+  void startTurn(entry.botId, prompt, {
+    threadId: entry.threadId,
+    connectorContinuation: true,
+    onDispatchError: (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/already working/i.test(message)) pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    else markConnectorResumeFailed(entry.threadId, entry.resumeKey, message);
+  });
+}
+
+function maybeResumeConnectors(botId: string, threadId: string, resumeKey: string) {
+  const cards = connectorCards(threadId, resumeKey);
+  if (!cards.length || cards.some((message) => message.connector?.dismissed || message.connector?.status !== "connected")) return false;
+  if (cards.every((message) => message.connector?.resumed)) return true;
+  const labels = cards.map((message) => message.connector!.label);
+  for (const message of cards) {
+    store.patchMessage(threadId, message.id, { connector: { ...message.connector!, resumed: true, error: undefined } });
+  }
+  dispatchConnectorResume({ botId, threadId, resumeKey, labels });
+  return true;
+}
+
+function drainConnectorResumes() {
+  for (const [key, entry] of pendingConnectorResumes) {
+    if (store.bot(entry.botId)?.busy) continue;
+    pendingConnectorResumes.delete(key);
+    dispatchConnectorResume(entry);
+  }
+}
+
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed") drainConnectorResumes();
+});
+
 /** Pre-save probe for a CLI path override: run `<cli> --version` with the
  * same environment a real turn gets (augmented PATH). Returns ok + the
  * version line, or a fail the UI can act on — ENOENT on a GUI-launched app
@@ -1734,6 +1864,7 @@ function cliProbeEnvironment(): NodeJS.ProcessEnv {
     "BOX_TOKEN",
     "OPENCODE_API_KEY",
     "COMPOSIO_API_KEY",
+    "OMB_COMPOSIO_BROKER_TOKEN",
     "OMB_TTS_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -1753,7 +1884,8 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: {
-      configured: Boolean(cfg.composio?.apiKey),
+      configured: composio.configured(cfg),
+      mode: composio.connectionMode(cfg),
     },
     box: { configured: Boolean(cfg.box?.token) },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
@@ -2032,6 +2164,67 @@ const server = createServer(async (req, res) => {
             ? `Queued for review — @${targetName} will only pick it up if the user approves after your turn finishes.`
             : `Delegation queued — @${targetName} will pick it up after your current turn finishes.`,
         });
+      }
+      if (method === "POST" && path === "/api/internal/connectors/mcp") {
+        const body = await readBody(req);
+        const upstream = await composio.relayMcp(
+          cfg,
+          body,
+          Array.isArray(req.headers["mcp-session-id"])
+            ? req.headers["mcp-session-id"][0]
+            : req.headers["mcp-session-id"],
+        );
+        const headers: Record<string, string> = {
+          "content-type": upstream.contentType,
+          "cache-control": "no-store",
+        };
+        if (upstream.transportSessionId) headers["mcp-session-id"] = upstream.transportSessionId;
+        res.writeHead(upstream.status, headers);
+        return res.end(Buffer.from(upstream.bytes));
+      }
+      if (method === "POST" && path === "/api/internal/connectors/request") {
+        const body = await readBody(req);
+        const botId = String(body.botId ?? "");
+        const threadId = String(body.threadId ?? "");
+        const resumeKey = String(body.resumeKey ?? "");
+        const slugs: string[] = Array.isArray(body.slugs)
+          ? [...new Set<string>(body.slugs.map((slug: unknown) => String(slug).toLowerCase()).filter((slug: string) => CONNECTOR_SLUG.test(slug)))]
+          : [];
+        const owner = connectorThread(botId, threadId);
+        if (!owner) return json(res, 403, { error: "conversation does not belong to this bot" });
+        if (!/^[\w-]{8,100}$/.test(resumeKey)) return json(res, 400, { error: "invalid resume key" });
+        if (!slugs.length || slugs.length > 12) return json(res, 400, { error: "one to twelve valid apps are required" });
+        if (!composio.configured(cfg) || owner.bot.composio === false) {
+          return json(res, 409, { error: "connected apps are not enabled for this bot" });
+        }
+        const connectionState: Record<string, { connected?: boolean }> = await composio.connectionStatus(cfg, slugs).catch(() => ({}));
+        const messageIds: string[] = [];
+        for (const slug of slugs) {
+          const existing = store.messagesFor(threadId).find(
+            (message) => message.connector?.resumeKey === resumeKey && message.connector.slug === slug,
+          );
+          if (existing) {
+            messageIds.push(existing.id);
+            continue;
+          }
+          const toolkit = await composio.toolkitCard(cfg, slug);
+          const connected = connectionState[slug]?.connected === true;
+          const message = store.appendMessage(threadId, {
+            role: "bot",
+            kind: "connector",
+            ...(owner.group ? { from: { botId: owner.bot.id, name: owner.bot.name, color: owner.bot.color } } : {}),
+            connector: {
+              slug,
+              label: toolkit.label,
+              description: toolkit.blurb || `Connect ${toolkit.label} so the bot can continue`,
+              status: connected ? "connected" : "required",
+              resumeKey,
+            },
+          });
+          messageIds.push(message.id);
+        }
+        maybeResumeConnectors(botId, threadId, resumeKey);
+        return json(res, 200, { messageIds });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
     }
@@ -3162,11 +3355,11 @@ const server = createServer(async (req, res) => {
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
-      return json(res, 200, { configured: Boolean(cfg.composio?.apiKey), source, cards });
+      return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
-      if (!cfg.composio?.apiKey) {
+      if (!composio.configured(cfg)) {
         return json(res, 200, { configured: false, services: {} });
       }
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
@@ -3176,6 +3369,55 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") return json(res, 200, await composio.authorizeService(cfg, m[1]));
     m = path.match(/^\/api\/connectors\/([\w-]+)$/);
     if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
+
+    // Inline connection cards are bound to both the bot and the exact task
+    // or room thread that created them. The browser auth URL is returned
+    // only to this local UI and is never stored in the transcript.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/connector-cards\/([\w-]+)\/(authorize|status|resume|dismiss)$/);
+    if (m) {
+      const body = method === "POST" ? await readBody(req) : {};
+      const threadId = String(method === "GET" ? url.searchParams.get("threadId") ?? "" : body.threadId ?? "");
+      const message = connectorMessage(m[1], threadId, m[2]);
+      if (!message?.connector) return json(res, 404, { error: "no such connection request" });
+      const connector = message.connector;
+      if (m[3] === "authorize" && method === "POST") {
+        store.patchMessage(threadId, message.id, {
+          connector: { ...connector, status: "authorizing", error: undefined, dismissed: false },
+        });
+        try {
+          return json(res, 200, await composio.authorizeService(cfg, connector.slug));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          store.patchMessage(threadId, message.id, {
+            connector: { ...connector, status: "failed", error: detail.slice(0, 180) },
+          });
+          throw error;
+        }
+      }
+      if (m[3] === "status" && method === "GET") {
+        const state = (await composio.connectionStatus(cfg, [connector.slug]))[connector.slug];
+        const failed = /failed|expired|revoked|error/i.test(state?.status ?? "");
+        const next = {
+          ...connector,
+          status: state?.connected ? ("connected" as const) : failed ? ("failed" as const) : ("authorizing" as const),
+          error: failed ? `Connection ${state?.status ?? "failed"}` : undefined,
+        };
+        store.patchMessage(threadId, message.id, { connector: next });
+        if (state?.connected) maybeResumeConnectors(m[1], threadId, connector.resumeKey);
+        return json(res, 200, { connected: Boolean(state?.connected), pending: Boolean(state?.pending), status: state?.status });
+      }
+      if (m[3] === "resume" && method === "POST") {
+        const resumed = maybeResumeConnectors(m[1], threadId, connector.resumeKey);
+        return resumed
+          ? json(res, 200, { resumed: true })
+          : json(res, 409, { error: "finish connecting every requested app first" });
+      }
+      if (m[3] === "dismiss" && method === "POST") {
+        store.patchMessage(threadId, message.id, { connector: { ...connector, dismissed: true } });
+        return json(res, 200, { dismissed: true });
+      }
+      return json(res, 405, { error: "method not allowed" });
+    }
 
     // ── the bot's cloud computer (Box) ──
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);

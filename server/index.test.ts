@@ -615,7 +615,7 @@ describe("harness HTTP API", () => {
 
     const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
     expect(saved.status).toBe(200);
-    expect(saved.body.composio).toEqual({ configured: true });
+    expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
@@ -625,7 +625,7 @@ describe("harness HTTP API", () => {
     // A later ordinary setting save reloads config; the in-process secure-env
     // override must keep Composio configured until the next app launch.
     expect((await api("PUT", "/api/config", { profile: { name: "Grace" } })).status).toBe(200);
-    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true });
+    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true, mode: "self-hosted" });
   });
 
   it.skipIf(process.platform === "win32")("stores the credentials file with owner-only permissions", () => {

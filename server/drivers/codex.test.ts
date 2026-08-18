@@ -122,6 +122,34 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CODEX_HOME).toBe(codexHome);
   });
 
+  it("mounts connected apps without placing credential values in argv", async () => {
+    await create();
+    const dump = join(scratch, "composio.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    expect(instance.adapter.capabilities.composioMcp).toBe(true);
+
+    await instance.adapter.sendTurn({
+      threadId: "t-composio",
+      text: "check mail",
+      integrations: {
+        composio: {
+          command: process.execPath,
+          args: ["/tmp/connector-proxy.js"],
+          env: {
+            OMB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp",
+            OMB_COMMS_TOKEN: "per-boot-token",
+          },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv.join(" ")).toContain("mcp_servers.openmausbot_connectors.command");
+    expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
+    expect(seen.argv.join(" ")).not.toContain("per-boot-token");
+    expect(seen.env.OMB_COMMS_TOKEN).toBe("per-boot-token");
+  });
+
   it("sends the local provider when the picker id is custom-encoded", async () => {
     await create({ environment: { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" } });
     const dump = join(scratch, "dump.json");

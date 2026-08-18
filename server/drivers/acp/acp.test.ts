@@ -224,12 +224,31 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.env.OPENCODE_API_KEY).toBeUndefined();
   });
 
-  // this driver has no Composio mount, so it must not claim the
-  // capability: claiming it is what would tell an ACP bot to call
-  // composio tools it was never given
-  it("does not claim the Composio capability it cannot honour", async () => {
+  // ACP session/new accepts stdio MCP entries, so connected apps use the
+  // same harness-owned bridge as Claude and Codex.
+  it("mounts connected apps as a stdio MCP server", async () => {
     await create();
-    expect(instance.adapter.capabilities.composioMcp).not.toBe(true);
+    const dump = join(scratch, "composio.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    expect(instance.adapter.capabilities.composioMcp).toBe(true);
+    await instance.adapter.sendTurn({
+      threadId: "t-composio",
+      text: "go",
+      integrations: {
+        composio: {
+          command: process.execPath,
+          args: ["/tmp/connector-proxy.js"],
+          env: { OMB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp" },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8"))).toContainEqual({
+      name: "composio",
+      command: process.execPath,
+      args: ["/tmp/connector-proxy.js"],
+      env: [{ name: "OMB_CONNECTOR_UPSTREAM_URL", value: "http://127.0.0.1:8799/api/internal/connectors/mcp" }],
+    });
   });
 
   it("droid takes model and autonomy over the wire, never through argv", async () => {

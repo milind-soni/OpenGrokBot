@@ -39,6 +39,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
+import { ConnectorCard } from "./ConnectorCard";
 import { ModelPicker } from "./ModelPicker";
 import { RenameTitle } from "./RenameTitle";
 import { TaskPicker } from "./TaskPicker";
@@ -573,6 +574,8 @@ const MessagesList = memo(function MessagesList({
         const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
         const row = (() => {
           switch (m.kind) {
+            case "connector":
+              return m.connector ? <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
             case "options":
               // a live permission ask gets the approval box; questions and
               // the onboarding quiz keep the list card

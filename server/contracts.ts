@@ -148,7 +148,10 @@ export interface SendTurnInput {
   system?: string;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
-    composio?: { url: string; headers: Record<string, string> };
+    /** A local stdio bridge owns the remote Composio transport. Keeping the
+     * bridge harness-controlled lets it turn connection requests into trusted
+     * chat cards consistently across provider CLIs. */
+    composio?: { command: string; args: string[]; env: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */

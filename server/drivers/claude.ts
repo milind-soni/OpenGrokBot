@@ -377,11 +377,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
       if (turn.integrations?.composio) {
-        mcpServers.composio = {
-          type: "http",
-          url: turn.integrations.composio.url,
-          headers: turn.integrations.composio.headers,
-        };
+        mcpServers.composio = { ...turn.integrations.composio };
         allowed.push("mcp__composio");
       }
       if (turn.integrations?.computer) {

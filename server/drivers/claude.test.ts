@@ -436,6 +436,45 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     conn.end();
   });
 
+  it("drops a late ask on an already-closed broker instead of a dead card (#211)", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    // Same connection stays open across the turn ending — the exact
+    // condition that let a still-alive child raise an unanswerable card.
+    const conn = connect(permissionSocketPath("t-perm-late"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    await instance.adapter.interruptTurn("t-perm-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const opensBefore = recorder.events.filter((e) => e.type === "request.opened").length;
+    const reply = new Promise<{ id: string; behavior: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-late", tool: "Bash", input: { command: "rm -rf /" } }) + "\n");
+
+    // A dead card is a request.opened with no way to ever answer it — assert
+    // the late ask never becomes one, and the connection still gets a
+    // definite reply rather than hanging forever.
+    expect(await reply).toMatchObject({ id: "ask-late", behavior: "deny" });
+    expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(opensBefore);
+    await expect(instance.adapter.respondToRequest("t-perm-late", "ask-late", { behavior: "allow" })).resolves.toBe(
+      "unavailable",
+    );
+
+    conn.end();
+  });
+
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");

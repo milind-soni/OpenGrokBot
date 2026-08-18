@@ -204,6 +204,14 @@ function createPermissionBroker(opts: {
     string,
     { ask: Ask; finish: (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => void }
   >();
+  // server.close() only stops accepting NEW connections — it does not touch
+  // a connection that's already open. A still-alive child's MCP proxy can
+  // keep sending asks on such a connection after the turn has ended, and
+  // this handler stays fully wired to it. Without this flag those asks would
+  // become new `pending` entries and `request.opened` cards for a turn the
+  // driver already forgot (`active.delete(threadId)` already ran), which can
+  // never be answered — the "zombie card" in issue #211.
+  let closed = false;
   try {
     unlinkSync(opts.socketPath);
   } catch {}
@@ -225,6 +233,23 @@ function createPermissionBroker(opts: {
         if (msg.t !== "ask") continue;
         const askId = String(msg.id ?? newId());
         const kind = msg.kind === "question" ? ("question" as const) : ("permission" as const);
+        if (closed) {
+          // Never register a pending entry or notify onAsk for a closed
+          // broker — but always reply. permission-proxy.ts only resolves an
+          // ask on an explicit {t:"answer"} or its own connection error/close,
+          // so a silent drop here would hang that MCP tool call forever.
+          try {
+            conn.write(
+              JSON.stringify({
+                t: "answer",
+                id: askId,
+                behavior: kind === "question" ? "answer" : "deny",
+                message: kind === "question" ? "OpenMausBot: the turn is ending — wrap up." : "OpenMausBot: the turn ended",
+              }) + "\n",
+            );
+          } catch {}
+          continue;
+        }
         const ask: Ask = { id: askId, kind, tool: msg.tool ?? "tool", input: msg.input ?? {}, at: Date.now() };
         const finish = (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => {
           if (!pending.delete(askId)) return;
@@ -263,6 +288,7 @@ function createPermissionBroker(opts: {
       return true;
     },
     close() {
+      closed = true;
       for (const p of [...pending.values()]) {
         if (p.ask.kind === "question") p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "system");
         else p.finish("deny", "OpenMausBot: the turn ended", "system");

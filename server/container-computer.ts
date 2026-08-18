@@ -30,9 +30,12 @@ export const BASE_IMAGE_REPOSITORY = "docker.io/trycua/xfce-cua";
 // Official multi-architecture Cua XFCE 0.1.0 manifest (amd64 + arm64).
 export const BASE_IMAGE_DIGEST = "sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b";
 export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
-// This tag is built locally from the pinned Cua base. Image and container
-// labels below are the authoritative compatibility check, not the mutable tag.
-export const IMAGE_REPOSITORY = "openmausbot/cua-local-vm";
+// This tag is built locally from the pinned Cua base. The explicit localhost
+// registry is required by Podman: it prepends localhost to unqualified build
+// tags, then may otherwise resolve the same name to Docker Hub when running it.
+// Image and container labels below remain the authoritative compatibility
+// check, not the mutable tag.
+export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "3";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;

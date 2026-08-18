@@ -16,12 +16,18 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     public var host: String
     public var port: Int
+    /// Every other address the computer answered on at pairing time, best
+    /// first — the tailnet name, the LAN address, the sidecar's mDNS name.
+    /// Optional so connections saved before fallbacks existed still decode;
+    /// read through `orderedHosts`, which is never empty.
+    public var hosts: [String]?
 
-    public init(id: String = UUID().uuidString, name: String, host: String, port: Int) {
+    public init(id: String = UUID().uuidString, name: String, host: String, port: Int, hosts: [String]? = nil) {
         self.id = id
         self.name = name
         self.host = Self.urlHost(host)
         self.port = port
+        self.hosts = hosts
     }
 
     /// The representation `URLComponents.host` accepts for a literal IPv6
@@ -148,6 +154,19 @@ public struct PairingInvite: Equatable, Sendable {
                 (!$0.isASCII && !$0.isNewline) || $0.asciiValue.map { $0 >= 32 && $0 != 127 } == true
             }
             if !cleaned.isEmpty { connection.name = String(cleaned.prefix(80)) }
+        }
+        // The desktop's ordered fallback list, comma-joined. Advisory rather
+        // than load-bearing: a bad entry costs one failed dial when its turn
+        // comes, so unusable candidates are dropped instead of failing the
+        // whole invite. 253 bytes is the DNS name ceiling.
+        if let list = values["hosts"] {
+            let candidates = list.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { candidate in
+                    !candidate.isEmpty && candidate.utf8.count <= 253 &&
+                        !candidate.contains(where: { $0.isWhitespace || "/?#".contains($0) })
+                }
+            if !candidates.isEmpty { connection.hosts = Array(candidates.prefix(8)) }
         }
         return PairingInvite(connection: connection, credential: credential)
     }

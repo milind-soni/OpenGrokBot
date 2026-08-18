@@ -18,7 +18,13 @@ describe("credentials", () => {
   it("lets an unpaired device pair, and do nothing else", () => {
     expect(ask("POST", "/api/pair", false)).toBeNull();
     expect(ask("GET", "/api/bots", false)?.status).toBe(401);
-    expect(ask("GET", "/api/health", false)?.status).toBe(401);
+  });
+
+  it("lets anyone curl liveness — it is the unauthenticated smoke test", () => {
+    expect(ask("GET", "/api/health", false)).toBeNull();
+    // the bypass is one method on one path, not a family
+    expect(ask("POST", "/api/health", false)?.status).toBe(401);
+    expect(ask("GET", "/api/healthz", false)?.status).toBe(401);
   });
 });
 

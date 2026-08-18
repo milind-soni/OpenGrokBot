@@ -8,6 +8,7 @@
 //   - Composio Sessions (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -177,6 +178,7 @@ type AskResolutionSource = "user" | "timeout" | "system";
 const DENY_TIMEOUT_NOTE =
   "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+const DUPLICATE_ASK_ID_NOTE = "OpenMausBot: duplicate ask id — skipping this request.";
 
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask: Ask): string {
@@ -189,8 +191,18 @@ function askSummary(ask: Ask): string {
 }
 
 export function permissionSocketPath(threadId: string) {
-  const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-  return brokerSocketPath(DATA_DIR, tag);
+  // A readable prefix alone is not unique: ids that agree on their first
+  // characters ("t-perm-dup-1", "t-perm-dup-2") would share a socket. POSIX
+  // hides that — a new broker's listen replaces the socket FILE, so the name
+  // always points at the fresh server — but Windows named pipes live in a
+  // global namespace that is never unlinked, and a reused name races the
+  // previous broker's async teardown. Half the tag is a digest of the FULL
+  // id so distinct threads get distinct sockets; the tag stays at 8 chars
+  // total because the POSIX path already brushes the 104-byte sun_path
+  // limit under deep tmp home dirs.
+  const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
+  const digest = createHash("sha256").update(threadId).digest("hex").slice(0, 4);
+  return brokerSocketPath(DATA_DIR, `${prefix}${digest}`);
 }
 
 function createPermissionBroker(opts: {
@@ -224,6 +236,22 @@ function createPermissionBroker(opts: {
         }
         if (msg.t !== "ask") continue;
         const askId = String(msg.id ?? newId());
+        // `pending` is server-scoped, not per-connection: two asks with the
+        // same id — a buggy/adversarial client, never a legitimate retry
+        // (permission-proxy mints a fresh randomUUID per ask) — would
+        // otherwise let the second `pending.set` silently overwrite the
+        // first, orphaning it as an unanswerable card once the first
+        // resolves and deletes the shared key. Reject before either ask
+        // becomes visible to onAsk.
+        if (pending.has(askId)) {
+          // askId is client-controlled; JSON.stringify escapes newlines and
+          // control characters so it can't corrupt the log line or terminal.
+          console.error(`permission broker on ${opts.socketPath}: duplicate ask id ${JSON.stringify(askId)} — denying`);
+          try {
+            conn.write(JSON.stringify({ t: "answer", id: askId, behavior: "deny", message: DUPLICATE_ASK_ID_NOTE }) + "\n");
+          } catch {}
+          continue;
+        }
         const kind = msg.kind === "question" ? ("question" as const) : ("permission" as const);
         const ask: Ask = { id: askId, kind, tool: msg.tool ?? "tool", input: msg.input ?? {}, at: Date.now() };
         const finish = (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => {

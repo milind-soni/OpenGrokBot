@@ -9,6 +9,8 @@ import CompanionCore
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @State private var confirmingSignOut = false
+    @State private var editingAddress = false
+    @State private var addressText = ""
 
     var body: some View {
         Form {
@@ -16,6 +18,15 @@ struct SettingsView: View {
                 if let connection = session.connection {
                     LabeledContent("Name", value: connection.name)
                     LabeledContent("Address", value: "\(connection.host):\(connection.port)")
+                    // The stored address can simply go stale — a tailnet name
+                    // on a phone that left the tailnet, a LAN address after
+                    // the router reshuffled. Editing it here keeps the
+                    // pairing; the alternative is a walk to the computer for
+                    // a new code.
+                    Button("Edit address") {
+                        addressText = "\(connection.host):\(connection.port)"
+                        editingAddress = true
+                    }
                 }
                 LabeledContent("Connection", value: statusText)
             }
@@ -47,6 +58,19 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .task { await session.refreshNotificationAuthorization() }
+        .alert("Edit address", isPresented: $editingAddress) {
+            TextField("192.168.1.42:8810", text: $addressText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Save") {
+                if !session.updateAddress(addressText) {
+                    session.actionError = "That should look like 192.168.1.42:8810, or a name like macbook.tail1234.ts.net."
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter whatever the Companion panel on your computer shows. The pairing itself is kept.")
+        }
         .confirmationDialog(
             "Unpair this phone?",
             isPresented: $confirmingSignOut,

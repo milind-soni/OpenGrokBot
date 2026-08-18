@@ -179,6 +179,8 @@ async function startServerOn(port) {
     env: {
       ...process.env,
       OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+      OMB_RESOURCES_PATH: process.resourcesPath,
+      OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
       OMB_PORT: String(port),
       OMB_USER_DATA: app.getPath("userData"),
       ...(secureCredentials.composioApiKey

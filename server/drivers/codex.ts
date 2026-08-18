@@ -128,6 +128,17 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           "-c", `${prefix}.default_tools_approval_mode="auto"`,
         );
       }
+      if (turn.integrations?.phone) {
+        const bridge = turn.integrations.phone;
+        Object.assign(env, bridge.env);
+        const prefix = "mcp_servers.openmausbot_phone";
+        appServerArgs.push(
+          "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
+          "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
+          "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
+          "-c", `${prefix}.default_tools_approval_mode="auto"`,
+        );
+      }
 
       const child = spawnCli(config.cli, appServerArgs, {
         cwd: turn.cwd ?? homedir(),
@@ -490,6 +501,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         capabilities: {
           sessionModelSwitch: "unsupported",
           composioMcp: true,
+          phoneMcp: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         sendTurn,

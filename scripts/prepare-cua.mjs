@@ -87,8 +87,11 @@ if (!details.isFile() || (details.mode & 0o111) === 0) {
   throw new Error(`cua-driver is not an executable file: ${binary}`);
 }
 
-await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
+await Promise.all([
+  rm(join(stage, "cua-driver"), { force: true }),
+  rm(join(stage, "cua-sdk"), { recursive: true, force: true }),
+]);
 await copyFile(binary, join(stage, "cua-driver"));
 await chmod(join(stage, "cua-driver"), 0o755);
 // A binary copied out of CuaDriver.app retains a bundle-relative signature

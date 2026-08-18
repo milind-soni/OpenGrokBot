@@ -47,6 +47,9 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    /// Bumped when the paired computer changes so an in-flight upload cannot
+    /// be sent through a later client.
+    private var clientGeneration = 0
     private var reconnectDelay: UInt64 = 0
     /// How many computer panels are open. A count rather than a flag: the
     /// panel can be pushed twice in a navigation stack, and the last one to
@@ -132,6 +135,7 @@ final class Session: ObservableObject {
         try Keychain.save(paired.token, for: stored.id)
         UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: Self.connectionKey)
 
+        clientGeneration += 1
         self.connection = stored
         self.client = CompanionClient(connection: stored, token: paired.token)
         self.state = CompanionState()
@@ -159,6 +163,7 @@ final class Session: ObservableObject {
     }
 
     func signOut() {
+        clientGeneration += 1
         streamTask?.cancel()
         streamTask = nil
         restorePending = false
@@ -326,12 +331,15 @@ final class Session: ObservableObject {
     // is a phone that disagrees with the laptop.
 
     func send(_ text: String, to chat: Chat) async -> Bool {
+        actionError = nil
+        let generation = clientGeneration
         guard let client else { return false }
         do {
             switch chat {
             case let .bot(bot): try await client.send(text: text, toBot: bot.id)
             case let .room(room): try await client.send(text: text, toRoom: room.id)
             }
+            guard generation == clientGeneration else { return false }
             return true
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
@@ -345,9 +353,13 @@ final class Session: ObservableObject {
     /// Write a phone file onto the computer. Returns the host path to fold
     /// into the next message; the harness never sees the bytes.
     func upload(_ data: Data, filename: String) async -> InboxFile? {
+        actionError = nil
+        let generation = clientGeneration
         guard let client else { return nil }
         do {
-            return try await client.upload(data: data, filename: filename)
+            let stored = try await client.upload(data: data, filename: filename)
+            guard generation == clientGeneration else { return nil }
+            return stored
         } catch let error as APIError where error.isUnauthorized {
             status = .unauthorized
             return nil

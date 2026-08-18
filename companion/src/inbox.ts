@@ -18,7 +18,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -113,7 +113,16 @@ export function readInboxFile(
     fd = openSync(path, flags);
     const st = fstatSync(fd);
     if (!st.isFile() || st.size > MAX_INBOX_BYTES) return null;
-    return { bytes: readFileSync(fd), type: inboxType(filename) };
+    // Read at most the size we just validated. `readFileSync(fd)` would
+    // follow a concurrent append past MAX_INBOX_BYTES.
+    const bytes = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const n = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    return { bytes: offset === bytes.length ? bytes : bytes.subarray(0, offset), type: inboxType(filename) };
   } catch {
     return null;
   } finally {

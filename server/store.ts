@@ -77,6 +77,11 @@ export interface Message {
   /** comm chips: "Messaged @X" in the caller's chat, linking to the
    * bot⇄bot channel where the exchange is mirrored. */
   comm?: { groupId: string; withBotId: string; withName: string; withColor: string };
+  /** user messages sent while the bot was mid-turn, waiting in the
+   * steer-queue to auto-send on settle. Cleared when the drain consumes
+   * them; a true stranded by a restart is inert because the client only
+   * shows the affordance while the bot is busy. */
+  queued?: boolean;
 }
 
 export type GroupDefaultResponder =

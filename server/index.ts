@@ -42,6 +42,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
+import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -910,6 +911,40 @@ bus.subscribe((event: RuntimeEvent) => {
   drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
 });
 
+// ── steer-queue drain: messages sent while the bot was busy ────────────
+// Runs on ANY turn.completed rather than resolving the settling thread: a
+// bot busy in a room settles on the room's thread, and by the time this
+// subscriber runs the main fold has already dropped the speaker record —
+// so the drain matches on "this queue's bot is idle now" instead.
+// Registration order puts this after the main fold, so busy is already
+// false when it looks. Deliberately NOT gated on event.ok (unlike the
+// delegation drain above): queued delegations are a bot's fan-out and
+// dropping them on Stop is a safety property, but queued messages are the
+// user's own words — stop-then-steer is the point, so an interrupted turn
+// drains too.
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed") return;
+  drainQueuedSends();
+});
+
+function drainQueuedSends() {
+  drainSteeredMessages(store, (botId, threadId, prompt, userMessage) =>
+    // A plain attended turn — no automationSource, no unattended, no comms
+    // depth: exactly what typing the same words into an idle bot would run.
+    // The messages are already in the transcript; userMessage keeps
+    // startTurn from appending the joined prompt as a duplicate.
+    startTurn(botId, prompt, { threadId, userMessage }).catch((err) => {
+      store.appendMessage(threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: {
+          name: `error: queued message could not start — ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`,
+          ok: false,
+        },
+      });
+    }),
+  );
+}
 
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
@@ -1335,6 +1370,9 @@ async function startTurn(
       });
       store.setActivity(bot.id, "idle");
       opts?.onDispatchError?.(message);
+      // a dispatch failure never emits turn.completed, so the settle-driven
+      // drain would strand anything queued behind this turn
+      drainQueuedSends();
     }
   })();
 }
@@ -1743,6 +1781,9 @@ async function reloadProviders() {
     });
     store.setActivity(b.id, "idle");
   }
+  // killed turns settle here without a turn.completed event, so anything
+  // queued behind them drains now — onto the freshly loaded fleet
+  drainQueuedSends();
 }
 
 // Config writes rebuild the whole provider registry. Keep the read-modify-write
@@ -2676,7 +2717,17 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      // A busy bot no longer refuses the message: it lands in the thread
+      // now (marked queued) and auto-sends when the turn settles — see the
+      // steer-queue drain above. Synchronous from the busy check to the
+      // queue insert, so a settle can't slip between them and strand it.
+      if (bot.busy) {
+        const message = queueSteeredMessage(store, bot, text);
+        return json(res, 202, { ok: true, queued: true, messageId: message.id });
+      }
+      await startTurn(bot.id, text);
       return json(res, 202, { ok: true });
     }
 

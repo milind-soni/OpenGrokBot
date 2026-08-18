@@ -62,6 +62,10 @@ export interface Message {
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
   comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+  /** sent while the bot was mid-turn; auto-sends when the turn settles.
+   * Rendered only while the bot is busy, so a flag stranded by a server
+   * restart never shows a promise nothing will keep. */
+  queued?: boolean;
 }
 
 export type GroupDefaultResponder =

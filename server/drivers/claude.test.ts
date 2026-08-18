@@ -409,6 +409,127 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     conn.end();
   });
 
+  it("denies a colliding ask id on the same connection without orphaning the original", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-1", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-perm-dup-1"));
+    const answers: Array<{ behavior: string; message?: string }> = [];
+    const waiters: Array<(a: { behavior: string; message?: string }) => void> = [];
+    let buf = "";
+    conn.on("data", (c) => {
+      buf += c;
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        const parsed = JSON.parse(line);
+        answers.push(parsed);
+        waiters.shift()?.(parsed);
+      }
+    });
+    const nextAnswer = () => new Promise<{ behavior: string; message?: string }>((resolve) => waiters.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    // two asks with the same id on one connection, second sent before the
+    // first is resolved
+    conn.write(JSON.stringify({ t: "ask", id: "dup-1", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-1");
+    conn.write(JSON.stringify({ t: "ask", id: "dup-1", tool: "Bash", input: { command: "echo two" } }) + "\n");
+
+    // the collision is denied immediately, on the wire, without a second
+    // request.opened ever firing
+    const duplicateAnswer = await nextAnswer();
+    expect(duplicateAnswer).toMatchObject({ behavior: "deny" });
+
+    // the original ask is untouched and still resolves normally
+    await expect(instance.adapter.respondToRequest("t-perm-dup-1", "dup-1", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+    expect(await nextAnswer()).toMatchObject({ behavior: "allow" });
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-1");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("denies a colliding ask id from a second connection on the same broker", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-2", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn1 = connect(permissionSocketPath("t-perm-dup-2"));
+    await new Promise<void>((resolve, reject) => {
+      conn1.on("connect", resolve);
+      conn1.on("error", reject);
+    });
+    conn1.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-2");
+
+    // `pending` is shared across every connection on the broker, so a
+    // second connection reusing the same id must collide too
+    const conn2 = connect(permissionSocketPath("t-perm-dup-2"));
+    const conn2Answer = new Promise<{ behavior: string }>((resolve) => {
+      let buf2 = "";
+      conn2.on("data", (c) => {
+        buf2 += c;
+        const nl = buf2.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf2.slice(0, nl)));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      conn2.on("connect", resolve);
+      conn2.on("error", reject);
+    });
+    conn2.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo two" } }) + "\n");
+    expect(await conn2Answer).toMatchObject({ behavior: "deny" });
+
+    // the original, opened on conn1, still resolves normally
+    await expect(instance.adapter.respondToRequest("t-perm-dup-2", "dup-2", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    conn1.end();
+    conn2.end();
+    await instance.adapter.interruptTurn("t-perm-dup-2");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("accepts an ask id reused after the original already resolved — not a collision", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-3", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-perm-dup-3"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    conn.write(JSON.stringify({ t: "ask", id: "dup-3", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-3" && e.summary === "echo one");
+    await expect(instance.adapter.respondToRequest("t-perm-dup-3", "dup-3", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    // the id is free again once its ask resolved — reusing it is not a
+    // collision and should open normally (distinct summary proves this is a
+    // fresh request.opened, not the first one already seen by the recorder)
+    conn.write(JSON.stringify({ t: "ask", id: "dup-3", tool: "Bash", input: { command: "echo two" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-3" && e.summary === "echo two");
+    await expect(instance.adapter.respondToRequest("t-perm-dup-3", "dup-3", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-3");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");

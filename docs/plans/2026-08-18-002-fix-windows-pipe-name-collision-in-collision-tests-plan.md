@@ -26,7 +26,7 @@ The Windows CI job fails on PR #230 at exactly one test in the vitest run: `deni
 
 On POSIX, `createPermissionBroker` calls `unlinkSync(opts.socketPath)` before `listen()` (`server/drivers/claude.ts:208-210`), which removes the previous test's socket file, so re-listening the same name succeeds. On Windows, `unlinkSync` on a `\\.\pipe\...` path is a no-op — a named pipe is not a filesystem entry. The OS holds the pipe name briefly after the prior broker's `server.close()`, so the next test's `listen()` fails with `EADDRINUSE` and the broker never starts. The test's `connectSocket` then fails with `ENOENT` because no pipe is listening. The observed run failed only 1 of the 4 same-name tests, confirming the release window is short and the failure is timing-dependent.
 
-The pre-existing broker tests never hit this because they use distinct thread ids (`t-perm-abc`, `t-perm-stop`) with distinct tags. The production code never hits this because real thread ids are UUIDs, though the 8-char truncation is a latent collision risk there too — out of scope for this plan.
+The pre-existing broker tests never hit this because they use distinct thread ids (`t-perm-abc`, `t-perm-stop`) with distinct tags. The production code is unlikely to hit this in normal operation because real thread ids are UUIDs, though the 8-char truncation remains a latent collision risk there — out of scope for this plan.
 
 ### Requirements
 

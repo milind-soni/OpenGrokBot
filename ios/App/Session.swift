@@ -12,6 +12,8 @@ import OSLog
 import SwiftUI
 import UIKit
 import CompanionCore
+import UserNotifications
+import UIKit
 
 /// Stream lifecycle, in Console.app and the Xcode console. A companion that
 /// is silently not connected looks exactly like one with nothing to say, so
@@ -36,6 +38,7 @@ final class Session: ObservableObject {
     @Published var actionError: String?
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
+    @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
 
     private var client: CompanionClient?
     private var streamTask: Task<Void, Never>?
@@ -57,7 +60,20 @@ final class Session: ObservableObject {
     // MARK: - Pairing
 
     init() {
+        _ = NotificationCoordinator.shared
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-store-preview"),
+           let url = Bundle.main.url(forResource: "StorePreview", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
+            connection = Connection(name: "Preview Mac", host: "preview.tailnet.ts.net", port: 8810)
+            state.hydrate(fleet)
+            status = .live
+            return
+        }
+#endif
         restore()
+        Task { await refreshNotificationAuthorization() }
     }
 
     /// Rebuild the last connection at launch.
@@ -129,6 +145,7 @@ final class Session: ObservableObject {
         connection = nil
         client = nil
         state = CompanionState()
+        NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
     }
 
@@ -238,6 +255,10 @@ final class Session: ObservableObject {
                         continue
                     }
                     state.apply(frame)
+                    if case let .notify(notification) = frame.frame {
+                        NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
+                    }
+                    NotificationCoordinator.shared.setBadge(state.unreadCount)
                     state.advance(to: frame.seq)
                 }
                 // the stream ended without an error — the harness went away
@@ -271,6 +292,7 @@ final class Session: ObservableObject {
         let fleet = try await client.fleet(messages: 50)
         log.info("hydrated \(fleet.bots.count, privacy: .public) bots, \(fleet.groups.count, privacy: .public) rooms")
         state.hydrate(fleet)
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
     // MARK: - Actions
@@ -508,6 +530,33 @@ final class Session: ObservableObject {
 
     func preview(for path: String) -> UIImage? {
         attachmentPreviews[path]
+    }
+
+    func refreshNotificationAuthorization() async {
+        notificationAuthorization = await NotificationCoordinator.shared.authorizationStatus()
+    }
+
+    func enableNotifications() async {
+        if notificationAuthorization == .denied {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                await UIApplication.shared.open(url)
+            }
+            return
+        }
+        _ = await NotificationCoordinator.shared.requestAuthorization()
+        await refreshNotificationAuthorization()
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
+    }
+
+    var notificationStatusText: String {
+        switch notificationAuthorization {
+        case .authorized: return "On"
+        case .provisional: return "Quietly on"
+        case .ephemeral: return "Temporarily on"
+        case .denied: return "Off in Settings"
+        case .notDetermined: return "Not enabled"
+        @unknown default: return "Unknown"
+        }
     }
 
     private func perform(quietly: Bool = false, _ body: (CompanionClient) async throws -> Void) async {

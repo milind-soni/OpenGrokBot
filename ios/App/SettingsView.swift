@@ -21,6 +21,18 @@ struct SettingsView: View {
             }
 
             Section {
+                LabeledContent("Status", value: session.notificationStatusText)
+                Button(session.notificationAuthorization == .denied ? "Open iPhone Settings" : "Enable notifications") {
+                    Task { await session.enableNotifications() }
+                }
+                .disabled(session.notificationAuthorization == .authorized)
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Approvals and finished work appear while OpenMausMobile is connected, including frames replayed after a short background pause. Closed-app push needs the separate APNs relay release.")
+            }
+
+            Section {
                 Button("Unpair this phone", role: .destructive) { confirmingSignOut = true }
             } footer: {
                 Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in OpenMausBot → Settings → Companion.")
@@ -34,6 +46,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await session.refreshNotificationAuthorization() }
         .confirmationDialog(
             "Unpair this phone?",
             isPresented: $confirmingSignOut,

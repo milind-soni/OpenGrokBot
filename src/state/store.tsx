@@ -62,6 +62,10 @@ export interface Message {
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
   comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+  /** sent while the bot was mid-turn; auto-sends when the turn settles.
+   * Rendered only while the bot is busy, so a flag stranded by a server
+   * restart never shows a promise nothing will keep. */
+  queued?: boolean;
 }
 
 export type GroupDefaultResponder =
@@ -82,6 +86,12 @@ export interface Group {
   /** auto-created bot⇄bot channel (ask_bot exchanges mirror here) */
   dm?: boolean;
   busyBotId?: string | null;
+  /** the room's shared desk — where member turns run their shell tools,
+   * overriding each member's own folder; absent = each member's own */
+  cwd?: string;
+  /** folder the room's turns actually run in, pinned on the first turn;
+   * null = each member's own default; absent = not pinned yet */
+  pinnedCwd?: string | null;
   messages: Message[];
 }
 

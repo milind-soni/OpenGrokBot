@@ -590,6 +590,41 @@ describe("Store task working folder", () => {
   });
 });
 
+describe("Store room working folder", () => {
+  beforeEach(() => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("pins the room's folder on its first turn, and never again", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const group = store.createGroup("Team", [bot.id]);
+    store.patchGroup(group.id, { cwd: "/tmp/project-a" });
+
+    // first turn: nothing pinned yet → takes the room's folder
+    expect(store.pinGroupCwd(group.id)).toBe("/tmp/project-a");
+    expect(store.group(group.id)?.pinnedCwd).toBe("/tmp/project-a");
+
+    // the room's folder moves on; the thread stays where it started working
+    store.patchGroup(group.id, { cwd: "/tmp/project-b" });
+    expect(store.pinGroupCwd(group.id)).toBe("/tmp/project-a");
+
+    // the pin is durable — a restart must not re-pin from the new folder
+    const reloaded = new Store(selection);
+    expect(reloaded.pinGroupCwd(group.id)).toBe("/tmp/project-a");
+  });
+
+  it("pins the default (null) when the room has no folder, so a later folder can't move a running room", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const group = store.createGroup("Team", [bot.id]);
+    expect(store.pinGroupCwd(group.id)).toBeNull();
+    store.patchGroup(group.id, { cwd: "/tmp/project-a" });
+    expect(store.pinGroupCwd(group.id)).toBeNull();
+    expect(store.group(group.id)?.pinnedCwd).toBeNull();
+  });
+});
+
 describe("Store task working folder — cloud runs", () => {
   beforeEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });

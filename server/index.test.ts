@@ -60,6 +60,33 @@ beforeAll(async () => {
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
+  writeFileSync(
+    join(home, ".openmausbot", "groups.json"),
+    JSON.stringify([
+      {
+        id: "test-dm",
+        threadId: "test-dm-thread",
+        name: "Private channel",
+        memberIds: ["test-bot-a", "test-bot-b"],
+        defaultResponder: { kind: "mentions" },
+        bulletin: "",
+        unread: false,
+        createdAt: 1,
+        dm: true,
+      },
+      {
+        id: "test-pinned-room",
+        threadId: "test-pinned-room-thread",
+        name: "Pinned room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 2,
+        pinnedCwd: null,
+      },
+    ]),
+  );
 
   boxStub = createServer(async (req, res) => {
     if (req.url?.startsWith("/api/v3.1/tool_router/session")) {
@@ -190,6 +217,24 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.bots.length).toBeGreaterThanOrEqual(1);
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps direct-message channels folderless at the API boundary", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-dm", { cwd: home });
+    expect(attempted.status).toBe(400);
+    expect(attempted.body.error).toMatch(/direct-message.*working folder/i);
+    const state = await api("GET", "/api/bots");
+    expect(state.body.groups.find((group: { id: string }) => group.id === "test-dm")).not.toHaveProperty("cwd");
+    expect((await api("DELETE", "/api/groups/test-dm")).status).toBe(200);
+  });
+
+  it("rejects working-folder changes after a room has pinned its first turn", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-pinned-room", { cwd: home });
+    expect(attempted.status).toBe(409);
+    expect(attempted.body.error).toMatch(/fixed after its first turn/i);
+    const state = await api("GET", "/api/bots");
+    expect(state.body.groups.find((group: { id: string }) => group.id === "test-pinned-room")).not.toHaveProperty("cwd");
+    expect((await api("DELETE", "/api/groups/test-pinned-room")).status).toBe(200);
   });
 
   it("describes the configured fleet, shadows included", async () => {

@@ -21,6 +21,32 @@ import { removeTempDir } from "../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
 
+/** Connect to a broker socket and resolve once the connection is live. */
+function connectSocket(path: string) {
+  const conn = connect(path);
+  return new Promise<ReturnType<typeof connect>>((resolve, reject) => {
+    conn.on("connect", () => resolve(conn));
+    conn.on("error", reject);
+  });
+}
+
+/** Returns a function that resolves, in order, with each `\n`-delimited JSON
+ * message the broker writes back on `conn` — one call per expected answer. */
+function answerQueue(conn: ReturnType<typeof connect>) {
+  const waiters: Array<(msg: any) => void> = [];
+  let buf = "";
+  conn.on("data", (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      waiters.shift()?.(JSON.parse(line));
+    }
+  });
+  return () => new Promise<any>((resolve) => waiters.push(resolve));
+}
+
 describe("ClaudeDriver.decodeConfig", () => {
   it("defaults to the claude binary with acceptEdits", () => {
     expect(ClaudeDriver.decodeConfig({})).toEqual({ cli: "claude", permissionMode: "acceptEdits" });
@@ -414,26 +440,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-perm-dup-1", text: "go" });
     await recorder.until((e) => e.type === "session.started");
 
-    const conn = connect(permissionSocketPath("t-perm-dup-1"));
-    const answers: Array<{ behavior: string; message?: string }> = [];
-    const waiters: Array<(a: { behavior: string; message?: string }) => void> = [];
-    let buf = "";
-    conn.on("data", (c) => {
-      buf += c;
-      let nl;
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        const parsed = JSON.parse(line);
-        answers.push(parsed);
-        waiters.shift()?.(parsed);
-      }
-    });
-    const nextAnswer = () => new Promise<{ behavior: string; message?: string }>((resolve) => waiters.push(resolve));
-    await new Promise<void>((resolve, reject) => {
-      conn.on("connect", resolve);
-      conn.on("error", reject);
-    });
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-1"));
+    const nextAnswer = answerQueue(conn);
 
     // two asks with the same id on one connection, second sent before the
     // first is resolved
@@ -443,8 +451,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     // the collision is denied immediately, on the wire, without a second
     // request.opened ever firing
-    const duplicateAnswer = await nextAnswer();
-    expect(duplicateAnswer).toMatchObject({ behavior: "deny" });
+    expect(await nextAnswer()).toMatchObject({ behavior: "deny" });
 
     // the original ask is untouched and still resolves normally
     await expect(instance.adapter.respondToRequest("t-perm-dup-1", "dup-1", { behavior: "allow" })).resolves.toBe(
@@ -462,29 +469,14 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-perm-dup-2", text: "go" });
     await recorder.until((e) => e.type === "session.started");
 
-    const conn1 = connect(permissionSocketPath("t-perm-dup-2"));
-    await new Promise<void>((resolve, reject) => {
-      conn1.on("connect", resolve);
-      conn1.on("error", reject);
-    });
+    const conn1 = await connectSocket(permissionSocketPath("t-perm-dup-2"));
     conn1.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo one" } }) + "\n");
     await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-2");
 
     // `pending` is shared across every connection on the broker, so a
     // second connection reusing the same id must collide too
-    const conn2 = connect(permissionSocketPath("t-perm-dup-2"));
-    const conn2Answer = new Promise<{ behavior: string }>((resolve) => {
-      let buf2 = "";
-      conn2.on("data", (c) => {
-        buf2 += c;
-        const nl = buf2.indexOf("\n");
-        if (nl !== -1) resolve(JSON.parse(buf2.slice(0, nl)));
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      conn2.on("connect", resolve);
-      conn2.on("error", reject);
-    });
+    const conn2 = await connectSocket(permissionSocketPath("t-perm-dup-2"));
+    const conn2Answer = answerQueue(conn2)();
     conn2.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo two" } }) + "\n");
     expect(await conn2Answer).toMatchObject({ behavior: "deny" });
 
@@ -504,11 +496,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({ threadId: "t-perm-dup-3", text: "go" });
     await recorder.until((e) => e.type === "session.started");
 
-    const conn = connect(permissionSocketPath("t-perm-dup-3"));
-    await new Promise<void>((resolve, reject) => {
-      conn.on("connect", resolve);
-      conn.on("error", reject);
-    });
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-3"));
 
     conn.write(JSON.stringify({ t: "ask", id: "dup-3", tool: "Bash", input: { command: "echo one" } }) + "\n");
     await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-3" && e.summary === "echo one");

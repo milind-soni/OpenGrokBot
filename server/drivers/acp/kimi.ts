@@ -52,6 +52,30 @@ function hasTomlTable(text: string, heading: string): boolean {
   return text.split(/\r?\n/).some((line) => line.trim() === heading);
 }
 
+function tomlTableHasKey(block: string, key: string): boolean {
+  return block.split(/\r?\n/).some((line) => {
+    const stripped = line.trim();
+    if (!stripped || stripped.startsWith("#")) return false;
+    const eq = stripped.indexOf("=");
+    return eq > 0 && stripped.slice(0, eq).trim() === key;
+  });
+}
+
+/** Insert missing keys into an existing table. Does not overwrite set values. */
+function patchTomlTable(text: string, heading: string, rows: string[]): string {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) return text;
+  let end = start + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
+  const block = lines.slice(start, end).join("\n");
+  const missing = rows.filter((row) => !tomlTableHasKey(block, row.split("=")[0]!.trim()));
+  if (!missing.length) return text;
+  let insertAt = end;
+  while (insertAt > start + 1 && lines[insertAt - 1] === "") insertAt--;
+  return [...lines.slice(0, insertAt), ...missing, ...lines.slice(insertAt)].join("\n");
+}
+
 /** Write [providers.host] + [models."host/alias"] so `kimi -m` hits the local host. */
 export function ensureKimiInjectAlias(
   modelId: string,
@@ -72,6 +96,7 @@ export function ensureKimiInjectAlias(
   } catch {
     text = "";
   }
+  const original = text;
 
   const providerHeading = `[providers.${inject.host}]`;
   const modelHeading = `[models.${quoteTomlKey(alias)}]`;
@@ -87,14 +112,18 @@ export function ensureKimiInjectAlias(
       ].join("\n"),
     );
   }
-  if (!hasTomlTable(text, modelHeading)) {
+  // Kimi 0.36+ refuses openai_legacy as a wire protocol; ACP then
+  // skips default-model binding and falls through to OAuth. Patch
+  // aliases written before those keys existed; do not overwrite a
+  // user's protocol or context size.
+  if (hasTomlTable(text, modelHeading)) {
+    text = patchTomlTable(text, modelHeading, [`protocol = "openai"`, `max_context_size = 262144`]);
+  } else {
     blocks.push(
       [
         modelHeading,
         `provider = ${quoteToml(inject.host)}`,
         `model = ${quoteToml(inject.model)}`,
-        // Kimi 0.36+ refuses openai_legacy as a wire protocol; ACP then
-        // skips default-model binding and falls through to OAuth.
         `protocol = "openai"`,
         `max_context_size = 262144`,
         "",
@@ -104,6 +133,8 @@ export function ensureKimiInjectAlias(
   if (blocks.length) {
     const prefix = text && !text.endsWith("\n") ? `${text}\n\n` : text ? `${text}\n` : "";
     writeFileSync(path, `${prefix}${blocks.join("\n")}`);
+  } else if (text !== original) {
+    writeFileSync(path, text);
   }
   return alias;
 }

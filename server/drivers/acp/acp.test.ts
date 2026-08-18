@@ -465,8 +465,9 @@ describe("ACP turns (fake CLI)", () => {
       ...SELECT_MODEL_SUPPORT,
       driverKind: "turnEnvTest",
       selectModel: undefined,
-      applyTurnEnv: (env, { requestedModel }) => {
-        env.TEST_TURN_MODEL = requestedModel ?? "";
+      resolveTurnModel: (model) => (model ? `resolved/${model}` : model),
+      applyTurnEnv: (env, { model, requestedModel }) => {
+        env.TEST_TURN_MODEL = `${model ?? ""}|${requestedModel ?? ""}`;
       },
     });
     instance = await TurnEnvDriver.create({
@@ -485,7 +486,9 @@ describe("ACP turns (fake CLI)", () => {
     });
     await recorder.until((e) => e.type === "turn.completed");
 
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_TURN_MODEL).toBe("ollama::ornith:35b-bf16");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_TURN_MODEL).toBe(
+      "resolved/ollama::ornith:35b-bf16|ollama::ornith:35b-bf16",
+    );
   });
 
   it("transformEnv sees the instance config", async () => {

@@ -266,6 +266,64 @@ describe("ensureKimiInjectAlias", () => {
     expect(text).toContain(`max_context_size = 262144`);
   });
 
+  it("amends an existing alias with protocol and context size and leaves user keys", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-patch-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        "[[hooks]]",
+        'event = "Stop"',
+        "",
+        "[providers.omlx]",
+        'type = "openai_legacy"',
+        'base_url = "http://127.0.0.1:8080/v1"',
+        'api_key = "omlx"',
+        "",
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        'display_name = "keep me"',
+        "",
+      ].join("\n"),
+    );
+    expect(ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home })).toBe("omlx/GLM-5.2-fp8");
+    expect(ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home })).toBe("omlx/GLM-5.2-fp8");
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text).toContain("[[hooks]]");
+    expect(text).toContain('display_name = "keep me"');
+    expect(text).toContain('provider = "omlx"');
+    expect(text).toContain('model = "GLM-5.2-fp8"');
+    expect(text.match(/protocol = "openai"/g)?.length).toBe(1);
+    expect(text.match(/max_context_size = 262144/g)?.length).toBe(1);
+  });
+
+  it("does not overwrite a user's protocol or context size", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-keep-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        'protocol = "openai_responses"',
+        "max_context_size = 8192",
+        "",
+      ].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text).toContain('protocol = "openai_responses"');
+    expect(text).toContain("max_context_size = 8192");
+    expect(text).not.toContain('protocol = "openai"');
+    expect(text).not.toContain("max_context_size = 262144");
+  });
+
   it("treats USERPROFILE as the same home for credentials and config", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-kimi-userprofile-"));
     scratchDirs.push(home);

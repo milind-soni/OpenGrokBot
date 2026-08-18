@@ -15,7 +15,7 @@
 // network, and the cost of that is a duplicate row in a picker rather than
 // anything broken.
 import { createHash } from "node:crypto";
-import { createSocket, type Socket } from "node:dgram";
+import { createSocket } from "node:dgram";
 import { hostname, networkInterfaces } from "node:os";
 
 import { lanAddresses } from "./listener.ts";
@@ -424,28 +424,53 @@ export function advertisableAddresses(): string[] {
 
 // ── the responder ──────────────────────────────────────────────────────
 
-/** Bind port and mode. Both exist for tests: the real thing is 5353,
- * multicast, and has no reason to be anything else. */
+/** The slice of `dgram.Socket` the responder drives. A structural seam
+ * rather than the concrete class, because the multicast behaviour that
+ * matters most — every group send pinned to each advertised interface —
+ * is observable only from the socket's side of the call, and CI runners
+ * rarely route multicast at all. The real socket satisfies this shape. */
+export interface ResponderSocket {
+  on(event: "error", listener: (error: Error) => void): void;
+  on(event: "message", listener: (message: Buffer, remote: { address: string; port: number }) => void): void;
+  once(event: "error", listener: (error: Error) => void): void;
+  bind(port: number, callback?: () => void): void;
+  setMulticastTTL(ttl: number): void;
+  addMembership(group: string, membershipInterface?: string): void;
+  setMulticastInterface(multicastInterface: string): void;
+  send(packet: Buffer, port: number, address: string, callback?: (error: Error | null) => void): void;
+  close(callback?: () => void): void;
+  address(): { port: number };
+}
+
+/** Bind port and mode. All of these exist for tests: the real thing is 5353,
+ * multicast, on a real socket, and has no reason to be anything else. */
 export interface ResponderOptions {
   /** Test rigs bind an ephemeral port and skip the group join; the packet
    * handling below is the same code either way. */
   port?: number;
   multicast?: boolean;
+  /** Test rigs substitute a recording socket: interface pinning never
+   * reaches the wire in CI, so the socket is where it can be asserted. */
+  socketFactory?: () => ResponderSocket;
 }
 
 /** A Bonjour responder, small enough to read: it announces one service, and
  * answers questions about that service from the local link. No dependency,
  * because a discovery nicety is not worth a supply chain. */
 export class MdnsResponder {
-  private socket: Socket | null = null;
+  private socket: ResponderSocket | null = null;
   private service: ServiceInfo | null = null;
   private timers: ReturnType<typeof setTimeout>[] = [];
+  /** Multicast sends, strictly one after another — see `send`. */
+  private sendQueue: Promise<void> = Promise.resolve();
   private readonly port: number;
   private readonly multicast: boolean;
+  private readonly socketFactory: () => ResponderSocket;
 
   constructor(options: ResponderOptions = {}) {
     this.port = options.port ?? MDNS_PORT;
     this.multicast = options.multicast ?? true;
+    this.socketFactory = options.socketFactory ?? (() => createSocket({ type: "udp4", reuseAddr: true }));
   }
 
   /** Whether the socket is up. False is normal and not an error. */
@@ -469,7 +494,7 @@ export class MdnsResponder {
     await this.stop();
     if (!service.addresses.length) return false;
 
-    const socket = createSocket({ type: "udp4", reuseAddr: true });
+    const socket = this.socketFactory();
     // Bind errors arrive as events, and an unhandled 'error' on a socket
     // is an uncaught exception that would take the harness with it.
     socket.on("error", () => void this.stop());
@@ -553,7 +578,7 @@ export class MdnsResponder {
         const timer = setTimeout(finish, GOODBYE_FLUSH_MS);
         timer.unref?.();
         try {
-          this.send(socket, encodeResponse(announcement(service), [], { ttl: 0 }), () => {
+          this.send(socket, encodeResponse(announcement(service), [], { ttl: 0 }), service.addresses, () => {
             clearTimeout(timer);
             finish();
           });
@@ -577,7 +602,7 @@ export class MdnsResponder {
   private announce() {
     if (!this.socket || !this.service) return;
     try {
-      this.send(this.socket, encodeResponse(announcement(this.service)));
+      this.send(this.socket, encodeResponse(announcement(this.service)), this.service.addresses);
     } catch {
       /* the interface may have gone away between timer and send */
     }
@@ -608,27 +633,68 @@ export class MdnsResponder {
       legacy ? { id: message.id, questions: message.questions } : {},
     );
     try {
+      // A unicast answer goes back the way the question came — the kernel
+      // routes it like any datagram, and pinning it to an advertised
+      // interface would be exactly wrong. Only group sends are pinned.
       if (unicast) this.socket.send(packet, fromPort, from);
-      else this.send(this.socket, packet);
+      else this.send(this.socket, packet, this.service.addresses);
     } catch {
       /* a send failure is one lost answer; the asker retries */
     }
   }
 
-  /** Multicast a packet to the group.
+  /** Multicast a packet to the group, once per advertised interface.
    *
    * Always to 5353, whatever port this responder is bound to: the destination
    * is where mDNS listens, not where we happen to be. Using the bind port
    * sent announcements to a port with nobody on it — and threw outright when
    * that port was 0, which is what an ephemeral bind gives you.
    *
+   * Once per interface, because a bare group send leaves on whichever single
+   * interface the kernel routes 224.0.0.251 to — with a VPN or a VM bridge
+   * up, that can be a network the phone is not on, and the responder then
+   * believes it is advertising while nobody can hear it. Joining the group
+   * per interface (in `advertise`) only fixes the receive side; the send
+   * side is pinned here with `setMulticastInterface`.
+   *
+   * And strictly serialized, because `setMulticastInterface` redirects every
+   * *subsequent* send on the socket while `send` itself completes a tick
+   * later: two bursts running interleaved could race their pins and both
+   * leave on whichever interface was pinned last. One queue, pin, wait for
+   * the datagram out, pin the next.
+   *
    * Unicast mode has no group to announce to, so there is nothing to send;
    * it exists for tests, which ask directly and are answered in `handle`. */
-  private send(socket: Socket, packet: Buffer, done?: (error: Error | null) => void) {
+  private send(
+    socket: ResponderSocket,
+    packet: Buffer,
+    addresses: string[],
+    done?: (error: Error | null) => void,
+  ) {
     if (!this.multicast) {
       done?.(null);
       return;
     }
-    socket.send(packet, MDNS_PORT, MDNS_ADDRESS, done);
+    this.sendQueue = this.sendQueue.then(async () => {
+      for (const address of addresses) {
+        await new Promise<void>((resolve) => {
+          try {
+            socket.setMulticastInterface(address);
+          } catch {
+            // the interface vanished between enumeration and send — sleep,
+            // VPN drop, cable pulled. Its packet is lost either way; the
+            // remaining interfaces still matter, so skip rather than throw.
+            resolve();
+            return;
+          }
+          try {
+            socket.send(packet, MDNS_PORT, MDNS_ADDRESS, () => resolve());
+          } catch {
+            resolve();
+          }
+        });
+      }
+      done?.(null);
+    });
   }
 }

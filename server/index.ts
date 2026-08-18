@@ -287,6 +287,18 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
   return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
 }
 
+/** A bounded page centred on a known message, used when a search result is
+ * opened on a client that only hydrated the newest part of the transcript. */
+function messageWindow(threadId: string, messageId: string, limit: number) {
+  const all = store.messagesFor(threadId);
+  const index = all.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+  const before = Math.floor((limit - 1) / 2);
+  const start = Math.max(0, Math.min(index - before, all.length - limit));
+  const stop = Math.min(all.length, start + limit);
+  return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
+}
+
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 /** One connected client, and what it asked to be sent. */
 interface SseClient {
@@ -2125,6 +2137,13 @@ const server = createServer(async (req, res) => {
       const limit = pageSize(url.searchParams.get("limit"));
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
       const before = url.searchParams.get("before");
+      const around = url.searchParams.get("around");
+      if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (around) {
+        const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
+        if (!window) return json(res, 404, { error: "no such message" });
+        return json(res, 200, window);
+      }
       // An unknown cursor must not silently answer with the newest page —
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {

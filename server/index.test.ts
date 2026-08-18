@@ -920,6 +920,19 @@ describe("message pages", () => {
     expect(top.body.messages).toHaveLength(6);
   });
 
+  it("returns a bounded transcript window around a search result", async () => {
+    const full = await seedRoom(9);
+    const target = full.messages[4];
+    const result = await api("GET", `/api/threads/${full.threadId}/messages?around=${target.id}&limit=5`);
+    expect(result.status).toBe(200);
+    expect(result.body.messages.map((message: { id: string }) => message.id)).toEqual(
+      full.messages.slice(2, 7).map((message: { id: string }) => message.id),
+    );
+    expect(result.body.hasMore).toBe(true);
+    expect((await api("GET", `/api/threads/${full.threadId}/messages?around=nope`)).status).toBe(404);
+    expect((await api("GET", `/api/threads/${full.threadId}/messages?around=${target.id}&before=${target.id}`)).status).toBe(400);
+  });
+
   it("refuses a cursor or size it cannot page from", async () => {
     const full = await seedRoom(1);
     // silently answering with the newest page would paginate in a circle

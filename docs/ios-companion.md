@@ -214,8 +214,9 @@ distribution scope:
 
 1. **Foundation:** sidecar, desktop controls, Swift core/app, pairing, chat,
    approvals, reconnect, simulator and contract CI.
-2. **Current desktop parity:** task switching/creation, SQLite search, transcript
-   export/share, and explicit handling for archived or hidden chats.
+2. **Desktop conversation parity:** task create/switch/rename/delete, SQLite
+   search with exact-message landing, transcript export/share, reactions, and
+   edit/version controls. Archived or hidden chat management remains desktop-only.
 3. **Notifications:** APNs credentials, a relay or another wake-up design,
    notification actions, and background reconciliation.
 4. **Distribution:** signing, bundle ownership, privacy declarations,

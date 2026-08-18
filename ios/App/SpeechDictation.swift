@@ -138,7 +138,7 @@ final class SpeechDictation: ObservableObject {
         // `.record` rather than `.playAndRecord`: this is composer
         // dictation, not a call, and holding the playback route would
         // duck whatever else is on the phone for no reason.
-        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        try session.setCategory(.record, mode: .measurement)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         let engine = AVAudioEngine()

@@ -7,7 +7,7 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,51 @@ import { ClaudeDriver, permissionSocketPath } from "./claude.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
+
+/** Connect to a broker socket and resolve once the connection is live. */
+function connectSocket(path: string): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    let retriesLeft = 20;
+    const tryConnect = () => {
+      const conn = connect(path);
+      const onConnect = () => {
+        conn.removeListener("error", onError);
+        resolve(conn);
+      };
+      const onError = (error: NodeJS.ErrnoException) => {
+        conn.removeListener("connect", onConnect);
+        conn.destroy();
+        // A Windows named pipe can briefly disappear while the server creates
+        // its next pipe instance for another simultaneous client.
+        if (process.platform === "win32" && error.code === "ENOENT" && retriesLeft-- > 0) {
+          setTimeout(tryConnect, 25);
+          return;
+        }
+        reject(error);
+      };
+      conn.once("connect", onConnect);
+      conn.once("error", onError);
+    };
+    tryConnect();
+  });
+}
+
+/** Returns a function that resolves, in order, with each `\n`-delimited JSON
+ * message the broker writes back on `conn` — one call per expected answer. */
+function answerQueue(conn: ReturnType<typeof connect>) {
+  const waiters: Array<(msg: any) => void> = [];
+  let buf = "";
+  conn.on("data", (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      waiters.shift()?.(JSON.parse(line));
+    }
+  });
+  return () => new Promise<any>((resolve) => waiters.push(resolve));
+}
 
 describe("ClaudeDriver.decodeConfig", () => {
   it("defaults to the claude binary with acceptEdits", () => {
@@ -407,6 +452,131 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(resolved).toMatchObject({ behavior: "deny", source: "system" });
     await recorder.until((e) => e.type === "turn.completed");
     conn.end();
+  });
+
+  it("denies a colliding ask id on the same connection without orphaning the original", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-1", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-1"));
+    const nextAnswer = answerQueue(conn);
+
+    // two asks with the same id on one connection, second sent before the
+    // first is resolved
+    conn.write(JSON.stringify({ t: "ask", id: "dup-1", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-1");
+    conn.write(JSON.stringify({ t: "ask", id: "dup-1", tool: "Bash", input: { command: "echo two" } }) + "\n");
+
+    // the collision is denied immediately, on the wire, with the duplicate's
+    // own id and the fixed denial message — and without a second
+    // request.opened ever firing for it
+    expect(await nextAnswer()).toMatchObject({
+      id: "dup-1",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-1")).toHaveLength(1);
+
+    // the original ask is untouched and still resolves normally
+    await expect(instance.adapter.respondToRequest("t-perm-dup-1", "dup-1", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+    expect(await nextAnswer()).toMatchObject({ behavior: "allow" });
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-1");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("denies a colliding ask id from a second connection on the same broker", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-2", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn1 = await connectSocket(permissionSocketPath("t-perm-dup-2"));
+    conn1.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-2");
+
+    // `pending` is shared across every connection on the broker, so a
+    // second connection reusing the same id must collide too
+    const conn2 = await connectSocket(permissionSocketPath("t-perm-dup-2"));
+    const conn2Answer = answerQueue(conn2)();
+    conn2.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo two" } }) + "\n");
+    expect(await conn2Answer).toMatchObject({
+      id: "dup-2",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-2")).toHaveLength(1);
+
+    // the original, opened on conn1, still resolves normally
+    await expect(instance.adapter.respondToRequest("t-perm-dup-2", "dup-2", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    conn1.end();
+    conn2.end();
+    await instance.adapter.interruptTurn("t-perm-dup-2");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("accepts an ask id reused after the original already resolved — not a collision", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-3", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-3"));
+
+    conn.write(JSON.stringify({ t: "ask", id: "dup-3", tool: "Bash", input: { command: "echo one" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-3" && e.summary === "echo one");
+    await expect(instance.adapter.respondToRequest("t-perm-dup-3", "dup-3", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    // the id is free again once its ask resolved — reusing it is not a
+    // collision and should open normally (distinct summary proves this is a
+    // fresh request.opened, not the first one already seen by the recorder)
+    conn.write(JSON.stringify({ t: "ask", id: "dup-3", tool: "Bash", input: { command: "echo two" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-3" && e.summary === "echo two");
+    await expect(instance.adapter.respondToRequest("t-perm-dup-3", "dup-3", { behavior: "allow" })).resolves.toBe(
+      "allowed-once",
+    );
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-3");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("denies a colliding ask id for question-kind asks too, without disturbing the original", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-4", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-4"));
+    const nextAnswer = answerQueue(conn);
+
+    conn.write(JSON.stringify({ t: "ask", id: "dup-4", kind: "question", tool: "ask_user", input: { question: "one?" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-4");
+    conn.write(JSON.stringify({ t: "ask", id: "dup-4", kind: "question", tool: "ask_user", input: { question: "two?" } }) + "\n");
+
+    // same collision guard applies regardless of ask kind
+    expect(await nextAnswer()).toMatchObject({
+      id: "dup-4",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-4")).toHaveLength(1);
+
+    // the original question is untouched and still resolves normally
+    await expect(
+      instance.adapter.respondToRequest("t-perm-dup-4", "dup-4", { behavior: "answer", message: "yes" }),
+    ).resolves.toBe("answered");
+    expect(await nextAnswer()).toMatchObject({ behavior: "answer" });
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-4");
+    await recorder.until((e) => e.type === "turn.completed");
   });
 
   it("passes effort to the CLI, and omits the flag when unset", async () => {

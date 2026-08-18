@@ -19,6 +19,7 @@
 // off switch, and it is a more honest one than a flag in a file.
 import { createServer } from "node:http";
 
+import { createAddressWatcher } from "./advertise-watch.ts";
 import { createControlServer } from "./control.ts";
 import { DeviceRegistry } from "./devices.ts";
 import { lanAddresses, refreshTailnetName, tailnetName, tailscaleAddress } from "./listener.ts";
@@ -97,6 +98,17 @@ async function refreshMachineName(): Promise<void> {
 
 const devices = new DeviceRegistry();
 const mdns = new MdnsResponder();
+
+/** Keeps the Bonjour record matching the interface table: advertise when a
+ * network appears, re-advertise when DHCP moves us, withdraw when it goes —
+ * so `mdns.advertising` stays a true statement rather than a boot-time one. */
+const watcher = createAddressWatcher({
+  addresses: advertisableAddresses,
+  // service() reads the current addresses, so a re-advertise carries them
+  advertise: () => mdns.advertise(service()),
+  withdraw: () => mdns.stop(),
+  log: (line) => console.log(`bonjour: ${line}`),
+});
 
 /** This machine as a Bonjour record: one DNS label, the device port, and the
  * addresses a phone could reach it on. */
@@ -207,9 +219,13 @@ async function main(): Promise<void> {
   // another responder, multicast off, a guest network that isolates its
   // clients. Pairing by typed address still works, and the control page says
   // so rather than pretending the list will fill in.
-  await mdns.advertise(service()).catch((error: unknown) => {
-    console.warn(`bonjour unavailable: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  //
+  // Through the watcher rather than a single advertise: a laptop opened
+  // before wifi associates has no addresses yet, and addresses change under
+  // a running sidecar. The first check advertises (or says why not), and the
+  // interval re-advertises on every change after that.
+  await watcher.check();
+  watcher.start();
 
   const addresses = lanAddresses();
   const tailscale = tailscaleAddress(addresses);
@@ -230,6 +246,9 @@ async function main(): Promise<void> {
  * is the off switch, so it has to actually stop. */
 const shutdown = async (signal: string): Promise<void> => {
   console.log(`\n${signal} — stopping`);
+  // the watcher first, or a tick could re-advertise the record the next
+  // line just withdrew
+  watcher.stop();
   await mdns.stop().catch(() => {});
   // close() waits for open connections, and an SSE stream never ends on its
   // own — drop the sockets so "stop" means stopped, now.

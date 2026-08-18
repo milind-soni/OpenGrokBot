@@ -177,6 +177,7 @@ type AskResolutionSource = "user" | "timeout" | "system";
 const DENY_TIMEOUT_NOTE =
   "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+const DUPLICATE_ASK_ID_NOTE = "OpenMausBot: duplicate ask id — skipping this request.";
 
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask: Ask): string {
@@ -224,6 +225,22 @@ function createPermissionBroker(opts: {
         }
         if (msg.t !== "ask") continue;
         const askId = String(msg.id ?? newId());
+        // `pending` is server-scoped, not per-connection: two asks with the
+        // same id — a buggy/adversarial client, never a legitimate retry
+        // (permission-proxy mints a fresh randomUUID per ask) — would
+        // otherwise let the second `pending.set` silently overwrite the
+        // first, orphaning it as an unanswerable card once the first
+        // resolves and deletes the shared key. Reject before either ask
+        // becomes visible to onAsk.
+        if (pending.has(askId)) {
+          // askId is client-controlled; JSON.stringify escapes newlines and
+          // control characters so it can't corrupt the log line or terminal.
+          console.error(`permission broker on ${opts.socketPath}: duplicate ask id ${JSON.stringify(askId)} — denying`);
+          try {
+            conn.write(JSON.stringify({ t: "answer", id: askId, behavior: "deny", message: DUPLICATE_ASK_ID_NOTE }) + "\n");
+          } catch {}
+          continue;
+        }
         const kind = msg.kind === "question" ? ("question" as const) : ("permission" as const);
         const ask: Ask = { id: askId, kind, tool: msg.tool ?? "tool", input: msg.input ?? {}, at: Date.now() };
         const finish = (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => {

@@ -3,6 +3,7 @@
 // until then they live only on the phone.
 import SwiftUI
 import UIKit
+import CompanionCore
 
 struct PendingAttachment: Identifiable {
     let id: UUID

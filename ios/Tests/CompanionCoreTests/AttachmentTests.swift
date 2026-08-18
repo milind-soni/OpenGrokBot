@@ -44,5 +44,50 @@ final class AttachmentTests: XCTestCase {
             Attachment.escapeAttribute("/tmp/a\"&<>\t\n.txt"),
             "/tmp/a&quot;&amp;&lt;&gt;&#9;&#10;.txt"
         )
+        XCTAssertEqual(
+            Attachment.unescapeAttribute("/tmp/a&quot;&amp;&lt;&gt;&#9;&#10;.txt"),
+            "/tmp/a\"&<>\t\n.txt"
+        )
+    }
+
+    func testDisplayHidesTheTagAndKeepsTheCaption() {
+        let shown = Attachment.display(
+            "Can create a listing\n\n<attached-file path=\"/Users/me/.openmausbot-companion/inbox/1-ab-photo.jpg\" />"
+        )
+        XCTAssertEqual(shown.caption, "Can create a listing")
+        XCTAssertEqual(shown.files.map(\.name), ["1-ab-photo.jpg"])
+        XCTAssertEqual(
+            shown.files.first?.path,
+            "/Users/me/.openmausbot-companion/inbox/1-ab-photo.jpg"
+        )
+        XCTAssertTrue(shown.files.first?.isImage == true)
+    }
+
+    func testAPhotoWithNoCaptionStillDisplaysAsAFile() {
+        let shown = Attachment.display("<attached-file path=\"/tmp/photo.jpg\" />")
+        XCTAssertEqual(shown.caption, "")
+        XCTAssertEqual(shown.files.map(\.name), ["photo.jpg"])
+    }
+
+    func testAPlainMessageIsUnchanged() {
+        let shown = Attachment.display("just text")
+        XCTAssertEqual(shown.caption, "just text")
+        XCTAssertEqual(shown.files, [])
+    }
+
+    func testDisplayRoundTripsADraft() {
+        let files = [
+            Attachment.File(path: "/tmp/a.jpg", name: "a.jpg", size: 1),
+            Attachment.File(path: "/tmp/notes.txt", name: "notes.txt", size: 2),
+        ]
+        let shown = Attachment.display(Attachment.draft(text: "please look", files: files))
+        XCTAssertEqual(shown.caption, "please look")
+        XCTAssertEqual(shown.files.map(\.path), ["/tmp/a.jpg", "/tmp/notes.txt"])
+        XCTAssertEqual(shown.files.map(\.name), ["a.jpg", "notes.txt"])
+        XCTAssertEqual(shown.files.map(\.isImage), [true, false])
+    }
+
+    func testAPdfIsNotAnImage() {
+        XCTAssertFalse(Attachment.File(path: "/tmp/a.pdf", name: "a.pdf", size: 1).isImage)
     }
 }

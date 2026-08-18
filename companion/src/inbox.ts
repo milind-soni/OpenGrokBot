@@ -10,7 +10,7 @@
 // processes do not share a layout; the agent still reads the file because
 // the path we return is an ordinary absolute path on this machine.
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
@@ -68,4 +68,50 @@ export function storeInboxFile(
 
   writeFileSync(path, bytes, { mode: FILE_MODE });
   return { path, name, size: bytes.length };
+}
+
+/** Stored inbox names start with a digit (the timestamp). A leading dot is
+ * a traversal or a hidden file and is not one of ours. */
+const INBOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Read a file the phone previously stored. Basename only, and only from
+ * this inbox — a stolen token must not become a reader for the rest of the
+ * disk. Missing or invalid names are `null`, not thrown. */
+export function readInboxFile(
+  filename: string,
+  root = inboxRoot(),
+): { bytes: Buffer; type: string } | null {
+  if (filename !== basename(filename) || !INBOX_NAME.test(filename)) return null;
+  const path = join(root, filename);
+  const resolvedRoot = resolve(root);
+  const resolvedPath = resolve(path);
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + sep)) {
+    return null;
+  }
+  try {
+    return { bytes: readFileSync(path), type: inboxType(filename) };
+  } catch {
+    return null;
+  }
+}
+
+export function inboxType(filename: string): string {
+  switch (filename.split(".").pop()?.toLowerCase()) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "heic":
+    case "heif":
+      return "image/heic";
+    case "pdf":
+      return "application/pdf";
+    default:
+      return "application/octet-stream";
+  }
 }

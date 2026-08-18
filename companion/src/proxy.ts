@@ -14,7 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
-import { MAX_INBOX_BYTES, storeInboxFile } from "./inbox.ts";
+import { MAX_INBOX_BYTES, readInboxFile, storeInboxFile } from "./inbox.ts";
 import { denyReason } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -220,6 +220,26 @@ export function createProxyHandler(options: ProxyOptions) {
         },
       );
       return;
+    }
+
+    if (method === "GET") {
+      const match = /^\/api\/inbox\/([^/]+)$/.exec(path);
+      if (match) {
+        let name = match[1];
+        try {
+          name = decodeURIComponent(name);
+        } catch {
+          return sendJson(res, 400, { error: "invalid filename" });
+        }
+        const stored = readInboxFile(name);
+        if (!stored) return sendJson(res, 404, { error: "no such file" });
+        res.writeHead(200, {
+          "content-type": stored.type,
+          "content-length": stored.bytes.length,
+        });
+        res.end(stored.bytes);
+        return;
+      }
     }
 
     const upstream = httpRequest(

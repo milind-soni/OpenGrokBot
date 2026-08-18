@@ -146,3 +146,49 @@ struct ComposerAttachBar: View {
         )
     }
 }
+
+/// A file that already went with a message: the photo if we can show it,
+/// otherwise a chip with the name. The sidecar still has the bytes.
+struct InboxAttachmentView: View {
+    let file: Attachment.File
+    var cached: UIImage?
+    @EnvironmentObject private var session: Session
+    @State private var loaded: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        if file.isImage, let image = cached ?? loaded {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 240)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .accessibilityLabel(file.name)
+        } else if file.isImage, !failed {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.secondary.opacity(0.16))
+                .frame(height: 120)
+                .overlay { ProgressView() }
+                .task(id: file.path) {
+                    let name = URL(fileURLWithPath: file.path).lastPathComponent
+                    guard let data = await session.inboxFile(named: name),
+                          let image = UIImage(data: data)
+                    else {
+                        failed = true
+                        return
+                    }
+                    loaded = image
+                }
+        } else {
+            Label(file.name, systemImage: file.isImage ? "photo" : "doc")
+                .font(.system(size: 15))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.secondary.opacity(0.16))
+                )
+                .accessibilityLabel(file.name)
+        }
+    }
+}

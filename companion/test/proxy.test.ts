@@ -9,7 +9,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -257,6 +257,16 @@ describe("the sidecar in front of an unmodified harness", () => {
     expect(body.size).toBe(payload.length);
     expect(body.path.startsWith(join(home, "companion-data", "inbox"))).toBe(true);
     expect(readFileSync(body.path, "utf8")).toBe("hello from the phone");
+
+    const stored = basename(body.path);
+    const got = await fetch(`${SIDECAR}/api/inbox/${stored}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(got.status).toBe(200);
+    expect(got.headers.get("content-type")).toBe("application/octet-stream");
+    expect(Buffer.from(await got.arrayBuffer()).toString("utf8")).toBe("hello from the phone");
+    expect((await device("GET", `/api/inbox/${stored}`, { token: null })).status).toBe(401);
+    expect((await device("GET", "/api/inbox/no-such-file.txt")).status).toBe(404);
   });
 
   it("refuses an inbox upload without a token, and a body over the ceiling", async () => {

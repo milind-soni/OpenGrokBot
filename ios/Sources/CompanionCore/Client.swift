@@ -268,6 +268,18 @@ public struct CompanionClient: Sendable {
         return data
     }
 
+    /// Bytes the sidecar wrote for a phone attachment. Named by the inbox
+    /// file, not by a host path, so a stolen token cannot read the rest of
+    /// the computer.
+    public func inboxFile(named name: String) async throws -> Data {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: Self.filenameHeaderAllowed) ?? name
+        var request = try makeRequest("GET", "/api/inbox/\(encoded)")
+        request.timeoutInterval = 60
+        let (data, response) = try await perform(request)
+        try Self.check(response, data)
+        return data
+    }
+
     // MARK: - Doing
 
     /// Make a new bot. The harness picks its name, colour and greeting — the

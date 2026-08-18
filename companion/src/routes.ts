@@ -69,6 +69,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // has no upload route. The phone then sends the returned host path as
   // a normal text message, the same shape the desktop composer already uses.
   { method: "POST", path: /^\/api\/inbox$/ },
+  { method: "GET", path: /^\/api\/inbox\/[A-Za-z0-9][\w.-]*$/ },
 ];
 
 /** Route families worth naming in the refusal.

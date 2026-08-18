@@ -10,6 +10,7 @@
 import Foundation
 import OSLog
 import SwiftUI
+import UIKit
 import CompanionCore
 
 /// Stream lifecycle, in Console.app and the Xcode console. A companion that
@@ -381,6 +382,28 @@ final class Session: ObservableObject {
         try? await client?.image(threadId: threadId, messageId: messageId)
     }
 
+    func inboxFile(named name: String) async -> Data? {
+        guard let client else { return nil }
+        do {
+            return try await client.inboxFile(named: name)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Thumbnails of files this session just sent, keyed by the host path
+    /// in the message. The bubble uses them so a photo appears before the
+    /// sidecar round-trip, and after a restart the GET above fills in.
+    private var attachmentPreviews: [String: UIImage] = [:]
+
+    func rememberPreview(_ image: UIImage, for path: String) {
+        attachmentPreviews[path] = image
+    }
+
+    func preview(for path: String) -> UIImage? {
+        attachmentPreviews[path]
+    }
+
     private func perform(quietly: Bool = false, _ body: (CompanionClient) async throws -> Void) async {
         guard let client else { return }
         do {
@@ -521,11 +544,23 @@ extension CompanionState {
     private static func preview(of last: Message?) -> String {
         guard let last else { return "" }
         switch last.kind {
-        case .text: return last.text ?? ""
+        case .text:
+            return Self.previewText(last.text ?? "")
         case .options: return last.card?.isPending == true ? "Waiting on you" : (last.card?.title ?? "")
         case .activity: return last.tool?.name ?? ""
         case .screen: return "Screenshot"
         case .unknown: return last.text ?? ""
         }
+    }
+
+    /// Hide `<attached-file>` tags in the roster. The path is for the agent.
+    private static func previewText(_ text: String) -> String {
+        let shown = Attachment.display(text)
+        if shown.files.isEmpty { return shown.caption }
+        if shown.caption.isEmpty {
+            if shown.files.count == 1 { return shown.files[0].name }
+            return "\(shown.files.count) files"
+        }
+        return shown.caption
     }
 }

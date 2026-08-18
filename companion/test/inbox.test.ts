@@ -1,9 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { MAX_INBOX_BYTES, safeFilename, storeInboxFile } from "../src/inbox.ts";
+import { MAX_INBOX_BYTES, readInboxFile, safeFilename, storeInboxFile } from "../src/inbox.ts";
 
 let root: string | undefined;
 
@@ -62,5 +62,16 @@ describe("storeInboxFile", () => {
     expect(a.path).not.toBe(b.path);
     expect(readFileSync(a.path, "utf8")).toBe("one");
     expect(readFileSync(b.path, "utf8")).toBe("two");
+  });
+
+  it("reads a stored file back, and refuses a name that could leave the inbox", () => {
+    const stored = storeInboxFile(Buffer.from("hello"), "notes.txt", dir());
+    const got = readInboxFile(basename(stored.path), root!);
+    expect(got?.bytes.toString("utf8")).toBe("hello");
+    expect(got?.type).toBe("application/octet-stream");
+    expect(readInboxFile("../notes.txt", root!)).toBeNull();
+    expect(readInboxFile("..", root!)).toBeNull();
+    expect(readInboxFile(".hidden", root!)).toBeNull();
+    expect(readInboxFile("missing.txt", root!)).toBeNull();
   });
 });

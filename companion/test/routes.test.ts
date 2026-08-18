@@ -42,6 +42,7 @@ describe("what the app may do", () => {
     ["GET", "/api/threads/th_1/messages/msg_2/image"],
     ["POST", "/api/threads/th_1/respond"],
     ["POST", "/api/inbox"],
+    ["GET", "/api/inbox/178-ab-photo.jpg"],
   ];
 
   for (const [method, path] of calls) {
@@ -99,6 +100,7 @@ describe("what it may not", () => {
     expect(allowed("GET", "/api/botsandthensome")).toBe(false);
     expect(allowed("GET", "/api/events/all")).toBe(false);
     expect(allowed("GET", "/api/threads/th_1/messages/msg_2/image/../../../config")).toBe(false);
+    expect(allowed("GET", "/api/inbox/../passwd")).toBe(false);
     expect(allowed("GET", "/api/bots%2f..%2fwebhooks")).toBe(false);
   });
 

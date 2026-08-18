@@ -17,6 +17,23 @@ public enum Attachment {
             self.name = name
             self.size = size
         }
+
+        /// Cheap, from the name. The view uses this to decide thumbnail vs chip.
+        public var isImage: Bool {
+            let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
+            return Self.imageExtensions.contains(ext)
+        }
+
+        private static let imageExtensions: Set<String> = [
+            "jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tif", "tiff",
+        ]
+    }
+
+    /// What a person should see: the caption they typed, then the files, never
+    /// the host path tag. That tag is for the agent.
+    public struct Display: Equatable, Sendable {
+        public var caption: String
+        public var files: [File]
     }
 
     /// Combine typed composer text with host paths for attached files.
@@ -45,5 +62,44 @@ public enum Attachment {
             .replacingOccurrences(of: "\t", with: "&#9;")
             .replacingOccurrences(of: "\r", with: "&#13;")
             .replacingOccurrences(of: "\n", with: "&#10;")
+    }
+
+    /// Inverse of `escapeAttribute`. `&amp;` last, so a path that encoded an
+    /// ampersand does not get scanned for a second round of entities.
+    public static func unescapeAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&#10;", with: "\n")
+            .replacingOccurrences(of: "&#13;", with: "\r")
+            .replacingOccurrences(of: "&#9;", with: "\t")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    /// Pull caption and files out of a stored user message. A message with
+    /// no tags is unchanged; tags become files named from the path.
+    public static func display(_ text: String) -> Display {
+        let tag = #/<attached-file path="([^"]*)"\s*\/>/#
+        let matches = text.matches(of: tag)
+        guard !matches.isEmpty else {
+            return Display(caption: text, files: [])
+        }
+
+        var files: [File] = []
+        var parts: [String] = []
+        var cursor = text.startIndex
+        for match in matches {
+            let before = String(text[cursor..<match.range.lowerBound])
+            let trimmed = before.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { parts.append(trimmed) }
+            let path = unescapeAttribute(String(match.output.1))
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            files.append(File(path: path, name: name.isEmpty ? "file" : name, size: 0))
+            cursor = match.range.upperBound
+        }
+        let after = String(text[cursor...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !after.isEmpty { parts.append(after) }
+        return Display(caption: parts.joined(separator: "\n\n"), files: files)
     }
 }

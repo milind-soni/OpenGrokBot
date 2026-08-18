@@ -261,6 +261,9 @@ struct ChatView: View {
             for id in ids {
                 guard let index = pending.firstIndex(where: { $0.id == id }) else { continue }
                 if let host = pending[index].host {
+                    if let preview = pending[index].preview {
+                        session.rememberPreview(preview, for: host.path)
+                    }
                     files.append(host)
                     continue
                 }
@@ -272,6 +275,9 @@ struct ChatView: View {
                 }
                 let file = Attachment.File(path: stored.path, name: stored.name, size: stored.size)
                 pending[index].host = file
+                if let preview = pending[index].preview {
+                    session.rememberPreview(preview, for: file.path)
+                }
                 files.append(file)
             }
             let body = Attachment.draft(text: text, files: files)
@@ -532,12 +538,14 @@ struct MessageRow: View {
 
 struct TextBubble: View {
     let message: Message
+    @EnvironmentObject private var session: Session
 
     var body: some View {
         let mine = message.role == .user
+        let shown = mine ? Attachment.display(message.text ?? "") : nil
         HStack {
             if mine { Spacer(minLength: 44) }
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 // rooms attribute each line to the member who said it
                 if let from = message.from {
                     Text(from.name)
@@ -547,12 +555,17 @@ struct TextBubble: View {
                 // Bots get markdown, you do not — the same split the desktop
                 // makes. Markdown you did not intend is worse than markdown
                 // you did: a message about `**` should show the asterisks.
-                if mine {
-                    Text(message.text ?? "")
-                        .font(.system(size: 17))
-                        .foregroundStyle(Color.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                if mine, let shown {
+                    if !shown.caption.isEmpty {
+                        Text(shown.caption)
+                            .font(.system(size: 17))
+                            .foregroundStyle(Color.primary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(Array(shown.files.enumerated()), id: \.offset) { _, file in
+                        InboxAttachmentView(file: file, cached: session.preview(for: file.path))
+                    }
                 } else {
                     MarkdownText(source: message.text ?? "")
                         .foregroundStyle(Color.primary)

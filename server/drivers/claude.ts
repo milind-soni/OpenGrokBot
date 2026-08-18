@@ -8,6 +8,7 @@
 //   - Composio Sessions (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -190,8 +191,18 @@ function askSummary(ask: Ask): string {
 }
 
 export function permissionSocketPath(threadId: string) {
-  const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-  return brokerSocketPath(DATA_DIR, tag);
+  // A readable prefix alone is not unique: ids that agree on their first
+  // characters ("t-perm-dup-1", "t-perm-dup-2") would share a socket. POSIX
+  // hides that — a new broker's listen replaces the socket FILE, so the name
+  // always points at the fresh server — but Windows named pipes live in a
+  // global namespace that is never unlinked, and a reused name races the
+  // previous broker's async teardown. Half the tag is a digest of the FULL
+  // id so distinct threads get distinct sockets; the tag stays at 8 chars
+  // total because the POSIX path already brushes the 104-byte sun_path
+  // limit under deep tmp home dirs.
+  const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
+  const digest = createHash("sha256").update(threadId).digest("hex").slice(0, 4);
+  return brokerSocketPath(DATA_DIR, `${prefix}${digest}`);
 }
 
 function createPermissionBroker(opts: {

@@ -83,7 +83,15 @@ describe("ClaudeDriver.decodeConfig", () => {
   });
 
   it.skipIf(process.platform !== "win32")("names permission pipes per harness process", () => {
-    expect(permissionSocketPath("thread-abc")).toBe(`\\\\.\\pipe\\openmausbot-perm-${process.pid}-thread-a`);
+    expect(permissionSocketPath("thread-abc")).toMatch(
+      new RegExp(`^\\\\\\\\\\.\\\\pipe\\\\openmausbot-perm-${process.pid}-thre[0-9a-f]{4}$`),
+    );
+  });
+
+  it("keeps threads whose ids share a prefix on distinct sockets", () => {
+    // the truncated prefix agrees; only the digest separates them — without
+    // it, Windows pipes for these two threads would collide and race
+    expect(permissionSocketPath("t-perm-dup-1")).not.toBe(permissionSocketPath("t-perm-dup-2"));
   });
 });
 

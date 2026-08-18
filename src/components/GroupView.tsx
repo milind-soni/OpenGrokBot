@@ -219,7 +219,8 @@ function RoomWorkingFolder({ group }: { group: Group }) {
   const [saving, setSaving] = useState(false);
   const canPick = Boolean(window.ogb?.pickFolder);
   const pinned = group.pinnedCwd; // undefined = not yet, null = each bot's own, string = folder
-  const pinnedElsewhere = pinned !== undefined && (pinned ?? undefined) !== group.cwd;
+  const locked = pinned !== undefined;
+  const shownCwd = locked ? (pinned ?? undefined) : group.cwd;
 
   const save = async (cwd: string | null) => {
     setSaving(true);
@@ -242,7 +243,16 @@ function RoomWorkingFolder({ group }: { group: Group }) {
     <div className="rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">Working folder</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">Where every bot in this room runs its shell and file tools.</div>
-      {canPick ? (
+      {locked ? (
+        <div className="mt-3">
+          <div className="truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={shownCwd}>
+            {shownCwd ? shortPath(shownCwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
+          </div>
+          <div className="mt-2 text-[12px] text-ink-secondary">
+            Fixed after this room's first turn. Create a new room and choose its folder before sending the first message to work somewhere else.
+          </div>
+        </div>
+      ) : canPick ? (
         <div className="mt-3 flex items-center gap-2">
           <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={group.cwd}>
             {group.cwd ? shortPath(group.cwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
@@ -277,11 +287,6 @@ function RoomWorkingFolder({ group }: { group: Group }) {
         </form>
       )}
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-      {pinnedElsewhere && (
-        <div className="mt-2 text-[12px] text-ink-secondary">
-          New rooms start here. This room is pinned to {pinned ? <span className="font-mono">{shortPath(pinned, home)}</span> : "each bot's own folder"} — make a new room to use the new folder.
-        </div>
-      )}
     </div>
   );
 }

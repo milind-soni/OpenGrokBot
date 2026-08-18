@@ -1518,7 +1518,7 @@ async function runGroupMemberTurn(
   // has its folder moved underneath it. Off-host members skip the folder
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
-  const cwd = groupTurnCwd(store.pinGroupCwd(group.id), workspace);
+  const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
   const roomSystem = workspace ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
 
   // run the turn and wait for it to settle, folding the reply text so a
@@ -2403,6 +2403,9 @@ const server = createServer(async (req, res) => {
       }
       if (body.cwd !== undefined) {
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot have a working folder" });
+        if (existing.pinnedCwd !== undefined) {
+          return json(res, 409, { error: "the room's working folder is fixed after its first turn" });
+        }
         const checked = validateBotCwd(body.cwd);
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.cwd ?? undefined;

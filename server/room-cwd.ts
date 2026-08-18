@@ -7,8 +7,12 @@
 // without booting the server.
 
 /** `memberDefault` is the folder the member would use on its own (its
- * private workspace); undefined = the engine runs off-host. */
-export function groupTurnCwd(pinnedRoomCwd: string | null, memberDefault: string | undefined): string | undefined {
+ * private workspace); undefined = the engine runs off-host. The pin is a
+ * callback so off-host turns cannot accidentally decide it. */
+export function groupTurnCwd(
+  memberDefault: string | undefined,
+  pinRoomCwd: () => string | null,
+): string | undefined {
   if (memberDefault === undefined) return undefined;
-  return pinnedRoomCwd ?? memberDefault;
+  return pinRoomCwd() ?? memberDefault;
 }

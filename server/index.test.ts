@@ -74,6 +74,17 @@ beforeAll(async () => {
         createdAt: 1,
         dm: true,
       },
+      {
+        id: "test-pinned-room",
+        threadId: "test-pinned-room-thread",
+        name: "Pinned room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 2,
+        pinnedCwd: null,
+      },
     ]),
   );
 
@@ -215,6 +226,15 @@ describe("harness HTTP API", () => {
     const state = await api("GET", "/api/bots");
     expect(state.body.groups.find((group: { id: string }) => group.id === "test-dm")).not.toHaveProperty("cwd");
     expect((await api("DELETE", "/api/groups/test-dm")).status).toBe(200);
+  });
+
+  it("rejects working-folder changes after a room has pinned its first turn", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-pinned-room", { cwd: home });
+    expect(attempted.status).toBe(409);
+    expect(attempted.body.error).toMatch(/fixed after its first turn/i);
+    const state = await api("GET", "/api/bots");
+    expect(state.body.groups.find((group: { id: string }) => group.id === "test-pinned-room")).not.toHaveProperty("cwd");
+    expect((await api("DELETE", "/api/groups/test-pinned-room")).status).toBe(200);
   });
 
   it("describes the configured fleet, shadows included", async () => {

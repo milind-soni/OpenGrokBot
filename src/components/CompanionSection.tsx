@@ -41,6 +41,8 @@ interface CompanionState {
    * exceptions match by name rather than by subnet. */
   tailnetName?: string;
   lan?: string | null;
+  /** Ordered fallback hosts for the phone — tailnet name, LAN, mDNS last. */
+  hosts?: string[];
   /** Bonjour: when advertising, the phone finds this computer by name. */
   discovery?: { advertising: boolean; name: string };
   /** Why it is not running, or not answering. */
@@ -162,6 +164,7 @@ export function CompanionSection() {
           code: state.pairing.code,
           token: state.pairing.token,
           name: state.discovery?.name,
+          hosts: state.hosts,
         })
       : null;
 

@@ -32,6 +32,11 @@ export interface ProxyOptions {
   ) => { token: string; device: unknown } | { error: string };
   /** What the phone should call this computer in its connection list. */
   serverName: () => string;
+  /** Every host the phone could dial later, best first — sent with the
+   * pairing response so the app can fall back when the address it paired on
+   * stops resolving. Optional and advisory: a phone that never receives it
+   * simply keeps dialing the one host it paired with. */
+  hosts?: () => string[];
   /** How long the harness may take to produce response *headers*. Optional,
    * and only ever set by tests — the default is the one that ships. */
   headersTimeoutMs?: number;
@@ -162,7 +167,18 @@ export function createProxyHandler(options: ProxyOptions) {
           // `code` remains accepted for manual entry and older mobile builds.
           const result = options.redeem(String(body.credential ?? body.code ?? ""), body.deviceName);
           if ("error" in result) return sendJson(res, 401, { error: result.error });
-          return sendJson(res, 201, { ...result, serverName: options.serverName() });
+          // `hosts` rides along whichever way the phone paired — QR, typed
+          // address, or discovery — so every paired device learns the full
+          // fallback list, not just the ones that scanned a QR. Absent, not
+          // empty, when there is nothing to offer: absent is what a sidecar
+          // predating the field sends, and one decode path beats two.
+          const hosts = options.hosts?.() ?? [];
+          const response: typeof result & { serverName: string; hosts?: string[] } = {
+            ...result,
+            serverName: options.serverName(),
+          };
+          if (hosts.length) response.hosts = hosts;
+          return sendJson(res, 201, response);
         },
         (error: Error) => sendJson(res, 400, { error: error.message }),
       );

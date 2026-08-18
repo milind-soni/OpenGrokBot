@@ -13,18 +13,42 @@ import { execFile } from "node:child_process";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 
-/** Every IPv4 address a phone on the same network could dial. Link-local
- * (169.254/16) is dropped: it means DHCP failed and nothing will reach us. */
-export function lanAddresses(): string[] {
-  const out: string[] = [];
-  for (const entries of Object.values(networkInterfaces())) {
+/** Interfaces that exist to tunnel, bridge or mesh traffic — utun (Tailscale
+ * and every other VPN), vmnet/bridge (VMs, containers, internet sharing),
+ * awdl/llw (AirDrop's side channels), feth/tap/tun. Their addresses stay in
+ * the list, because the tailnet one is exactly what a phone off-network
+ * dials — but a phone on the same wifi can reach none of them, so none of
+ * them may come first. */
+const VIRTUAL_INTERFACES = /^(utun|tun|tap|bridge|vmnet|awdl|llw|feth)/;
+
+/** Lower sorts earlier. `en0`, `en1`, … are macOS's built-in wifi and
+ * ethernet — the networks a phone is actually standing on. */
+const interfaceRank = (name: string): number => {
+  if (/^en\d+$/.test(name)) return 0;
+  if (VIRTUAL_INTERFACES.test(name)) return 2;
+  return 1;
+};
+
+/** Every IPv4 address a phone on the same network could dial, most reachable
+ * first. Link-local (169.254/16) is dropped: it means DHCP failed and nothing
+ * will reach us.
+ *
+ * Ranked, not merely collected: `networkInterfaces()` promises nothing about
+ * order, callers put the first non-tailnet entry into the pairing QR, and on
+ * a Mac with a VPN or a VM running the first entry can be a utun or bridge100
+ * address the phone cannot route to. Real interfaces lead, tunnels and
+ * bridges trail; the sort is stable, so enumeration order still breaks ties.
+ * The parameter exists for tests — the interface table is the machine's. */
+export function lanAddresses(interfaces = networkInterfaces()): string[] {
+  const found: Array<{ rank: number; address: string }> = [];
+  for (const [name, entries] of Object.entries(interfaces)) {
     for (const entry of entries ?? []) {
       if (entry.family !== "IPv4" || entry.internal) continue;
       if (entry.address.startsWith("169.254.")) continue;
-      out.push(entry.address);
+      found.push({ rank: interfaceRank(name), address: entry.address });
     }
   }
-  return out;
+  return found.sort((a, b) => a.rank - b.rank).map((entry) => entry.address);
 }
 
 /** Tailscale hands its nodes an address in 100.64.0.0/10 — the CGNAT range

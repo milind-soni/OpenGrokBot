@@ -3,9 +3,11 @@
 // invisible — so it is tested byte by byte, against packets built by hand
 // rather than by the encoder under test.
 import { createSocket } from "node:dgram";
+import { EventEmitter } from "node:events";
+import type { NetworkInterfaceInfoIPv4 } from "node:os";
 import { describe, expect, it } from "vitest";
 
-import { tailscaleAddress } from "../src/listener.ts";
+import { lanAddresses, tailscaleAddress } from "../src/listener.ts";
 import {
   advertisableAddresses,
   announcement,
@@ -346,6 +348,167 @@ describe("MdnsResponder", () => {
     await responder.stop();
     expect(responder.advertising).toBe(false);
     expect(responder.address()).toBeNull();
+  });
+});
+
+// The outbound half of multicast. Joining the group per interface only fixes
+// what we *hear*; every group send must also be pinned per interface, or the
+// kernel routes 224.0.0.251 out of exactly one interface of its choosing —
+// with a VPN or VM bridge up, a network the phone is not on. None of this
+// reaches the wire in CI, so a recording socket is where it gets asserted.
+describe("multicast interface pinning", () => {
+  /** A socket that logs what the responder does to it. Satisfies
+   * `ResponderSocket` structurally — no casting required. */
+  class FakeSocket extends EventEmitter {
+    readonly ops: Array<{ op: "pin" | "send"; address: string; port?: number }> = [];
+    bind(_port: number, callback?: () => void) {
+      callback?.();
+    }
+    setMulticastTTL(_ttl: number) {}
+    addMembership(_group: string, _membershipInterface?: string) {}
+    setMulticastInterface(multicastInterface: string) {
+      this.ops.push({ op: "pin", address: multicastInterface });
+    }
+    send(_packet: Buffer, port: number, address: string, callback?: (error: Error | null) => void) {
+      this.ops.push({ op: "send", address, port });
+      callback?.(null);
+    }
+    close(callback?: () => void) {
+      callback?.();
+    }
+    address() {
+      return { port: 5353 };
+    }
+  }
+
+  const homes = ["192.168.1.42", "10.0.0.7"];
+  /** One announcement burst, as the ops log should show it: pin, send, pin,
+   * send — the pin *before* each send, per advertised interface, because
+   * `setMulticastInterface` redirects the sends that come after it. */
+  const pinnedBurst = homes.flatMap((address) => [
+    { op: "pin", address },
+    { op: "send", address: "224.0.0.251", port: 5353 },
+  ]);
+
+  // The fake's callbacks fire synchronously, so the first announcement (the
+  // 0 ms timer) has fully drained once one later macrotask runs.
+  const drained = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+  it("pins every announcement and goodbye to each advertised interface, in order", async () => {
+    const socket = new FakeSocket();
+    const responder = new MdnsResponder({ socketFactory: () => socket });
+    expect(await responder.advertise({ ...service, addresses: homes })).toBe(true);
+    await drained();
+    expect(socket.ops).toEqual(pinnedBurst);
+
+    // the goodbye withdraws the records everywhere they were announced
+    socket.ops.length = 0;
+    await responder.stop();
+    expect(socket.ops).toEqual(pinnedBurst);
+  });
+
+  it("pins a multicast answer the same way", async () => {
+    const socket = new FakeSocket();
+    const responder = new MdnsResponder({ socketFactory: () => socket });
+    await responder.advertise({ ...service, addresses: homes });
+    await drained();
+    socket.ops.length = 0;
+    try {
+      // port 5353, no QU bit: the answer goes back to the group
+      socket.emit("message", query(SERVICE_NAME, TYPE.PTR), { address: "127.0.0.1", port: 5353 });
+      await drained();
+      expect(socket.ops).toEqual(pinnedBurst);
+    } finally {
+      await responder.stop();
+    }
+  });
+
+  it("sends a unicast answer as-is: routed to the asker, never pinned", async () => {
+    const socket = new FakeSocket();
+    const responder = new MdnsResponder({ socketFactory: () => socket });
+    await responder.advertise({ ...service, addresses: homes });
+    await drained();
+    socket.ops.length = 0;
+    try {
+      // an ephemeral source port marks a legacy resolver (RFC 6762 §6.7)
+      socket.emit("message", query(SERVICE_NAME, TYPE.PTR, { id: 9 }), { address: "127.0.0.1", port: 40404 });
+      await drained();
+      expect(socket.ops).toEqual([{ op: "send", address: "127.0.0.1", port: 40404 }]);
+    } finally {
+      await responder.stop();
+    }
+  });
+
+  it("skips an interface that vanished between enumeration and send", async () => {
+    class VanishingSocket extends FakeSocket {
+      setMulticastInterface(multicastInterface: string) {
+        // what a dropped VPN or pulled cable looks like from here
+        if (multicastInterface === "10.0.0.7") throw new Error("EADDRNOTAVAIL");
+        super.setMulticastInterface(multicastInterface);
+      }
+    }
+    const socket = new VanishingSocket();
+    const responder = new MdnsResponder({ socketFactory: () => socket });
+    await responder.advertise({ ...service, addresses: homes });
+    await drained();
+    try {
+      // the surviving interface still gets its packet, and nothing crashed
+      expect(socket.ops).toEqual([
+        { op: "pin", address: "192.168.1.42" },
+        { op: "send", address: "224.0.0.251", port: 5353 },
+      ]);
+      expect(responder.advertising).toBe(true);
+    } finally {
+      await responder.stop();
+    }
+  });
+});
+
+// Which address leads matters: callers print the first non-tailnet entry into
+// the pairing QR, and `networkInterfaces()` promises nothing about order — a
+// Mac with a VPN or a VM can enumerate utun or bridge100 first, and a QR
+// carrying one of those addresses points the phone at a network it is not on.
+describe("lanAddresses", () => {
+  const ipv4 = (address: string, internal = false): NetworkInterfaceInfoIPv4 => ({
+    address,
+    netmask: "255.255.255.0",
+    family: "IPv4",
+    mac: "00:00:00:00:00:00",
+    internal,
+    cidr: `${address}/24`,
+  });
+
+  it("ranks en0 first however the interfaces enumerate", () => {
+    // deliberately listed worst-first: insertion order must not win
+    const addresses = lanAddresses({
+      utun4: [ipv4("100.102.178.88")],
+      bridge100: [ipv4("192.168.64.1")],
+      vmnet1: [ipv4("192.168.105.1")],
+      en0: [ipv4("192.168.1.42")],
+    });
+    expect(addresses[0]).toBe("192.168.1.42");
+    // the virtual interfaces are kept — the tailnet address is dialable
+    // from off-network — but only after everything real
+    expect(addresses).toEqual(["192.168.1.42", "100.102.178.88", "192.168.64.1", "192.168.105.1"]);
+  });
+
+  it("slots an unrecognized real interface between en0 and the tunnels", () => {
+    expect(
+      lanAddresses({
+        utun0: [ipv4("100.102.178.88")],
+        ap1: [ipv4("172.20.10.1")],
+        en1: [ipv4("192.168.1.42")],
+      }),
+    ).toEqual(["192.168.1.42", "172.20.10.1", "100.102.178.88"]);
+  });
+
+  it("still drops loopback and link-local, wherever they rank", () => {
+    expect(
+      lanAddresses({
+        lo0: [ipv4("127.0.0.1", true)],
+        en0: [ipv4("169.254.7.7")],
+      }),
+    ).toEqual([]);
   });
 });
 

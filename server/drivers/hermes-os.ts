@@ -185,31 +185,31 @@ export const HermesOsDriver: ProviderDriver<HermesOsConfig> = {
         });
         emit({ ...base(turn.threadId, turnId), type: "turn.started" });
 
-        // inform the user when integrations are passed that we don't fully honor
+        // Informational notes about unsupported integrations are logged to
+        // the native NDJSON stream for debugging, not surfaced as runtime
+        // errors. The hub still answers the prompt — these are advisory, not
+        // failures. Surfacing them as runtime.error would contradict the
+        // eventual turn.completed(ok: true) and (worse) emit a pending
+        // activity chip for the tool integrations we never actually started.
         if (turn.integrations?.computer) {
-          emit({
-            ...base(turn.threadId, turnId),
-            type: "runtime.error",
-            message:
-              "hermes-os driver: cloud-computer (Box) integration is not supported by the hub; ignoring",
+          appendNative(turn.threadId, {
+            dir: "out",
+            source: "hermes-os-driver",
+            msg: { note: "cloud-computer (Box) integration is not supported by the hub; ignoring" },
           });
         }
         if (turn.integrations?.localComputer) {
-          emit({
-            ...base(turn.threadId, turnId),
-            type: "runtime.error",
-            message:
-              "hermes-os driver: local computer-use (cua-driver) is not supported by the hub; ignoring",
+          appendNative(turn.threadId, {
+            dir: "out",
+            source: "hermes-os-driver",
+            msg: { note: "local computer-use (cua-driver) is not supported by the hub; ignoring" },
           });
         }
         if (turn.integrations?.agents) {
-          // hermes-os *does* support peer-agent comms via the council intent —
-          // surface a positive event so the UI knows the integration is in scope
-          emit({
-            ...base(turn.threadId, turnId),
-            type: "item.started",
-            itemType: "tool",
-            title: "hermes-os peer-agent comms (council intent)",
+          appendNative(turn.threadId, {
+            dir: "out",
+            source: "hermes-os-driver",
+            msg: { note: "peer-agent comms (council intent) noted but not mounted as MCP tools" },
           });
         }
 
@@ -238,29 +238,77 @@ export const HermesOsDriver: ProviderDriver<HermesOsConfig> = {
 
         const ac = active.get(turn.threadId)!.abort;
         const fetchSignal = AbortSignal.any([ac.signal, AbortSignal.timeout(config.timeoutMs!)]);
-        const res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: fetchSignal,
-        });
-
-        if (!res.ok) {
-          const errText = await res.text().catch(() => "");
-          const errMsg = `hermes-os: ${res.status} ${res.statusText} — ${errText.slice(0, 500)}`;
-          emit({ ...base(turn.threadId, turnId), type: "runtime.error", message: errMsg });
+        // The fetch + the initial response handling are wrapped so that ANY
+        // failure (network error, DNS failure, timeout, non-2xx, empty body)
+        // emits the required runtime.error + turn.completed(ok: false) +
+        // session.exited triple. Previously a thrown fetch would escape the
+        // function and the harness would see a rejected promise — no events
+        // and a "stuck" turn.
+        let res: Response;
+        try {
+          res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: fetchSignal,
+          });
+        } catch (e: any) {
+          // Sanitize: report a stable code, do not leak the underlying
+          // network/DNS error string into the chat UI.
+          const isAbort = e?.name === "AbortError";
+          const reason = isAbort ? "interrupted" : "error";
+          const message = isAbort
+            ? `hermes-os: turn interrupted`
+            : `hermes-os: hub request failed`;
+          emit({ ...base(turn.threadId, turnId), type: "runtime.error", message });
           emit({
             ...base(turn.threadId, turnId),
             type: "turn.completed",
             ok: false,
-            stopReason: res.status === 401 ? "auth" : res.status === 429 ? "rate_limit" : "error",
+            stopReason: reason,
             denials: [],
+          });
+          emit({
+            ...base(turn.threadId, turnId),
+            type: "session.exited",
+            reason,
+          });
+          return { turnId };
+        }
+
+        if (!res.ok) {
+          // Sanitize: do NOT include the upstream response body in the
+          // runtime.error event. The hub's body may contain stack traces,
+          // internal paths, or other content that has no business being
+          // surfaced in the chat UI. Report status + a stable code only.
+          const stopReason = res.status === 401 ? "auth" : res.status === 429 ? "rate_limit" : "error";
+          emit({
+            ...base(turn.threadId, turnId),
+            type: "runtime.error",
+            message: `hermes-os: hub responded ${res.status} ${res.statusText}`,
+          });
+          emit({
+            ...base(turn.threadId, turnId),
+            type: "turn.completed",
+            ok: false,
+            stopReason,
+            denials: [],
+          });
+          emit({
+            ...base(turn.threadId, turnId),
+            type: "session.exited",
+            reason: stopReason,
           });
           return { turnId };
         }
         if (!res.body) {
-          emit({ ...base(turn.threadId, turnId), type: "runtime.error", message: "hermes-os: empty body" });
+          emit({
+            ...base(turn.threadId, turnId),
+            type: "runtime.error",
+            message: "hermes-os: hub returned an empty response body",
+          });
           emit({ ...base(turn.threadId, turnId), type: "turn.completed", ok: false, stopReason: "error" });
+          emit({ ...base(turn.threadId, turnId), type: "session.exited", reason: "error" });
           return { turnId };
         }
 
@@ -272,13 +320,12 @@ export const HermesOsDriver: ProviderDriver<HermesOsConfig> = {
         let lastUsage: { input: number; output: number } | null = null;
         let stopReason: string | null = null;
 
-        // emit the assistant_text item as "in progress"
-        emit({
-          ...base(turn.threadId, turnId, itemId),
-          type: "item.started",
-          itemType: "tool", // placeholder; reassigned to assistant_text on completion
-          title: "assistant",
-        });
+        // No item.started for assistant_text: the hub delivers the model
+        // output as one terminal chunk, not a stream of progress. Emitting
+        // a placeholder item.started (itemType: tool) would create a
+        // pending activity chip in the UI that never resolves to a
+        // matching completed: assistant_text. We only emit the terminal
+        // item.completed: assistant_text below.
 
         try {
           for (;;) {
@@ -441,9 +488,14 @@ export const HermesOsDriver: ProviderDriver<HermesOsConfig> = {
         provider: DRIVER_KIND,
         capabilities: {
           sessionModelSwitch: "in-session",
-          // hermes-os supports the council intent for peer-agent comms
-          // when a hub instance is configured to expose it
-          agentsMcp: true,
+          // We do NOT advertise agentsMcp. The hub has a "council" intent
+          // that performs peer-agent comms, but the driver does not
+          // mount list_bots / ask_bot as MCP tools on the underlying CLI.
+          // Claiming the capability without wiring it causes the harness
+          // to prompt the model for tools the agent can't actually call.
+          // Flip this to true only when the corresponding MCP server is
+          // mounted inside the driver.
+          agentsMcp: false,
         },
         sendTurn,
         interruptTurn,

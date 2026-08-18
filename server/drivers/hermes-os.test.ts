@@ -234,4 +234,229 @@ describe("hermes-os driver", () => {
     expect(seenAuth).toBe("Bearer secret-token-123");
     await inst.dispose();
   });
+
+  // ── Review-feedback regression tests (milind-soni 2026-08-14) ──────
+  // Five issues: drop agentsMcp lie, truthful assistant lifecycle, sanitize
+  // errors, audit error-path triple (runtime.error + turn.completed +
+  // session.exited), listener isolation, no orphan activity item.
+
+  it("does NOT advertise agentsMcp capability", async () => {
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl: "http://h" });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-agents",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    expect(inst.adapter.capabilities.agentsMcp).toBe(false);
+    await inst.dispose();
+  });
+
+  it("successful SSE turn does NOT emit any item.started (no orphan activity chip)", async () => {
+    await startMock((req, res, _body) => {
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.url === "/v1/chat/completions") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: {"choices":[{"delta":{"content":"hi"}}]}\n\n`);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return;
+      }
+      res.statusCode = 404; res.end();
+    });
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-orphan",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    const events = await drain(inst, { threadId: "t-orphan", text: "hi" });
+    const started = events.filter((e) => e.type === "item.started");
+    expect(started).toHaveLength(0);
+    // and the assistant_text completion is still present
+    expect(events.some((e) => e.type === "item.completed" && (e as any).itemType === "assistant_text")).toBe(true);
+    await inst.dispose();
+  });
+
+  it("unreachable hub: sendTurn emits runtime.error + turn.completed(ok:false) + session.exited (no thrown promise)", async () => {
+    // baseUrl points to a port nothing is listening on
+    const cfg = HermesOsDriver.decodeConfig({
+      baseUrl: "http://127.0.0.1:1",
+      timeoutMs: 1000,
+    });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-unreach",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    const events = await drain(inst, { threadId: "t-unreach", text: "hi" });
+    const err = events.find((e) => e.type === "runtime.error") as any;
+    expect(err?.message).toMatch(/hub request failed|interrupted/);
+    const completed = events.find((e) => e.type === "turn.completed") as any;
+    expect(completed?.ok).toBe(false);
+    expect(events.find((e) => e.type === "session.exited")).toBeTruthy();
+    await inst.dispose();
+  });
+
+  it("timeout: sendTurn with a slow hub emits the failure triple within ~timeoutMs", async () => {
+    await startMock((req, res, _body) => {
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.url === "/v1/chat/completions") {
+        // Never respond — let the AbortSignal.timeout fire
+        return; // keep socket open
+      }
+      res.statusCode = 404; res.end();
+    });
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl, timeoutMs: 200 });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-timeout",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    const start = Date.now();
+    const events = await drain(inst, { threadId: "t-timeout", text: "hi" });
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(2000);
+    expect(events.find((e) => e.type === "runtime.error")).toBeTruthy();
+    const completed = events.find((e) => e.type === "turn.completed") as any;
+    expect(completed?.ok).toBe(false);
+    expect(events.find((e) => e.type === "session.exited")).toBeTruthy();
+    await inst.dispose();
+  });
+
+  it("interruption: interruptTurn during a turn ends the turn without hanging", async () => {
+    let chatStarted = false;
+    await startMock((req, res, _body) => {
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.url === "/v1/chat/completions") {
+        chatStarted = true;
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        // Send one chunk, then keep the socket open until aborted
+        res.write(`data: {"choices":[{"delta":{"content":"start"}}]}\n\n`);
+        return; // never call res.end()
+      }
+      res.statusCode = 404; res.end();
+    });
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl, timeoutMs: 30_000 });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-interrupt",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    // start a turn, then interrupt shortly after
+    const turnPromise = inst.adapter.sendTurn({ threadId: "t-int", text: "hi" });
+    // wait until the mock has started the chat, then abort
+    const deadline = Date.now() + 2000;
+    while (!chatStarted && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    await inst.adapter.interruptTurn("t-int");
+    const turnId = await turnPromise;
+    expect(turnId).toBeTruthy();
+    // Give the catch block a moment to fire after the abort
+    await new Promise((r) => setTimeout(r, 50));
+    await inst.dispose();
+  });
+
+  it("non-2xx mid-stream: hub returns 200 then 502 — driver emits failure triple on the second response", async () => {
+    // The /v1/chat/completions endpoint is a single POST. The "non-2xx
+    // mid-stream" scenario is rare; this test exercises the closer
+    // analogue: a single non-2xx initial response. The important contract
+    // is that the driver does NOT emit a content.delta or
+    // item.completed for a non-2xx, and the runtime.error message does
+    // NOT include the upstream response body.
+    const LEAK = "secret-internal-leak-do-not-surface";
+    await startMock((req, res, _body) => {
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.url === "/v1/chat/completions") {
+        res.statusCode = 502;
+        res.end(`Bad Gateway — ${LEAK}`);
+        return;
+      }
+      res.statusCode = 404; res.end();
+    });
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-non2xx",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    const events = await drain(inst, { threadId: "t-non2xx", text: "hi" });
+    expect(events.find((e) => e.type === "runtime.error")).toBeTruthy();
+    expect(events.find((e) => e.type === "session.exited")).toBeTruthy();
+    // No content ever streamed
+    expect(events.find((e) => e.type === "content.delta")).toBeUndefined();
+    // Error message does NOT leak the upstream body (the unique marker)
+    const err = events.find((e) => e.type === "runtime.error") as any;
+    expect(err?.message).not.toMatch(new RegExp(LEAK));
+    // but the status code IS in the message
+    expect(err?.message).toMatch(/502/);
+    await inst.dispose();
+  });
+
+  it("listener isolation: one bad listener does not break delivery to other listeners", async () => {
+    await startMock((req, res, _body) => {
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (req.url === "/v1/chat/completions") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: {"choices":[{"delta":{"content":"hi"}}]}\n\n`);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return;
+      }
+      res.statusCode = 404; res.end();
+    });
+    const cfg = HermesOsDriver.decodeConfig({ baseUrl });
+    const inst = await HermesOsDriver.create({
+      instanceId: "test-isolation",
+      displayName: "test",
+      environment: {},
+      enabled: true,
+      config: cfg,
+    });
+    let goodCount = 0;
+    const events: RuntimeEvent[] = [];
+    const bad = inst.adapter.onEvent(() => { throw new Error("listener boom"); });
+    const good = inst.adapter.onEvent((e) => { goodCount++; events.push(e); });
+    await inst.adapter.sendTurn({ threadId: "t-iso", text: "hi" });
+    bad();
+    good();
+    // the good listener should have received the full canonical sequence
+    // (session.started, turn.started, content.delta, item.completed,
+    // turn.completed, session.exited) — at minimum the lifecycle events
+    expect(events.some((e) => e.type === "session.started")).toBe(true);
+    expect(events.some((e) => e.type === "turn.completed")).toBe(true);
+    expect(events.some((e) => e.type === "session.exited")).toBe(true);
+    expect(goodCount).toBeGreaterThan(3);
+    await inst.dispose();
+  });
 });

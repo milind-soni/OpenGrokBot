@@ -304,6 +304,33 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
   });
 
+  it("kills a child that prints result but never exits on its own (#211)", async () => {
+    await create("result-then-hang");
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-lingering", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true });
+
+    const { pid } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(typeof pid).toBe("number");
+
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 5_000;
+    while (alive() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(alive()).toBe(false);
+  }, 10_000);
+
   it("an exit before result becomes runtime.error + failed turn", async () => {
     await create("exit-early");
     await instance.adapter.sendTurn({ threadId: "t-crash", text: "go" });
@@ -406,6 +433,76 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const resolved = await recorder.until((e) => e.type === "request.resolved" && e.requestId === "ask-stop");
     expect(resolved).toMatchObject({ behavior: "deny", source: "system" });
     await recorder.until((e) => e.type === "turn.completed");
+    conn.end();
+  });
+
+  it("drops a late ask on an already-closed broker instead of a dead card (#211)", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    // Same connection stays open across the turn ending — the exact
+    // condition that let a still-alive child raise an unanswerable card.
+    const conn = connect(permissionSocketPath("t-perm-late"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    await instance.adapter.interruptTurn("t-perm-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const opensBefore = recorder.events.filter((e) => e.type === "request.opened").length;
+    const reply = new Promise<{ id: string; behavior: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    conn.write(JSON.stringify({ t: "ask", id: "ask-late", tool: "Bash", input: { command: "rm -rf /" } }) + "\n");
+
+    // A dead card is a request.opened with no way to ever answer it — assert
+    // the late ask never becomes one, and the connection still gets a
+    // definite reply rather than hanging forever.
+    expect(await reply).toMatchObject({ id: "ask-late", behavior: "deny" });
+    expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(opensBefore);
+    await expect(instance.adapter.respondToRequest("t-perm-late", "ask-late", { behavior: "allow" })).resolves.toBe(
+      "unavailable",
+    );
+
+    conn.end();
+  });
+
+  it("drops a late question on an already-closed broker with an answer, not a deny (#211)", async () => {
+    // systemEndedReply(kind) branches on "question" vs "permission" — cover
+    // the question arm too, since the deny arm above doesn't exercise it.
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-question-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-question-late"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    await instance.adapter.interruptTurn("t-question-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const reply = new Promise<{ id: string; behavior: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    conn.write(JSON.stringify({ t: "ask", kind: "question", id: "q-late", tool: "ask_user", input: { question: "still there?" } }) + "\n");
+
+    expect(await reply).toMatchObject({ id: "q-late", behavior: "answer" });
+
     conn.end();
   });
 

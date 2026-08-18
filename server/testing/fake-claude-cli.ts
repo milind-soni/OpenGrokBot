@@ -4,11 +4,19 @@
 // scripted session. Failure modes are toggled by env var, mirroring how
 // the real thing misbehaves:
 //
-//   FAKE_CLAUDE_MODE   happy (default) | exit-early | hang | malformed
-//                      | stream (partial-message text deltas before the
-//                        whole-message frame, plus subagent noise to drop)
-//   FAKE_CLAUDE_DUMP   path to write {argv, env, prompt, mcpConfig} as JSON,
-//                      so the test can assert on argv shape and env hygiene.
+//   FAKE_CLAUDE_MODE   happy (default) | exit-early | hang | result-then-hang
+//                      | malformed | stream (partial-message text deltas
+//                        before the whole-message frame, plus subagent noise
+//                        to drop)
+//                      result-then-hang prints the same result as happy but
+//                      never exits — simulates a backgrounded grandchild that
+//                      outlives its turn (issue #211), for tests that must
+//                      confirm the process is actually gone, not just that
+//                      the driver emitted turn.completed.
+//   FAKE_CLAUDE_DUMP   path to write {pid, argv, env, prompt, mcpConfig} as
+//                      JSON, so the test can assert on argv shape, env
+//                      hygiene, and (for result-then-hang) poll this process
+//                      for liveness after the driver settles the turn.
 //                      mcpConfig is read back from the --mcp-config file the
 //                      way the real CLI reads it — the driver writes it to a
 //                      private temp file and deletes it when the turn settles,
@@ -73,7 +81,10 @@ process.stdin.on("end", () => {
         /* leave null — the test will see it */
       }
     }
-    writeFileSync(process.env.FAKE_CLAUDE_DUMP, JSON.stringify({ argv, env: process.env, prompt, mcpConfig }, null, 2));
+    writeFileSync(
+      process.env.FAKE_CLAUDE_DUMP,
+      JSON.stringify({ pid: process.pid, argv, env: process.env, prompt, mcpConfig }, null, 2),
+    );
   }
 
   const sessionId = argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session";
@@ -122,5 +133,13 @@ process.stdin.on("end", () => {
   });
   out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu-1", is_error: false }] } });
   out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01, usage: { input_tokens: 10, cache_read_input_tokens: 2, output_tokens: 5 } });
+
+  if (mode === "result-then-hang") {
+    // printed `result` but never exits — the process the driver's settle()
+    // must now forcibly reap
+    setInterval(() => {}, 1_000);
+    return;
+  }
+
   process.exit(0);
 });

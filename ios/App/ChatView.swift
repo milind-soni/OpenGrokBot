@@ -168,7 +168,11 @@ struct ChatView: View {
                 // guess. Bots only.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
+                        // Pushing does not disappear ChatView — it stays in
+                        // the stack under the computer panel — so onDisappear
+                        // would leave the mic open behind another screen.
                         ComputerView(bot: bot)
+                            .onAppear { dictation.stop() }
                     } label: {
                         Image(systemName: "display")
                             .font(.system(size: 15, weight: .medium))
@@ -202,8 +206,9 @@ struct ChatView: View {
             if phase != .active { dictation.stop() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
-            let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            if type == AVAudioSession.InterruptionType.began.rawValue {
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
+            let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
+            if value == AVAudioSession.InterruptionType.began.rawValue {
                 dictation.stop()
             }
         }

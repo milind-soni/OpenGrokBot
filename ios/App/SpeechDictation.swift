@@ -24,7 +24,7 @@ import CompanionCore
 final class SpeechDictation: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var transcript = ""
-    @Published var error: String?
+    @Published private(set) var error: String?
 
     /// Composer text captured when listening started. Frozen for the
     /// session so each partial replaces the last rather than stacking.
@@ -38,12 +38,18 @@ final class SpeechDictation: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
     private var stopping = false
+    /// True from `start` until capture is running or the attempt fails.
+    /// `isListening` is only true once the engine is up, so without this
+    /// a second tap during the permission prompts would call `start`
+    /// again instead of cancelling.
+    private var starting = false
     /// Bumped on every start/stop so an authorization that finishes after
     /// the user already cancelled cannot open the mic.
     private var generation = 0
+    private var startTask: Task<Void, Never>?
 
     func toggle(capturing base: String) {
-        if isListening {
+        if isListening || starting {
             stop()
         } else {
             start(base: base)
@@ -51,17 +57,21 @@ final class SpeechDictation: ObservableObject {
     }
 
     func start(base: String) {
-        guard !isListening else { return }
+        guard !isListening, !starting else { return }
         error = nil
         self.base = base.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript = ""
+        starting = true
         generation += 1
         let gen = generation
-        Task { await actuallyStart(generation: gen) }
+        startTask = Task { await actuallyStart(generation: gen) }
     }
 
     func stop() {
+        startTask?.cancel()
+        startTask = nil
         generation += 1
+        starting = false
         stopping = true
         isListening = false
         teardown()
@@ -71,22 +81,36 @@ final class SpeechDictation: ObservableObject {
 
     private func actuallyStart(generation gen: Int) async {
         let speech = await requestSpeechAuthorization()
-        guard gen == generation else { return }
+        guard gen == generation, !Task.isCancelled else {
+            starting = false
+            return
+        }
         guard speech == .authorized else {
+            starting = false
             error = Self.speechDeniedMessage
             return
         }
 
         let mic = await AVAudioApplication.requestRecordPermission()
-        guard gen == generation else { return }
+        guard gen == generation, !Task.isCancelled else {
+            starting = false
+            return
+        }
         guard mic else {
+            starting = false
             error = Self.micDeniedMessage
             return
         }
 
         do {
             try beginCapture()
+            starting = false
+        } catch CaptureError.noRecognizer {
+            starting = false
+            error = "Dictation isn't available for this language."
+            teardown()
         } catch {
+            starting = false
             self.error = "Couldn't start the microphone."
             teardown()
         }
@@ -107,8 +131,7 @@ final class SpeechDictation: ObservableObject {
             .compactMap { SFSpeechRecognizer(locale: $0) }
             .first { $0.isAvailable }
         guard let recognizer else {
-            error = "Dictation isn't available for this language."
-            return
+            throw CaptureError.noRecognizer
         }
         self.recognizer = recognizer
 
@@ -188,17 +211,19 @@ final class SpeechDictation: ObservableObject {
     }
 
     private func teardown() {
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
+        // Drop the tap before ending the request: a buffer that arrives
+        // after endAudio() can fail the task instead of being ignored.
         if let engine = audioEngine {
-            if engine.isRunning { engine.stop() }
             if tapInstalled {
                 engine.inputNode.removeTap(onBus: 0)
                 tapInstalled = false
             }
+            if engine.isRunning { engine.stop() }
         }
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
         audioEngine = nil
         recognizer = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -206,6 +231,7 @@ final class SpeechDictation: ObservableObject {
 
     private enum CaptureError: Error {
         case silentInput
+        case noRecognizer
     }
 
     static let speechDeniedMessage =

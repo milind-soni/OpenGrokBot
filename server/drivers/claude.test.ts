@@ -7,7 +7,7 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,11 +22,30 @@ import { removeTempDir } from "../testing/cleanup.ts";
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
 
 /** Connect to a broker socket and resolve once the connection is live. */
-function connectSocket(path: string) {
-  const conn = connect(path);
-  return new Promise<ReturnType<typeof connect>>((resolve, reject) => {
-    conn.on("connect", () => resolve(conn));
-    conn.on("error", reject);
+function connectSocket(path: string): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    let retriesLeft = 20;
+    const tryConnect = () => {
+      const conn = connect(path);
+      const onConnect = () => {
+        conn.removeListener("error", onError);
+        resolve(conn);
+      };
+      const onError = (error: NodeJS.ErrnoException) => {
+        conn.removeListener("connect", onConnect);
+        conn.destroy();
+        // A Windows named pipe can briefly disappear while the server creates
+        // its next pipe instance for another simultaneous client.
+        if (process.platform === "win32" && error.code === "ENOENT" && retriesLeft-- > 0) {
+          setTimeout(tryConnect, 25);
+          return;
+        }
+        reject(error);
+      };
+      conn.once("connect", onConnect);
+      conn.once("error", onError);
+    };
+    tryConnect();
   });
 }
 

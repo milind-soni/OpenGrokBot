@@ -10,7 +10,17 @@
 // processes do not share a layout; the agent still reads the file because
 // the path we return is an ordinary absolute path on this machine.
 import { randomBytes } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
@@ -88,15 +98,32 @@ export function readInboxFile(
   if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + sep)) {
     return null;
   }
+  let fd: number | undefined;
   try {
-    const st = lstatSync(path);
-    // Regular files only, and never larger than we ourselves would write.
-    // `lstat` so a symlink in the inbox cannot be used as a reader for
-    // the rest of the disk; `isFile()` is false for directories and links.
+    // Open once, then fstat/read that descriptor. `lstat` then `readFile`
+    // is two path lookups: a symlink swapped in between them would follow
+    // out of the inbox. `O_NOFOLLOW` is POSIX; Windows does not expose it
+    // (or exposes `0`), so a reparse point is refused with `lstat` first.
+    // That is still a path check — not the same as no-follow open — but
+    // following here would read outside the inbox.
+    const noFollow = constants.O_NOFOLLOW;
+    const hasNoFollow = typeof noFollow === "number" && noFollow !== 0;
+    if (!hasNoFollow && lstatSync(path).isSymbolicLink()) return null;
+    const flags = hasNoFollow ? constants.O_RDONLY | noFollow : constants.O_RDONLY;
+    fd = openSync(path, flags);
+    const st = fstatSync(fd);
     if (!st.isFile() || st.size > MAX_INBOX_BYTES) return null;
-    return { bytes: readFileSync(path), type: inboxType(filename) };
+    return { bytes: readFileSync(fd), type: inboxType(filename) };
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    }
   }
 }
 

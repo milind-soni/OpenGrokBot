@@ -321,9 +321,10 @@ struct ChatView: View {
                     attachError = session.actionError ?? "Couldn't send that file."
                     return
                 }
+                guard let latest = pending.firstIndex(where: { $0.id == id }) else { continue }
                 let file = Attachment.File(path: stored.path, name: stored.name, size: stored.size)
-                pending[index].host = file
-                if let preview = pending[index].preview {
+                pending[latest].host = file
+                if let preview = pending[latest].preview {
                     session.rememberPreview(preview, for: file.path)
                 }
                 InboxCache.save(item.data, hostPath: file.path)
@@ -340,8 +341,10 @@ struct ChatView: View {
                 attachError = session.actionError ?? "Couldn't send that."
                 return
             }
-            draft = ""
-            pending = []
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                draft = ""
+            }
+            pending.removeAll { ids.contains($0.id) }
         }
     }
 
@@ -407,12 +410,30 @@ struct ChatView: View {
                 attachError = "\(url.lastPathComponent) is a folder."
                 continue
             }
-            guard let data = try? Data(contentsOf: url) else {
+            let listedSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+            if let listedSize, listedSize > PendingMedia.maxBytes {
+                attachError = "\(url.lastPathComponent) is larger than 8 MB."
+                continue
+            }
+            guard let data = readAtMost(PendingMedia.maxBytes, from: url) else {
                 attachError = "Couldn't open \(url.lastPathComponent)."
                 continue
             }
-            addFile(name: url.lastPathComponent, data: data, preview: UIImage(data: data))
+            if data.count > PendingMedia.maxBytes {
+                attachError = "\(url.lastPathComponent) is larger than 8 MB."
+                continue
+            }
+            addFile(name: url.lastPathComponent, data: data, preview: PendingMedia.thumbnail(from: data))
         }
+    }
+
+    /// Read at most `limit + 1` bytes so an oversized file is rejected
+    /// without being fully loaded. `fileSizeKey` is checked first; this
+    /// covers a missing size or a file that grew after that listing.
+    private func readAtMost(_ limit: Int, from url: URL) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: limit + 1)
     }
 
     private var composer: some View {
@@ -425,7 +446,7 @@ struct ChatView: View {
                     .padding(.horizontal, 4)
             }
             if attachError != nil || !pending.isEmpty {
-                ComposerAttachBar(items: $pending, error: attachError)
+                ComposerAttachBar(items: $pending, error: attachError, enabled: !sendingAttachments)
             }
             // Bottom, not centre: a wrapping field used to grow into a
             // stadium with the mic and send floating at its middle. Other
@@ -473,7 +494,7 @@ struct ChatView: View {
                 // the frozen base. `.disabled` would also fade the text,
                 // which makes dictated words look like a placeholder.
                 // Hit-testing off keeps them readable and not editable.
-                .allowsHitTesting(!dictation.isListening)
+                .allowsHitTesting(!dictation.isListening && !sendingAttachments)
                 // Return sends, Shift+Return breaks the line — the shape
                 // every chat app has. `.ignored` hands the keypress back to
                 // the text field, which is what inserts the newline; there is
@@ -509,6 +530,7 @@ struct ChatView: View {
                         .symbolEffect(.pulse, isActive: dictation.isListening)
                 }
                 .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                .disabled(sendingAttachments)
 
                 if canSend {
                     Button {
@@ -535,13 +557,14 @@ struct ChatView: View {
             matching: .images
         )
         .onChange(of: photoItems) { _, items in
-            guard !items.isEmpty else { return }
+            guard !items.isEmpty, !sendingAttachments else { return }
             Task { await consumePhotos(items) }
         }
         .fullScreenCover(isPresented: $pickingCamera) {
             CameraPicker(
                 onImage: { image in
                     pickingCamera = false
+                    guard !sendingAttachments else { return }
                     addPhoto(image)
                 },
                 onCancel: { pickingCamera = false }
@@ -553,6 +576,7 @@ struct ChatView: View {
             allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
+            guard !sendingAttachments else { return }
             switch result {
             case let .success(urls):
                 consumeFiles(urls)

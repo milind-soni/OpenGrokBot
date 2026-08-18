@@ -3,6 +3,7 @@
 // until then they live only on the phone.
 import SwiftUI
 import UIKit
+import ImageIO
 import CompanionCore
 
 struct PendingAttachment: Identifiable {
@@ -35,6 +36,39 @@ enum PendingMedia {
     static let maxBytes = 8 * 1024 * 1024
     /// Same ceiling as the photo picker. Files are held in memory until send.
     static let maxCount = 8
+    /// Longest side of a chip / bubble thumbnail. Full JPEG bytes still go
+    /// to the sidecar; only the pixels we keep around for UI are scaled.
+    static let previewMaxPixelSize = 480
+
+    static func thumbnail(from image: UIImage) -> UIImage {
+        let longest = max(image.size.width * image.scale, image.size.height * image.scale)
+        let maxPx = CGFloat(previewMaxPixelSize)
+        guard longest > maxPx, longest > 0 else { return image }
+        let scale = maxPx / longest
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    static func thumbnail(from data: Data) -> UIImage? {
+        let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) else {
+            return UIImage(data: data).map(thumbnail(from:))
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: previewMaxPixelSize,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return UIImage(data: data).map(thumbnail(from:))
+        }
+        return UIImage(cgImage: image)
+    }
 
     static func jpegData(from image: UIImage) -> Data? {
         let longest = max(image.size.width, image.size.height)
@@ -55,7 +89,7 @@ enum PendingMedia {
 
     static func jpegAttachment(from image: UIImage, name: String) -> PendingAttachment? {
         guard let data = jpegData(from: image) else { return nil }
-        return PendingAttachment(name: name, data: data, preview: image)
+        return PendingAttachment(name: name, data: data, preview: thumbnail(from: image))
     }
 }
 
@@ -91,6 +125,7 @@ struct ComposerAttachMenu: View {
 struct ComposerAttachBar: View {
     @Binding var items: [PendingAttachment]
     var error: String?
+    var enabled: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -135,6 +170,7 @@ struct ComposerAttachBar: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.secondary)
             }
+            .disabled(!enabled)
             .accessibilityLabel("Remove \(item.name)")
         }
         .padding(.leading, 4)
@@ -237,12 +273,12 @@ struct InboxAttachmentView: View {
 
     private func load() async {
         guard file.isImage, pixels == nil else { return }
-        if let data = InboxCache.load(hostPath: file.path), let decoded = UIImage(data: data) {
+        if let data = InboxCache.load(hostPath: file.path), let decoded = PendingMedia.thumbnail(from: data) {
             loaded = decoded
             return
         }
         let name = URL(fileURLWithPath: file.path).lastPathComponent
-        if let data = await session.inboxFile(named: name), let decoded = UIImage(data: data) {
+        if let data = await session.inboxFile(named: name), let decoded = PendingMedia.thumbnail(from: data) {
             InboxCache.save(data, hostPath: file.path)
             loaded = decoded
             return

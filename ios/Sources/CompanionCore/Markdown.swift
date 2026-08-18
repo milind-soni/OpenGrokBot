@@ -167,7 +167,9 @@ public enum Markdown {
     }
 
     /// Header + delimiter, then body rows until a blank line or a line that
-    /// is not a row. Column count is the delimiter's cell count, matching GFM.
+    /// is not a row. Header and delimiter must have the same cell count —
+    /// GFM's rule, and the one that keeps a streaming `| check | ok |\n| --`
+    /// from becoming a one-column table that drops `ok`.
     private static func takeTable(_ headerLine: String, remaining: inout ArraySlice<String>) -> MarkdownBlock? {
         guard looksLikeTableRow(headerLine),
               let delimiter = remaining.first,
@@ -175,13 +177,18 @@ public enum Markdown {
               !alignments.isEmpty
         else { return nil }
 
+        let headerCells = cells(headerLine)
+        guard headerCells.count == alignments.count else { return nil }
+
         remaining = remaining.dropFirst()
         let columns = alignments.count
-        let headers = padded(cells(headerLine), to: columns, fill: "")
+        let headers = padded(headerCells, to: columns, fill: "")
         var rows: [[String]] = []
         while let next = remaining.first {
             let trimmed = next.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || !looksLikeTableRow(trimmed) || delimiterAlignments(trimmed) != nil {
+            // A body row may look like a delimiter (`| --- | --- |`). GFM
+            // still treats it as data once the header delimiter is spent.
+            if trimmed.isEmpty || !looksLikeTableRow(trimmed) {
                 break
             }
             remaining = remaining.dropFirst()
@@ -194,13 +201,35 @@ public enum Markdown {
         trimmed.contains("|")
     }
 
-    /// Split on `|`, dropping the empty ends a leading/trailing pipe creates.
+    /// Split on unescaped `|`, dropping the empty ends a leading/trailing
+    /// pipe creates. `\|` stays inside the cell so a filename or regex
+    /// cannot shift later columns.
     private static func cells(_ line: String) -> [String] {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        var parts = trimmed.split(separator: "|", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        var parts: [String] = []
+        var current = ""
+        var escaped = false
+        for character in trimmed {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\" {
+                escaped = true
+                continue
+            }
+            if character == "|" {
+                parts.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        if escaped { current.append("\\") }
+        parts.append(current.trimmingCharacters(in: .whitespaces))
         if trimmed.hasPrefix("|"), parts.first == "" { parts.removeFirst() }
-        if trimmed.hasSuffix("|"), parts.last == "" { parts.removeLast() }
+        if trimmed.hasSuffix("|"), !trimmed.hasSuffix("\\|"), parts.last == "" { parts.removeLast() }
         return parts
     }
 

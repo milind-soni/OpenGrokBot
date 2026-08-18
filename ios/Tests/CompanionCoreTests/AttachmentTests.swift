@@ -52,13 +52,13 @@ final class AttachmentTests: XCTestCase {
 
     func testDisplayHidesTheTagAndKeepsTheCaption() {
         let shown = Attachment.display(
-            "Can create a listing\n\n<attached-file path=\"/Users/me/.openmausbot-companion/inbox/1-ab-photo.jpg\" />"
+            "Can create a listing\n\n<attached-file path=\"/Users/me/.openmausbot-companion/inbox/1787025214436-54414f70-photo.jpg\" />"
         )
         XCTAssertEqual(shown.caption, "Can create a listing")
-        XCTAssertEqual(shown.files.map(\.name), ["1-ab-photo.jpg"])
+        XCTAssertEqual(shown.files.map(\.name), ["1787025214436-54414f70-photo.jpg"])
         XCTAssertEqual(
             shown.files.first?.path,
-            "/Users/me/.openmausbot-companion/inbox/1-ab-photo.jpg"
+            "/Users/me/.openmausbot-companion/inbox/1787025214436-54414f70-photo.jpg"
         )
         XCTAssertTrue(shown.files.first?.isImage == true)
         XCTAssertEqual(shown.files.first?.displayName, "photo.jpg")

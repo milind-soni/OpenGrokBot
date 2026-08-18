@@ -13,7 +13,6 @@ import SwiftUI
 import UIKit
 import CompanionCore
 import UserNotifications
-import UIKit
 
 /// Stream lifecycle, in Console.app and the Xcode console. A companion that
 /// is silently not connected looks exactly like one with nothing to say, so
@@ -130,6 +129,7 @@ final class Session: ObservableObject {
         self.connection = stored
         self.client = CompanionClient(connection: stored, token: paired.token)
         self.state = CompanionState()
+        forgetAttachmentPreviews()
         // A fresh pairing settles any restore that was still waiting on the
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
@@ -145,6 +145,7 @@ final class Session: ObservableObject {
         connection = nil
         client = nil
         state = CompanionState()
+        forgetAttachmentPreviews()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
     }
@@ -410,6 +411,9 @@ final class Session: ObservableObject {
         guard let client else { return nil }
         do {
             return try await client.inboxFile(named: name)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
         } catch {
             return nil
         }
@@ -522,14 +526,27 @@ final class Session: ObservableObject {
     /// Thumbnails of files this session just sent, keyed by the host path
     /// in the message. The bubble uses them so a photo appears before the
     /// sidecar round-trip, and after a restart the GET above fills in.
+    private static let maxAttachmentPreviews = 24
     private var attachmentPreviews: [String: UIImage] = [:]
+    private var attachmentPreviewOrder: [String] = []
 
     func rememberPreview(_ image: UIImage, for path: String) {
-        attachmentPreviews[path] = image
+        attachmentPreviews[path] = PendingMedia.thumbnail(from: image)
+        attachmentPreviewOrder.removeAll { $0 == path }
+        attachmentPreviewOrder.append(path)
+        while attachmentPreviewOrder.count > Self.maxAttachmentPreviews {
+            let old = attachmentPreviewOrder.removeFirst()
+            attachmentPreviews.removeValue(forKey: old)
+        }
     }
 
     func preview(for path: String) -> UIImage? {
         attachmentPreviews[path]
+    }
+
+    private func forgetAttachmentPreviews() {
+        attachmentPreviews.removeAll()
+        attachmentPreviewOrder.removeAll()
     }
 
     func refreshNotificationAuthorization() async {

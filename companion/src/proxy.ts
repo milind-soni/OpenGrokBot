@@ -213,10 +213,10 @@ export function createProxyHandler(options: ProxyOptions) {
         },
         (error: Error) => {
           sendJson(res, error.message === "body too large" ? 413 : 400, { error: error.message });
-          // Stop reading whatever is still in flight. After the status is
-          // on the wire, dropping the rest is safe — before it, the phone
-          // would only see a hung upload.
-          req.destroy();
+          // Drain whatever is still in flight so the 413 is not sitting
+          // behind a half-read body. Destroying the socket here is how a
+          // client sees a dropped connection instead of that status.
+          req.resume();
         },
       );
       return;

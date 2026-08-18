@@ -211,14 +211,33 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(Markdown.blocks("| # | Circuit |"), [.paragraph("| # | Circuit |")])
     }
 
-    /// GFM: the delimiter decides how many columns there are. Extra header
-    /// cells are dropped; missing body cells are empty.
-    func testDelimiterColumnCountWins() {
+    /// GFM: header and delimiter must have the same number of cells.
+    /// A mismatch is not a table — padding the header down would drop
+    /// characters from a reply that is still streaming its delimiter.
+    func testMismatchedHeaderAndDelimiterStayProse() {
         let source = """
         | a | b | c |
         | --- | --- |
         | 1 | 2 | 3 |
         | only |
+        """
+        let rendered = Markdown.blocks(source)
+        XCTAssertEqual(rendered.count, 1)
+        if case let .paragraph(text) = rendered[0] {
+            XCTAssertTrue(text.contains("a"))
+            XCTAssertTrue(text.contains("c"))
+            XCTAssertTrue(text.contains("only"))
+        } else {
+            XCTFail("expected a paragraph, got \(rendered)")
+        }
+    }
+
+    func testADashOnlyBodyRowStaysInTheTable() {
+        let source = """
+        | a | b |
+        | --- | --- |
+        | --- | --- |
+        | 1 | 2 |
         """
         XCTAssertEqual(
             Markdown.blocks(source),
@@ -227,9 +246,27 @@ final class MarkdownTests: XCTestCase {
                     headers: ["a", "b"],
                     alignments: [.left, .left],
                     rows: [
+                        ["---", "---"],
                         ["1", "2"],
-                        ["only", ""],
                     ]
+                ),
+            ]
+        )
+    }
+
+    func testEscapedPipesStayInsideTheCell() {
+        let source = """
+        | A\\|B | C |
+        | --- | --- |
+        | 1\\|2 | 3 |
+        """
+        XCTAssertEqual(
+            Markdown.blocks(source),
+            [
+                .table(
+                    headers: ["A|B", "C"],
+                    alignments: [.left, .left],
+                    rows: [["1|2", "3"]]
                 ),
             ]
         )

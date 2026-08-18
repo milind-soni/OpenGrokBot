@@ -211,8 +211,15 @@ describe("harness HTTP API", () => {
     const hits = await api("GET", "/api/search?q=nice%20to%20meet");
     expect(hits.status).toBe(200);
     const hit = hits.body.hits.find((h: { botId?: string }) => h.botId === bot.id);
-    expect(hit).toMatchObject({ botId: bot.id, threadId: bot.threadId, name: bot.name });
+    expect(hit).toMatchObject({
+      botId: bot.id,
+      threadId: bot.threadId,
+      name: bot.name,
+      kind: "text",
+      onActivePath: true,
+    });
     expect(hit.snippet.toLowerCase()).toContain("nice to meet");
+    expect(hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength).toLowerCase()).toBe("nice to meet");
     expect((await api("GET", "/api/search?q=")).body.hits).toEqual([]);
 
     const markdown = await fetch(`${BASE}/api/threads/${bot.threadId}/export`);

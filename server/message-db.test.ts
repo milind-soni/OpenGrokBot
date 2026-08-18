@@ -119,6 +119,25 @@ describe("message-db", () => {
     expect(searchMessages("")).toEqual([]);
   });
 
+  it("search reports the match offset for highlighting, and finds activity chips by tool name", () => {
+    insertMessage("t7", msg("m1", "please\n\n   run   the migration now"));
+    insertMessage("t7", { ...msg("m2", ""), kind: "activity", role: "bot", tool: { name: "Bash: alembic upgrade head", ok: true } } as Message);
+    insertMessage("t7", { ...msg("m3", "we spoke about it"), from: { botId: "b2", name: "Scout", color: "green" } } as Message);
+
+    const text = searchMessages("the migration")[0];
+    expect(text.messageId).toBe("m1");
+    // whitespace folded in the snippet, offset points at the folded match
+    expect(text.snippet.slice(text.matchStart, text.matchStart + text.matchLength)).toBe("the migration");
+
+    // "which bot ran that migration" — the tool name is searchable
+    const chip = searchMessages("alembic")[0];
+    expect(chip).toMatchObject({ messageId: "m2", kind: "activity" });
+    expect(chip.snippet).toContain("alembic upgrade head");
+
+    // room attribution rides along
+    expect(searchMessages("spoke")[0].from).toBe("Scout");
+  });
+
   it("Store round-trips branching through the DB across a restart", () => {
     const store = new Store(selection);
     const bot = store.createBot();

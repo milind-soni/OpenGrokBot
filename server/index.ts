@@ -2148,15 +2148,24 @@ const server = createServer(async (req, res) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      // whether each hit sits on its thread's visible branch — a click on
+      // one that does not has to switch versions first (and only then)
+      const activePaths = new Map<string, Set<string>>();
+      const onActivePath = (threadId: string, messageId: string) => {
+        let ids = activePaths.get(threadId);
+        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        return ids.has(messageId);
+      };
       const hits = searchMessages(q, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
+          const active = onActivePath(hit.threadId, hit.messageId);
           if (bot) {
             const task = store.taskByThread(bot.id, hit.threadId);
-            return { ...hit, botId: bot.id, name: bot.name, task: task?.title };
+            return { ...hit, botId: bot.id, name: bot.name, task: task?.title, onActivePath: active };
           }
-          if (group) return { ...hit, groupId: group.id, name: group.name };
+          if (group) return { ...hit, groupId: group.id, name: group.name, onActivePath: active };
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);

@@ -154,12 +154,140 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(Markdown.blocks("-- dashes --"), [.paragraph("-- dashes --")])
     }
 
+    // MARK: - Tables
+
+    func testPipeTableKeepsHeadersRowsAndAlignment() {
+        let source = """
+        | # | Circuit | # | Circuit |
+        |---|:-------:|---:|:--------|
+        | 1 | Oven    | 2 | Dryer   |
+        | 3 | A/C     | 4 | Kitchen Rec |
+        """
+        XCTAssertEqual(
+            Markdown.blocks(source),
+            [
+                .table(
+                    headers: ["#", "Circuit", "#", "Circuit"],
+                    alignments: [.left, .center, .right, .left],
+                    rows: [
+                        ["1", "Oven", "2", "Dryer"],
+                        ["3", "A/C", "4", "Kitchen Rec"],
+                    ]
+                ),
+            ]
+        )
+    }
+
+    /// The panel-directory shape models actually emit: two `#` / Circuit
+    /// pairs with an empty spacer cell between them.
+    func testABlankCellBetweenColumnPairsIsKept() {
+        let source = """
+        | # | Circuit | | # | Circuit |
+        |---|----------|---|---|----------|
+        | 1 | Oven | | 2 | Dryer |
+        """
+        XCTAssertEqual(
+            Markdown.blocks(source),
+            [
+                .table(
+                    headers: ["#", "Circuit", "", "#", "Circuit"],
+                    alignments: [.left, .left, .left, .left, .left],
+                    rows: [["1", "Oven", "", "2", "Dryer"]],
+                ),
+            ]
+        )
+    }
+
+    /// Without a delimiter row this is prose that happens to contain pipes,
+    /// which is how it rendered as a wall of `|` before tables existed here.
+    func testPipesWithoutADelimiterStayAParagraph() {
+        XCTAssertEqual(
+            Markdown.blocks("| # | Circuit |\n| 1 | Oven |"),
+            [.paragraph("| # | Circuit | | 1 | Oven |")]
+        )
+    }
+
+    func testAHeaderWithoutADelimiterIsStillProse() {
+        XCTAssertEqual(Markdown.blocks("| # | Circuit |"), [.paragraph("| # | Circuit |")])
+    }
+
+    /// GFM: the delimiter decides how many columns there are. Extra header
+    /// cells are dropped; missing body cells are empty.
+    func testDelimiterColumnCountWins() {
+        let source = """
+        | a | b | c |
+        | --- | --- |
+        | 1 | 2 | 3 |
+        | only |
+        """
+        XCTAssertEqual(
+            Markdown.blocks(source),
+            [
+                .table(
+                    headers: ["a", "b"],
+                    alignments: [.left, .left],
+                    rows: [
+                        ["1", "2"],
+                        ["only", ""],
+                    ]
+                ),
+            ]
+        )
+    }
+
+    func testATableStopsAtABlankLine() {
+        let source = """
+        | a | b |
+        | --- | --- |
+        | 1 | 2 |
+
+        after
+        """
+        XCTAssertEqual(
+            Markdown.blocks(source),
+            [
+                .table(
+                    headers: ["a", "b"],
+                    alignments: [.left, .left],
+                    rows: [["1", "2"]]
+                ),
+                .paragraph("after"),
+            ]
+        )
+    }
+
+    func testAPartialTableStillHasItsHeader() {
+        XCTAssertEqual(
+            Markdown.blocks("| a | b |\n| --- | --- |"),
+            [
+                .table(
+                    headers: ["a", "b"],
+                    alignments: [.left, .left],
+                    rows: []
+                ),
+            ]
+        )
+    }
+
+    func testInlineMarkupInCellsSurvivesTheSplit() {
+        XCTAssertEqual(
+            Markdown.blocks("| **Name** |\n| --- |\n| `Oven` |"),
+            [
+                .table(
+                    headers: ["**Name**"],
+                    alignments: [.left],
+                    rows: [["`Oven`"]]
+                ),
+            ]
+        )
+    }
+
     // MARK: - Streaming
 
     /// The invariant that keeps the bubble from flickering: whatever arrives,
     /// something renders, and the characters the model has sent are in it.
     func testPartialInputAlwaysRendersSomething() {
-        for prefix in ["#", "# ", "# Head", "- ", "- it", "**bo", "```", "```sw\nlet", "[link](htt"] {
+        for prefix in ["#", "# ", "# Head", "- ", "- it", "**bo", "```", "```sw\nlet", "[link](htt", "| a |"] {
             XCTAssertFalse(
                 Markdown.blocks(prefix).isEmpty,
                 "dropped everything for \(prefix.debugDescription)"
@@ -170,15 +298,16 @@ final class MarkdownTests: XCTestCase {
     /// Growing the source one character at a time must never lose text. This
     /// is the whole stream, replayed at the granularity the deltas arrive at.
     func testNoPrefixOfAReplyLosesCharacters() {
-        let reply = "# Result\n\nRan **two** checks:\n\n- `pnpm test` passed\n- `pnpm lint` passed\n\n```sh\npnpm test\n```\n\n> nothing else to report"
+        let reply = "# Result\n\nRan **two** checks:\n\n- `pnpm test` passed\n- `pnpm lint` passed\n\n| check | ok |\n| --- | --- |\n| test | yes |\n\n```sh\npnpm test\n```\n\n> nothing else to report"
         for length in 1...reply.count {
             let partial = String(reply.prefix(length))
             let rendered = Markdown.blocks(partial).map(text).joined()
             // Compare on non-whitespace: the splitter deliberately drops
             // markers, indentation and blank lines, and it joins soft breaks
             // with a space. What it must not drop is content.
-            let sent = partial.filter { !$0.isWhitespace && !"#->`*_".contains($0) }
-            let shown = rendered.filter { !$0.isWhitespace && !"#->`*_".contains($0) }
+            let dropped: Set<Character> = ["#", "-", ">", "`", "*", "_", "|"]
+            let sent = partial.filter { !$0.isWhitespace && !dropped.contains($0) }
+            let shown = rendered.filter { !$0.isWhitespace && !dropped.contains($0) }
             XCTAssertEqual(shown, sent, "lost content at \(length) characters")
         }
     }
@@ -191,6 +320,7 @@ final class MarkdownTests: XCTestCase {
         case let .heading(_, text): return text
         case let .code(language, text): return (language ?? "") + text
         case let .quote(text): return text
+        case let .table(headers, _, rows): return headers.joined() + rows.flatMap { $0 }.joined()
         case .rule: return ""
         }
     }

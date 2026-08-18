@@ -87,7 +87,80 @@ struct MarkdownText: View {
 
         case .rule:
             Divider().padding(.vertical, 2)
+
+        case let .table(headers, alignments, rows):
+            pipeTable(headers: headers, alignments: alignments, rows: rows, tail: tail)
         }
+    }
+
+    /// Wide tables scroll sideways the way fenced code does. A panel
+    /// directory cannot wrap cell-by-cell without becoming the pipe soup
+    /// this exists to replace.
+    private func pipeTable(
+        headers: [String],
+        alignments: [MarkdownTableAlignment],
+        rows: [[String]],
+        tail: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                    GridRow {
+                        ForEach(headers.indices, id: \.self) { column in
+                            tableCell(
+                                headers[column],
+                                header: true,
+                                alignment: alignments[column]
+                            )
+                        }
+                    }
+                    ForEach(rows.indices, id: \.self) { row in
+                        GridRow {
+                            ForEach(headers.indices, id: \.self) { column in
+                                tableCell(
+                                    rows[row][column],
+                                    header: false,
+                                    alignment: alignments[column]
+                                )
+                            }
+                        }
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: true)
+            }
+            if tail {
+                caretText(true)
+                    .font(.system(size: 14))
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private func tableCell(_ text: String, header: Bool, alignment: MarkdownTableAlignment) -> some View {
+        let frame: Alignment
+        let wrap: TextAlignment
+        switch alignment {
+        case .left:
+            frame = .leading
+            wrap = .leading
+        case .center:
+            frame = .center
+            wrap = .center
+        case .right:
+            frame = .trailing
+            wrap = .trailing
+        }
+        return inline(text)
+            .font(.system(size: 14, weight: header ? .semibold : .regular))
+            .multilineTextAlignment(wrap)
+            .frame(minWidth: 28, alignment: frame)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.secondary.opacity(header ? 0.35 : 0.16))
+                    .frame(height: 1)
+            }
     }
 
     private func marker(_ symbol: String, indent: Int, text: String, tail: Bool) -> some View {

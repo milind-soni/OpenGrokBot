@@ -14,9 +14,15 @@
 //
 // Deliberately not a full CommonMark implementation. It covers what a model
 // actually emits into a chat bubble — paragraphs, lists, headings, fences,
-// quotes, rules — and treats anything it does not recognise as text, which is
-// the failure mode that loses nothing.
+// quotes, rules, GFM tables — and treats anything it does not recognise as
+// text, which is the failure mode that loses nothing.
 import Foundation
+
+public enum MarkdownTableAlignment: Equatable, Sendable {
+    case left
+    case center
+    case right
+}
 
 public enum MarkdownBlock: Equatable, Sendable {
     case paragraph(String)
@@ -27,6 +33,9 @@ public enum MarkdownBlock: Equatable, Sendable {
     /// A fenced block. `language` is whatever followed the opening fence.
     case code(language: String?, text: String)
     case quote(String)
+    /// A GFM pipe table. Column count comes from the delimiter row, the
+    /// same rule remark-gfm uses on the desktop.
+    case table(headers: [String], alignments: [MarkdownTableAlignment], rows: [[String]])
     case rule
 }
 
@@ -81,6 +90,16 @@ public enum Markdown {
 
             if trimmed.isEmpty {
                 flushParagraph()
+                continue
+            }
+
+            // A GFM table is a header line plus a delimiter row of dashes.
+            // Without the delimiter, a line that happens to contain `|` is
+            // still prose — otherwise "use | as a pipe" becomes a one-cell
+            // table the moment it wraps.
+            if let table = takeTable(trimmed, remaining: &lines) {
+                flushParagraph()
+                blocks.append(table)
                 continue
             }
 
@@ -145,5 +164,75 @@ public enum Markdown {
             }
         }
         return nil
+    }
+
+    /// Header + delimiter, then body rows until a blank line or a line that
+    /// is not a row. Column count is the delimiter's cell count, matching GFM.
+    private static func takeTable(_ headerLine: String, remaining: inout ArraySlice<String>) -> MarkdownBlock? {
+        guard looksLikeTableRow(headerLine),
+              let delimiter = remaining.first,
+              let alignments = delimiterAlignments(delimiter),
+              !alignments.isEmpty
+        else { return nil }
+
+        remaining = remaining.dropFirst()
+        let columns = alignments.count
+        let headers = padded(cells(headerLine), to: columns, fill: "")
+        var rows: [[String]] = []
+        while let next = remaining.first {
+            let trimmed = next.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || !looksLikeTableRow(trimmed) || delimiterAlignments(trimmed) != nil {
+                break
+            }
+            remaining = remaining.dropFirst()
+            rows.append(padded(cells(trimmed), to: columns, fill: ""))
+        }
+        return .table(headers: headers, alignments: alignments, rows: rows)
+    }
+
+    private static func looksLikeTableRow(_ trimmed: String) -> Bool {
+        trimmed.contains("|")
+    }
+
+    /// Split on `|`, dropping the empty ends a leading/trailing pipe creates.
+    private static func cells(_ line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        var parts = trimmed.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        if trimmed.hasPrefix("|"), parts.first == "" { parts.removeFirst() }
+        if trimmed.hasSuffix("|"), parts.last == "" { parts.removeLast() }
+        return parts
+    }
+
+    /// Every cell must be `---` / `:---` / `---:` / `:---:`. A lone `---`
+    /// with no pipe is a horizontal rule, not a delimiter — that path
+    /// never calls this because `looksLikeTableRow` requires a `|`.
+    private static func delimiterAlignments(_ line: String) -> [MarkdownTableAlignment]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard looksLikeTableRow(trimmed) else { return nil }
+        let parts = cells(trimmed)
+        guard !parts.isEmpty else { return nil }
+        var alignments: [MarkdownTableAlignment] = []
+        alignments.reserveCapacity(parts.count)
+        for part in parts {
+            guard let alignment = alignment(from: part) else { return nil }
+            alignments.append(alignment)
+        }
+        return alignments
+    }
+
+    private static func alignment(from cell: String) -> MarkdownTableAlignment? {
+        let left = cell.hasPrefix(":")
+        let right = cell.hasSuffix(":")
+        let dashes = cell.dropFirst(left ? 1 : 0).dropLast(right ? 1 : 0)
+        guard dashes.count >= 3, dashes.allSatisfy({ $0 == "-" }) else { return nil }
+        if left && right { return .center }
+        if right { return .right }
+        return .left
+    }
+
+    private static func padded<T>(_ items: [T], to count: Int, fill: T) -> [T] {
+        if items.count >= count { return Array(items.prefix(count)) }
+        return items + Array(repeating: fill, count: count - items.count)
     }
 }

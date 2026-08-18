@@ -246,7 +246,9 @@ port — only the route to it is different.
 
 Not built yet, so not bugs:
 
-- **Nothing arrives while the app is closed.** No push until APNs.
+- **Nothing arrives after the app is terminated.** Live and replayed notification
+  frames now become native alerts and badges, but closed-app push still needs an
+  APNs relay with project-owned Apple credentials.
 - **No voice or routine management.** Tasks, SQLite transcript search/export,
   reactions, and edit/version switching are available from the conversation UI.
 

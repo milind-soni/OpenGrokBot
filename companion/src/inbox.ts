@@ -10,7 +10,7 @@
 // processes do not share a layout; the agent still reads the file because
 // the path we return is an ordinary absolute path on this machine.
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
@@ -89,6 +89,11 @@ export function readInboxFile(
     return null;
   }
   try {
+    const st = lstatSync(path);
+    // Regular files only, and never larger than we ourselves would write.
+    // `lstat` so a symlink in the inbox cannot be used as a reader for
+    // the rest of the disk; `isFile()` is false for directories and links.
+    if (!st.isFile() || st.size > MAX_INBOX_BYTES) return null;
     return { bytes: readFileSync(path), type: inboxType(filename) };
   } catch {
     return null;

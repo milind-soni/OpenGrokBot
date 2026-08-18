@@ -101,6 +101,7 @@ describe("what it may not", () => {
     expect(allowed("GET", "/api/events/all")).toBe(false);
     expect(allowed("GET", "/api/threads/th_1/messages/msg_2/image/../../../config")).toBe(false);
     expect(allowed("GET", "/api/inbox/../passwd")).toBe(false);
+    expect(allowed("GET", "/api/inbox/..")).toBe(false);
     expect(allowed("GET", "/api/bots%2f..%2fwebhooks")).toBe(false);
   });
 

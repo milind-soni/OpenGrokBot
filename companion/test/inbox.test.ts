@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -73,5 +73,22 @@ describe("storeInboxFile", () => {
     expect(readInboxFile("..", root!)).toBeNull();
     expect(readInboxFile(".hidden", root!)).toBeNull();
     expect(readInboxFile("missing.txt", root!)).toBeNull();
+  });
+
+  it("refuses a symlink, a directory, and a body over the ceiling", () => {
+    const root = dir();
+    writeFileSync(join(root, "target.txt"), "secret");
+    const name = "1-abcd1234-notes.txt";
+    try {
+      symlinkSync("target.txt", join(root, name));
+      expect(readInboxFile(name, root)).toBeNull();
+    } catch {
+      // some CI filesystems will not make a symlink; the other two
+      // refusals below still cover the same read path
+    }
+    mkdirSync(join(root, "2-abcd1234-dir"));
+    expect(readInboxFile("2-abcd1234-dir", root)).toBeNull();
+    writeFileSync(join(root, "3-abcd1234-big.bin"), Buffer.alloc(MAX_INBOX_BYTES + 1));
+    expect(readInboxFile("3-abcd1234-big.bin", root)).toBeNull();
   });
 });

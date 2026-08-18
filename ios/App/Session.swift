@@ -558,7 +558,7 @@ extension CompanionState {
         let shown = Attachment.display(text)
         if shown.files.isEmpty { return shown.caption }
         if shown.caption.isEmpty {
-            if shown.files.count == 1 { return shown.files[0].name }
+            if shown.files.count == 1 { return shown.files[0].displayName }
             return "\(shown.files.count) files"
         }
         return shown.caption

@@ -331,12 +331,11 @@ struct ChatView: View {
         let ns = name as NSString
         let ext = ns.pathExtension
         let stem = ext.isEmpty ? name : ns.deletingPathExtension
-        var n = 2
-        while true {
+        for n in 2...(PendingMedia.maxCount + 1) {
             let candidate = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
             if !pending.contains(where: { $0.name == candidate }) { return candidate }
-            n += 1
         }
+        return name
     }
 
     private func consumePhotos(_ items: [PhotosPickerItem]) async {
@@ -355,6 +354,12 @@ struct ChatView: View {
         for url in urls {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            guard exists, !isDirectory.boolValue, !url.hasDirectoryPath else {
+                attachError = "\(url.lastPathComponent) is a folder."
+                continue
+            }
             guard let data = try? Data(contentsOf: url) else {
                 attachError = "Couldn't open \(url.lastPathComponent)."
                 continue
@@ -479,7 +484,7 @@ struct ChatView: View {
         .photosPicker(
             isPresented: $pickingPhotos,
             selection: $photoItems,
-            maxSelectionCount: 8,
+            maxSelectionCount: PendingMedia.maxCount,
             matching: .images
         )
         .onChange(of: photoItems) { _, items in
@@ -565,7 +570,7 @@ struct TextBubble: View {
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    ForEach(Array(shown.files.enumerated()), id: \.offset) { _, file in
+                    ForEach(shown.files, id: \.path) { file in
                         InboxAttachmentView(file: file, cached: session.preview(for: file.path))
                     }
                 } else {

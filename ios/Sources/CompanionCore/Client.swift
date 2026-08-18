@@ -272,6 +272,13 @@ public struct CompanionClient: Sendable {
     /// file, not by a host path, so a stolen token cannot read the rest of
     /// the computer.
     public func inboxFile(named name: String) async throws -> Data {
+        // Same rule the sidecar uses: basename only, no leading dot, no
+        // traversal. The path is interpolated into the URL, so a `../`
+        // here would be a request for a different route entirely.
+        let base = URL(fileURLWithPath: name).lastPathComponent
+        guard base == name,
+              name.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]*$", options: .regularExpression) != nil
+        else { throw APIError.badURL }
         let encoded = name.addingPercentEncoding(withAllowedCharacters: Self.filenameHeaderAllowed) ?? name
         var request = try makeRequest("GET", "/api/inbox/\(encoded)")
         request.timeoutInterval = 60

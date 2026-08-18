@@ -151,22 +151,32 @@ struct ComposerAttachBar: View {
 /// filename. The bubble should not have to round-trip to the Mac to show
 /// something it held a moment ago.
 enum InboxCache {
-    private static var folder: URL {
+    private static let folder: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenMausInbox", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }()
+
+    /// Inbox names are basename-only and already sanitised on the Mac.
+    /// Anything else is not one of ours — including `..`, which
+    /// `appendingPathComponent` would walk out of this folder.
+    private static func storedName(from hostPath: String) -> String? {
+        let name = URL(fileURLWithPath: hostPath).lastPathComponent
+        guard name.range(
+            of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$",
+            options: .regularExpression
+        ) != nil else { return nil }
+        return name
     }
 
     static func save(_ data: Data, hostPath: String) {
-        let name = URL(fileURLWithPath: hostPath).lastPathComponent
-        guard !name.isEmpty, name != "/", !name.contains("/") else { return }
+        guard let name = storedName(from: hostPath) else { return }
         try? data.write(to: folder.appendingPathComponent(name), options: .atomic)
     }
 
     static func load(hostPath: String) -> Data? {
-        let name = URL(fileURLWithPath: hostPath).lastPathComponent
-        guard !name.isEmpty else { return nil }
+        guard let name = storedName(from: hostPath) else { return nil }
         return try? Data(contentsOf: folder.appendingPathComponent(name))
     }
 }

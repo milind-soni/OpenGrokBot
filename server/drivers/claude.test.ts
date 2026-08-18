@@ -449,9 +449,15 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-1");
     conn.write(JSON.stringify({ t: "ask", id: "dup-1", tool: "Bash", input: { command: "echo two" } }) + "\n");
 
-    // the collision is denied immediately, on the wire, without a second
-    // request.opened ever firing
-    expect(await nextAnswer()).toMatchObject({ behavior: "deny" });
+    // the collision is denied immediately, on the wire, with the duplicate's
+    // own id and the fixed denial message — and without a second
+    // request.opened ever firing for it
+    expect(await nextAnswer()).toMatchObject({
+      id: "dup-1",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-1")).toHaveLength(1);
 
     // the original ask is untouched and still resolves normally
     await expect(instance.adapter.respondToRequest("t-perm-dup-1", "dup-1", { behavior: "allow" })).resolves.toBe(
@@ -478,7 +484,12 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const conn2 = await connectSocket(permissionSocketPath("t-perm-dup-2"));
     const conn2Answer = answerQueue(conn2)();
     conn2.write(JSON.stringify({ t: "ask", id: "dup-2", tool: "Bash", input: { command: "echo two" } }) + "\n");
-    expect(await conn2Answer).toMatchObject({ behavior: "deny" });
+    expect(await conn2Answer).toMatchObject({
+      id: "dup-2",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-2")).toHaveLength(1);
 
     // the original, opened on conn1, still resolves normally
     await expect(instance.adapter.respondToRequest("t-perm-dup-2", "dup-2", { behavior: "allow" })).resolves.toBe(
@@ -515,6 +526,37 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     conn.end();
     await instance.adapter.interruptTurn("t-perm-dup-3");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("denies a colliding ask id for question-kind asks too, without disturbing the original", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-dup-4", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-dup-4"));
+    const nextAnswer = answerQueue(conn);
+
+    conn.write(JSON.stringify({ t: "ask", id: "dup-4", kind: "question", tool: "ask_user", input: { question: "one?" } }) + "\n");
+    await recorder.until((e) => e.type === "request.opened" && e.requestId === "dup-4");
+    conn.write(JSON.stringify({ t: "ask", id: "dup-4", kind: "question", tool: "ask_user", input: { question: "two?" } }) + "\n");
+
+    // same collision guard applies regardless of ask kind
+    expect(await nextAnswer()).toMatchObject({
+      id: "dup-4",
+      behavior: "deny",
+      message: "OpenMausBot: duplicate ask id — skipping this request.",
+    });
+    expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-4")).toHaveLength(1);
+
+    // the original question is untouched and still resolves normally
+    await expect(
+      instance.adapter.respondToRequest("t-perm-dup-4", "dup-4", { behavior: "answer", message: "yes" }),
+    ).resolves.toBe("answered");
+    expect(await nextAnswer()).toMatchObject({ behavior: "answer" });
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-dup-4");
     await recorder.until((e) => e.type === "turn.completed");
   });
 

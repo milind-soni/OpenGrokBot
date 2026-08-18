@@ -233,7 +233,9 @@ function createPermissionBroker(opts: {
         // resolves and deletes the shared key. Reject before either ask
         // becomes visible to onAsk.
         if (pending.has(askId)) {
-          console.error(`permission broker on ${opts.socketPath}: duplicate ask id ${askId} — denying`);
+          // askId is client-controlled; JSON.stringify escapes newlines and
+          // control characters so it can't corrupt the log line or terminal.
+          console.error(`permission broker on ${opts.socketPath}: duplicate ask id ${JSON.stringify(askId)} — denying`);
           try {
             conn.write(JSON.stringify({ t: "answer", id: askId, behavior: "deny", message: DUPLICATE_ASK_ID_NOTE }) + "\n");
           } catch {}

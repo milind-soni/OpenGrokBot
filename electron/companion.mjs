@@ -13,6 +13,7 @@
 import { app, utilityProcess } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveCompanionEntry } from "./companion-entry.mjs";
 
 // Passed to the fork rather than left to the sidecar's own defaults, so the
 // port this file fetches the control API on cannot drift from the port the
@@ -25,19 +26,62 @@ const COMPANION_PORT = 8810;
 let proc = null;
 let lastError = null;
 
-/** Where the sidecar's compiled entry lives.
+/** Where the sidecar's entry lives, and the Node flags it needs.
  *
- * Packaged, it is staged into resources alongside the harness. In dev there
- * is no such directory, so it comes from dist-companion — which means
- * `pnpm build:companion` has to have been run at least once. Returning null
- * rather than a path that does not exist is what lets the toggle say so
- * instead of failing with a spawn error nobody can read. */
-const entryPoint = (resourcesPath) => {
-  const packaged = path.join(resourcesPath, "companion", "index.js");
-  if (app.isPackaged) return fs.existsSync(packaged) ? packaged : null;
-  const built = path.join(app.getAppPath(), "dist-companion", "index.js");
-  return fs.existsSync(built) ? built : null;
-};
+ * Packaged, it is staged into resources alongside the harness. In dev the
+ * compiled dist-companion output is preferred when it exists, and the
+ * TypeScript source is the fallback — run with type stripping, exactly as
+ * the `companion` script runs it — so the toggle works without a build step
+ * nobody remembers. Returning null rather than a path that does not exist is
+ * what lets the toggle say so instead of failing with a spawn error nobody
+ * can read. */
+const entryPoint = (resourcesPath) =>
+  resolveCompanionEntry({
+    isPackaged: app.isPackaged,
+    resourcesPath,
+    appPath: app.getAppPath(),
+    exists: fs.existsSync,
+  });
+
+// ── the remembered toggle ────────────────────────────────────────────────
+// The Settings toggle used to be the only thing that ever started the
+// sidecar, so a paired phone died with every relaunch of the app: port 8810
+// stayed closed until the user rediscovered the switch. The position of the
+// toggle is state worth keeping, and it lives in the app's own userData —
+// like cua-connection.json — because the app owns the toggle. Not in the
+// sidecar's ~/.openmausbot-companion, which is the child process's directory,
+// and not in the harness's config.json, which is somebody else's data layout.
+
+const settingsFile = () => path.join(app.getPath("userData"), "companion-settings.json");
+
+/** Whether the user left the companion on. Anything unreadable is "off" —
+ * the flag opens a network listener, so it fails closed. */
+export function companionEnabledAtRest() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile(), "utf8"))?.enabled === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remember the toggle's position. Written via temp-and-rename so a crash
+ * mid-write cannot leave a truncated file; a failed write costs auto-start
+ * on the next launch, never the toggle itself. */
+export function rememberCompanionEnabled(enabled) {
+  const file = settingsFile();
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(temporary, JSON.stringify({ enabled }, null, 2));
+    fs.renameSync(temporary, file);
+  } catch {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      /* never created, or already renamed */
+    }
+  }
+}
 
 /** Ask the sidecar's own control server, which is the same API the standalone
  * page uses. Short timeout: this is loopback, and a spinner in Settings that
@@ -94,22 +138,28 @@ export function stopCompanion() {
 async function start({ resourcesPath, harnessPort, log }) {
   if (proc) return companionState();
   lastError = null;
-  const entry = entryPoint(resourcesPath);
-  if (!entry) {
+  const resolved = entryPoint(resourcesPath);
+  if (!resolved) {
+    // In dev this now means even companion/src is gone — a broken checkout,
+    // not a missing build step, so the old "run pnpm build:companion" advice
+    // would send someone to a command that cannot help.
     lastError = app.isPackaged
       ? "the companion is missing from this build"
-      : "run `pnpm build:companion` once, then try again";
+      : "the companion sources are missing from this checkout";
     return companionState();
   }
-  log?.(`companion fork ${entry}`);
+  log?.(`companion fork ${resolved.entry}`);
 
-  const child = utilityProcess.fork(entry, [], {
+  const child = utilityProcess.fork(resolved.entry, [], {
     env: {
       ...process.env,
       OMB_PORT: String(harnessPort),
       OMB_COMPANION_PORT: String(COMPANION_PORT),
       OMB_CONTROL_PORT: String(CONTROL_PORT),
     },
+    // how the TS-source fallback gets --experimental-strip-types; empty for
+    // compiled entries
+    execArgv: resolved.execArgv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (d) => log?.(`[companion] ${String(d).trimEnd()}`));

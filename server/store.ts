@@ -118,16 +118,23 @@ export interface TaskRecord {
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
-  /** cumulative token spend across this task's settled turns — providers
-   * report running totals per turn; the fold adds each turn's final total
-   * here when the turn completes. Informational, not billing. */
-  usage?: { input: number; output: number; turns: number };
+  /** what this task has spent: banked once per turn from turn.completed */
+  usage?: TaskUsage;
   /** the folder this task's turns run in, pinned on its first turn from
    * the bot's `cwd` at that moment. Pinned, not read live: Claude keeps
    * sessions per project directory and Codex threads carry their cwd, so
    * a folder that moved under a live session would break resume. `null`
    * = pinned to the default (home); absent = not pinned yet. */
   cwd?: string | null;
+}
+
+export interface TaskUsage {
+  input: number;
+  output: number;
+  /** null until any turn reports a cost — most engines never do. Records
+   * written by builds before cost existed lack the field; read as null. */
+  costUsd: number | null;
+  turns: number;
 }
 
 /** Everything the BOT authored is scrubbed of content-shaped secrets before
@@ -801,6 +808,33 @@ export class Store {
     this.emit({ type: "bot", botId });
   }
 
+  /** Bank one settled turn onto its task. Called once per turn.completed;
+   * the running per-driver token indicator is deliberately not used here
+   * because its meaning differs by driver. */
+  addTaskUsage(
+    botId: string,
+    threadId: string,
+    turn: { input?: number; output?: number; costUsd: number | null },
+  ): TaskUsage | null {
+    const task = this.taskByThread(botId, threadId);
+    if (!task) return null;
+    const prev: TaskUsage = { input: 0, output: 0, costUsd: null, turns: 0, ...task.usage };
+    const cost = typeof turn.costUsd === "number" && Number.isFinite(turn.costUsd) ? turn.costUsd : null;
+    const prevCost = typeof prev.costUsd === "number" ? prev.costUsd : null;
+    // providers occasionally report NaN or a negative on a partial turn —
+    // never let that poison a running tally
+    const clean = (n: number | undefined) => (typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0);
+    task.usage = {
+      input: prev.input + clean(turn.input),
+      output: prev.output + clean(turn.output),
+      costUsd: cost === null ? prevCost : (prevCost ?? 0) + cost,
+      turns: prev.turns + 1,
+    };
+    this.saveBots();
+    this.emit({ type: "bot", botId });
+    return task.usage;
+  }
+
   /** The folder a task's turn runs in. Pins on first call from the bot's
    * current folder — unless the task already has a session (a thread from
    * before folders existed), which pins to the default so the folder can't
@@ -881,23 +915,6 @@ export class Store {
     const task = this.bot(botId)?.tasks?.find((t) => t.threadId === threadId);
     if (!task) return null;
     task.title = title.trim().slice(0, 80) || UNTITLED_TASK;
-    this.saveBots();
-    this.emit({ type: "bot", botId });
-    return task;
-  }
-
-  /** Add one settled turn's final token totals to its task's tally. */
-  addTaskUsage(botId: string, threadId: string, usage: { input: number; output: number }): TaskRecord | null {
-    const task = this.taskByThread(botId, threadId);
-    if (!task) return null;
-    const prev = task.usage ?? { input: 0, output: 0, turns: 0 };
-    const input = Number.isFinite(usage.input) ? Math.max(0, Math.trunc(usage.input)) : 0;
-    const output = Number.isFinite(usage.output) ? Math.max(0, Math.trunc(usage.output)) : 0;
-    task.usage = {
-      input: prev.input + input,
-      output: prev.output + output,
-      turns: prev.turns + 1,
-    };
     this.saveBots();
     this.emit({ type: "bot", botId });
     return task;

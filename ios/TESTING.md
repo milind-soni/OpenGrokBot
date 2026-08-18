@@ -262,7 +262,9 @@ port — only the route to it is different.
 Not built yet, so not bugs:
 
 - **Nothing arrives while the app is closed.** No push until APNs.
-- **No call mode, spoken replies, routines, task management, or transcript search.** Composer dictation and photo/file attach are in.
+- **No call mode, spoken replies, or routine management.** Composer dictation
+  and photo/file attach are in. Tasks, SQLite transcript search/export,
+  reactions, and edit/version switching are available from the conversation UI.
 
 (Two entries that used to sit on this list have since shipped: replies stream
 token by token as the provider emits them, and each bot has a computer panel —

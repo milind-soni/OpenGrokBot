@@ -14,6 +14,8 @@ struct ChatListView: View {
     /// cannot push without a tap, and a new bot appearing silently at the
     /// bottom of the roster is a poor answer to pressing +.
     @State private var path = NavigationPath()
+    @State private var searchHits: [SearchHit] = []
+    @State private var searching = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -40,6 +42,29 @@ struct ChatListView: View {
                             }
                         }
 
+                        if !query.isEmpty, !searchHits.isEmpty {
+                            HStack {
+                                Text("Messages")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.secondary)
+                                Spacer()
+                                if searching { ProgressView().controlSize(.small) }
+                            }
+                            .padding(.top, 10)
+                            .padding(.bottom, 4)
+
+                            ForEach(searchHits) { hit in
+                                Button {
+                                    Task {
+                                        if let chat = await session.open(hit) { path.append(chat) }
+                                    }
+                                } label: {
+                                    SearchHitRow(hit: hit)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
                         ForEach(chats) { summary in
                             NavigationLink(value: summary.chat) {
                                 ChatRow(
@@ -56,7 +81,7 @@ struct ChatListView: View {
                 }
                 .refreshable { await session.refresh() }
                 .overlay {
-                    if chats.isEmpty {
+                    if chats.isEmpty && searchHits.isEmpty {
                         ContentUnavailableView(
                             query.isEmpty ? "No bots yet" : "Nothing matches",
                             systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
@@ -73,6 +98,19 @@ struct ChatListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
+            .task(id: query) {
+                let expected = query
+                guard expected.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else {
+                    searchHits = []
+                    searching = false
+                    return
+                }
+                searching = true
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, query == expected else { return }
+                searchHits = await session.search(expected)
+                searching = false
+            }
         }
     }
 
@@ -141,6 +179,39 @@ struct ChatListView: View {
         if let bot = session.state.bot(forThread: threadId) { return .bot(bot) }
         if let room = session.state.room(forThread: threadId) { return .room(room) }
         return nil
+    }
+}
+
+struct SearchHitRow: View {
+    let hit: SearchHit
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: hit.role == .user ? "person.fill" : "bubble.left.fill")
+                .foregroundStyle(Color.secondary)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.secondary.opacity(0.13)))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(hit.name).font(.system(size: 15, weight: .semibold))
+                    if let task = hit.task, !task.isEmpty {
+                        Text(task).font(.system(size: 12)).foregroundStyle(Color.secondary)
+                    }
+                    Spacer()
+                    Text(RelativeStamp.list(hit.at))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.secondary)
+                }
+                Text(hit.snippet)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 }
 

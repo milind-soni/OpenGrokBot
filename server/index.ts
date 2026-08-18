@@ -286,6 +286,18 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
   return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
 }
 
+/** A bounded page centred on a known message, used when a search result is
+ * opened on a client that only hydrated the newest part of the transcript. */
+function messageWindow(threadId: string, messageId: string, limit: number) {
+  const all = store.messagesFor(threadId);
+  const index = all.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+  const before = Math.floor((limit - 1) / 2);
+  const start = Math.max(0, Math.min(index - before, all.length - limit));
+  const stop = Math.min(all.length, start + limit);
+  return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
+}
+
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 /** One connected client, and what it asked to be sent. */
 interface SseClient {
@@ -730,13 +742,22 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
-      const usage = turnUsage.get(event.threadId);
+      const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       // group turns run on the room's thread — the speaking bot's task
       // tally is not the right home for a shared room's spend, so only
       // 1:1 task turns are tallied for now.
-      if (bot && usage) store.addTaskUsage(bot.id, event.threadId, usage);
       if (bot) {
+        // bank what this turn spent before the bot broadcast carries the
+        // task list to every window. The driver's own per-turn figure
+        // (turn.completed.usage) is authoritative; a driver that only
+        // streams the running indicator falls back to its last value.
+        const tokens = event.usage ?? lastReported;
+        store.addTaskUsage(bot.id, event.threadId, {
+          input: tokens?.input,
+          output: tokens?.output,
+          costUsd: event.cost ?? null,
+        });
         // settled → idle; a setup failure already marked it dead, keep that
         if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
         store.patchBot(bot.id, { unread: true });
@@ -2108,6 +2129,13 @@ const server = createServer(async (req, res) => {
       const limit = pageSize(url.searchParams.get("limit"));
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
       const before = url.searchParams.get("before");
+      const around = url.searchParams.get("around");
+      if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (around) {
+        const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
+        if (!window) return json(res, 404, { error: "no such message" });
+        return json(res, 200, window);
+      }
       // An unknown cursor must not silently answer with the newest page —
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
@@ -2148,15 +2176,25 @@ const server = createServer(async (req, res) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      // whether each hit sits on its thread's visible branch — a click on
+      // one that does not has to switch versions first (and only then)
+      const activePaths = new Map<string, Set<string>>();
+      const onActivePath = (threadId: string, messageId: string) => {
+        let ids = activePaths.get(threadId);
+        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        return ids.has(messageId);
+      };
       const hits = searchMessages(q, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
+          if (!bot && !group) return null;
+          const active = onActivePath(hit.threadId, hit.messageId);
           if (bot) {
             const task = store.taskByThread(bot.id, hit.threadId);
-            return { ...hit, botId: bot.id, name: bot.name, task: task?.title };
+            return { ...hit, botId: bot.id, name: bot.name, task: task?.title, onActivePath: active };
           }
-          if (group) return { ...hit, groupId: group.id, name: group.name };
+          if (group) return { ...hit, groupId: group.id, name: group.name, onActivePath: active };
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);

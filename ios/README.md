@@ -65,6 +65,7 @@ ios/
     SpeechDictation.swift        SFSpeechRecognizer, press-to-stop
     ComposerAttach.swift         pending files, plus menu, chips
     CameraPicker.swift           take a photo for the composer
+    TaskManagerView.swift        create, switch, rename, and delete tasks
     ComputerView.swift           opt-in live view of a bot's computer
     MarkdownText.swift           the supported Markdown presentation layer
     SettingsView.swift           status, and unpair
@@ -172,8 +173,9 @@ mean losing the ability to lock it out.
   edit — the same press-to-stop shape as the desktop composer, on-device
   `SFSpeechRecognizer` when the phone supports it. The mic stays next to
   send so you can add another sentence by voice, and so you can stop
-  without an Escape key. Search and the roster's "+" are real: the latter
-  creates the same basic bot the desktop endpoint creates, then opens it.
+  without an Escape key. Search covers the SQLite transcript store and
+  opens the exact task, branch, and message; the roster's "+" creates the
+  same basic bot the desktop endpoint creates, then opens it.
 - **Composer attach is a photo or a file.** Plus menu: library, camera, or
   Files. The sidecar writes the bytes onto this computer (`POST /api/inbox`)
   and the message the bot receives is the same `<attached-file path="…">`
@@ -182,7 +184,9 @@ mean losing the ability to lock it out.
 ## Not in this version
 
 The app is foreground-only. There is no APNs delivery while it is closed, no
-call mode or spoken replies, no task-management or SQLite transcript-search UI,
-and no hosted relay. Composer dictation and photo/file attach are in. Tailscale
-is supported through manual MagicDNS entry; it is not a dependency and
-OpenMausBot does not operate a cloud copy of local data.
+call mode or spoken replies, and no hosted relay. Composer dictation and
+photo/file attach are in. Task management, SQLite transcript search, transcript
+sharing, reactions, and edit/version controls use narrow companion routes and
+the computer remains the source of truth. Tailscale is supported through
+manual MagicDNS entry; it is not a dependency and OpenMausBot does not operate
+a cloud copy of local data.

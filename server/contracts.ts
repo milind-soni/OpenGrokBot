@@ -91,6 +91,11 @@ export type RuntimeEvent = RuntimeEventBase &
         stopReason?: string | null;
         cost?: number | null;
         denials?: string[];
+        /** THIS turn's token total, as the provider reports it at the end.
+         * The one figure the harness accumulates — thread.token-usage.updated
+         * is a live indicator whose meaning differs per driver (a per-call
+         * delta, a thread total, a per-step figure) and must never be summed. */
+        usage?: { input: number; output: number };
       }
     | { type: "item.started"; itemType: "tool" | "reasoning"; title?: string }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
@@ -208,6 +213,9 @@ export interface ProviderSnapshot {
   reason?: string;
   authenticated?: boolean;
   version?: string | null;
+  /** How this instance is paid for, when the driver can tell: a reported
+   * cost on a subscription is notional and the UI labels it as such. */
+  billing?: "metered" | "subscription";
 }
 
 // ── engine install descriptor ───────────────────────────────────────────

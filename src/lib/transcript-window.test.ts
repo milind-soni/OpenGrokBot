@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   TRANSCRIPT_WINDOW_SIZE,
   expandWindowStart,
+  focusWindowRange,
   resolveTranscriptWindow,
   tailWindowStart,
 } from "./transcript-window";
@@ -47,6 +48,7 @@ describe("resolveTranscriptWindow", () => {
     expect(result.visible).toHaveLength(10);
     expect(result.hiddenCount).toBe(0);
     expect(result.startIndex).toBe(0);
+    expect(result.laterCount).toBe(0);
   });
 
   it("windows a long thread to its tail", () => {
@@ -100,5 +102,35 @@ describe("resolveTranscriptWindow", () => {
     const result = resolveTranscriptWindow(thread(10), tailWindowStart(10, 4), 4);
     expect(result.visible).toHaveLength(4);
     expect(result.hiddenCount).toBe(6);
+  });
+
+  it("keeps a finite search-focus window instead of mounting through the tail", () => {
+    const result = resolveTranscriptWindow(thread(1_000), 440, TRANSCRIPT_WINDOW_SIZE, 560);
+    expect(result.visible).toHaveLength(TRANSCRIPT_WINDOW_SIZE);
+    expect(result.visible[0]).toBe(440);
+    expect(result.visible.at(-1)).toBe(559);
+    expect(result.hiddenCount).toBe(440);
+    expect(result.laterCount).toBe(440);
+    expect(result.endIndex).toBe(560);
+  });
+
+  it("falls back to the tail if a finite window becomes invalid after a rewind", () => {
+    const result = resolveTranscriptWindow(thread(100), 440, TRANSCRIPT_WINDOW_SIZE, 560);
+    expect(result.visible[0]).toBe(0);
+    expect(result.visible.at(-1)).toBe(99);
+    expect(result.laterCount).toBe(0);
+  });
+});
+
+describe("focusWindowRange", () => {
+  it.each([10, 500, 990])("contains target %i in a bounded window", (target) => {
+    const range = focusWindowRange(1_000, target);
+    expect(target).toBeGreaterThanOrEqual(range.start);
+    expect(target).toBeLessThan(range.end);
+    expect(range.end - range.start).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_SIZE);
+  });
+
+  it("uses the full short transcript", () => {
+    expect(focusWindowRange(20, 10)).toEqual({ start: 0, end: 20 });
   });
 });

@@ -86,11 +86,12 @@ brew install xcodegen
 cd ios && xcodegen generate && open OpenMausCompanion.xcodeproj
 ```
 
-**Re-run `xcodegen generate` after pulling any change that adds a file to
-`App/`.** The spec says `sources: App`, but XcodeGen resolves that to explicit
-file references when it generates, so a new file is simply absent from the
-target until you regenerate — and the build fails with `Cannot find 'X' in
-scope`, which reads like a code error and is not one.
+**Re-run `xcodegen generate` once after pulling a `project.yml` change.**
+`App/` is an Xcode 16 synced folder, so new Swift files in it show up on
+the next build without regenerating. Quit Xcode before `git pull`, then
+open the project again — pulling while it is open is what produces
+"Build input files cannot be found" for `CameraPicker.swift` /
+`SpeechDictation.swift`.
 
 If you'd rather not install XcodeGen, make an iOS App target by hand, add the
 `App/` folder and the local `CompanionCore` package, and copy the Info.plist

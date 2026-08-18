@@ -133,10 +133,10 @@ xcodebuild -project OpenMausCompanion.xcodeproj \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-**Re-run `xcodegen generate` whenever a pull adds a file to `App/`.** The
-generated project lists source files explicitly, so a new one is missing from
-the target until you regenerate, and the build fails with `Cannot find 'X' in
-scope` — which looks like a code error and is not one.
+**Quit Xcode, then re-run `xcodegen generate` once after this pull** (`App/`
+is a synced folder; new Swift files after that do not need a regenerate).
+Pulling while Xcode is open is what produces "Build input files cannot be
+found" for files the old project listed.
 
 ### If the app is letterboxed inside black bars
 

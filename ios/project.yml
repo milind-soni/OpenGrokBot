@@ -13,6 +13,12 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+  # Xcode 16 buildable folder: compile whatever is in App/ on disk.
+  # The old `group` type listed every file in the pbxproj, so a pull that
+  # landed while Xcode was open (or an iCloud Documents eviction) produced
+  # "Build input files cannot be found" for files the project remembered
+  # and the working tree did not. Needs XcodeGen 2.44+.
+  projectFormat: xcode16_0
 
 packages:
   CompanionCore:
@@ -24,6 +30,7 @@ targets:
     platform: iOS
     sources:
       - path: App
+        type: syncedFolder
     dependencies:
       - package: CompanionCore
         product: CompanionCore

@@ -95,7 +95,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated")!;
     expect(usage).toMatchObject({ input: 12, output: 5 }); // input + cache_read
     const done = recorder.events.at(-1)!;
-    expect(done).toMatchObject({ type: "turn.completed", ok: true, cost: 0.01 });
+    // usage on the settle is the turn total from the result message, so
+    // the harness has one figure to bank per turn
+    expect(done).toMatchObject({ type: "turn.completed", ok: true, cost: 0.01, usage: { input: 12, output: 5 } });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 
@@ -217,8 +219,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       text: "hi",
       integrations: {
         composio: {
-          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
-          headers: { "x-api-key": "ak_test" },
+          command: process.execPath,
+          args: ["/tmp/connector-proxy.js"],
+          env: { OMB_CONNECTOR_UPSTREAM_URL: "https://example.test/mcp" },
         },
       },
     });
@@ -226,9 +229,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.mcpConfig.mcpServers.composio).toMatchObject({
-      type: "http",
-      url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
-      headers: { "x-api-key": "ak_test" },
+      command: process.execPath,
+      args: ["/tmp/connector-proxy.js"],
+      env: { OMB_CONNECTOR_UPSTREAM_URL: "https://example.test/mcp" },
     });
     // the user's Composio key must not be readable via `ps`
     expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
@@ -251,8 +254,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       text: "hi",
       integrations: {
         composio: {
-          url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
-          headers: { "x-api-key": "ak_test" },
+          command: process.execPath,
+          args: ["/tmp/connector-proxy.js"],
+          env: { OMB_CONNECTOR_UPSTREAM_URL: "https://example.test/mcp" },
         },
       },
     });

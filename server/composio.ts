@@ -2,6 +2,7 @@
 // Session owns connection state, auth links and the MCP endpoint.
 import { saveConfig, type AppConfig } from "./config.ts";
 import { randomUUID } from "node:crypto";
+import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 const DEFAULT_BACKEND_ORIGIN = "https://backend.composio.dev";
 
@@ -20,8 +21,50 @@ interface SessionResponse {
 }
 
 export interface ComposioMcpIntegration {
-  url: string;
-  headers: Record<string, string>;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+interface IntegrationContext {
+  harnessUrl: string;
+  commsToken: string;
+  botId: string;
+  threadId: string;
+}
+
+function brokerAccess(): { url: string; token: string } | null {
+  const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim().replace(/\/$/, "");
+  const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
+  if (!url || !token) return null;
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
+    throw new Error("The connected-apps service must use HTTPS");
+  }
+  return { url, token };
+}
+
+export function connectionMode(cfg: AppConfig): "managed" | "self-hosted" | "unavailable" {
+  if (brokerAccess()) return "managed";
+  return cfg.composio?.apiKey ? "self-hosted" : "unavailable";
+}
+
+export function configured(cfg: AppConfig): boolean {
+  return connectionMode(cfg) !== "unavailable";
+}
+
+async function brokerRequest(path: string, init?: RequestInit): Promise<Response> {
+  const broker = brokerAccess();
+  if (!broker) throw new Error("The connected-apps service is unavailable");
+  return fetch(`${broker.url}${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${broker.token}`,
+      ...(init?.body ? { "content-type": "application/json" } : {}),
+      ...init?.headers,
+    },
+    signal: init?.signal ?? AbortSignal.timeout(30_000),
+  });
 }
 
 function projectHeaders(apiKey: string, json = false) {
@@ -39,6 +82,15 @@ async function responseError(res: Response, fallback: string) {
   } catch {
     return raw.trim().slice(0, 300) || fallback;
   }
+}
+
+function trustedAuthUrl(value: unknown, slug: string): string {
+  if (typeof value !== "string") throw new Error(`Connected-apps service returned no authorization link for ${slug}`);
+  const url = new URL(value);
+  if (url.protocol !== "https:" || (url.hostname !== "composio.dev" && !url.hostname.endsWith(".composio.dev"))) {
+    throw new Error("Connected-apps service returned an untrusted authorization link");
+  }
+  return url.toString();
 }
 
 async function getProjectSession(apiKey: string, sessionId: string): Promise<SessionResponse | null> {
@@ -75,7 +127,14 @@ export async function prepareProjectSession(
   const res = await fetch(`${apiBase()}/tool_router/session`, {
     method: "POST",
     headers: projectHeaders(trimmed, true),
-    body: JSON.stringify({ user_id: userId }),
+    body: JSON.stringify({
+      user_id: userId,
+      manage_connections: {
+        enable: true,
+        enable_wait_for_connections: true,
+        enable_connection_removal: true,
+      },
+    }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(await responseError(res, `Composio rejected this key (HTTP ${res.status})`));
@@ -102,15 +161,76 @@ async function ensureProjectSession(cfg: AppConfig): Promise<SessionResponse> {
   return created;
 }
 
-export async function mcpIntegration(cfg: AppConfig): Promise<ComposioMcpIntegration | null> {
-  if (!cfg.composio?.apiKey) return null;
-  const session = await ensureProjectSession(cfg);
-  return { url: session.mcp.url, headers: { "x-api-key": cfg.composio.apiKey } };
+export async function mcpIntegration(
+  cfg: AppConfig,
+  context: IntegrationContext,
+): Promise<ComposioMcpIntegration | null> {
+  if (!configured(cfg)) return null;
+  return {
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.connectors],
+    env: {
+      ELECTRON_RUN_AS_NODE: "1",
+      // The provider-facing bridge receives only this boot's loopback token.
+      // Project/broker credentials stay in the harness process, so a coding
+      // agent that prints its environment cannot export a durable secret.
+      OMB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
+      OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
+      OMB_HARNESS_URL: context.harnessUrl,
+      OMB_COMMS_TOKEN: context.commsToken,
+      OMB_BOT_ID: context.botId,
+      OMB_THREAD_ID: context.threadId,
+    },
+  };
+}
+
+export async function relayMcp(
+  cfg: AppConfig,
+  payload: unknown,
+  transportSessionId?: string,
+): Promise<{ status: number; bytes: Uint8Array; contentType: string; transportSessionId?: string }> {
+  const broker = brokerAccess();
+  let url: string;
+  const headers = new Headers({
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+  });
+  if (transportSessionId) headers.set("mcp-session-id", transportSessionId);
+  if (broker) {
+    url = `${broker.url}/v1/mcp`;
+    headers.set("authorization", `Bearer ${broker.token}`);
+  } else {
+    if (!cfg.composio?.apiKey) throw new Error("Connected apps are unavailable");
+    const session = await ensureProjectSession(cfg);
+    url = session.mcp.url;
+    headers.set("x-api-key", cfg.composio.apiKey);
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(10 * 60_000),
+  });
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > 20 * 1024 * 1024) throw new Error("Connected-app response exceeded 20 MB");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > 20 * 1024 * 1024) throw new Error("Connected-app response exceeded 20 MB");
+  return {
+    status: response.status,
+    bytes,
+    contentType: response.headers.get("content-type") ?? "application/json",
+    transportSessionId: response.headers.get("mcp-session-id") ?? undefined,
+  };
 }
 
 /** Connection status per service slug: { slack: { connected, status } }. */
 export async function connectionStatus(cfg: AppConfig, slugs: string[]) {
-  if (!cfg.composio?.apiKey) throw new Error("No Composio project key configured");
+  if (brokerAccess() || !cfg.composio?.apiKey) {
+    const response = await brokerRequest(`/v1/connectors?${new URLSearchParams({ services: slugs.join(",") })}`);
+    if (!response.ok) throw new Error(await responseError(response, `Connected apps: HTTP ${response.status}`));
+    const body = (await response.json()) as { services?: Record<string, { connected: boolean; pending?: boolean; status?: string }> };
+    return body.services ?? {};
+  }
   const session = await ensureProjectSession(cfg);
   const params = new URLSearchParams({ limit: "50" });
   if (slugs.length) params.set("toolkits", slugs.join(","));
@@ -175,7 +295,11 @@ export async function connectionStatus(cfg: AppConfig, slugs: string[]) {
 
 /** Disconnect a service: remove every connected account for the slug. */
 export async function removeService(cfg: AppConfig, slug: string) {
-  if (!cfg.composio?.apiKey) throw new Error("No Composio project key configured");
+  if (brokerAccess() || !cfg.composio?.apiKey) {
+    const response = await brokerRequest(`/v1/connectors/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await responseError(response, `Connected apps: HTTP ${response.status}`));
+    return response.json() as Promise<{ removed: number }>;
+  }
   const session = await ensureProjectSession(cfg);
   const params = new URLSearchParams({ limit: "50", toolkits: slug });
   const list = await fetch(
@@ -196,7 +320,12 @@ export async function removeService(cfg: AppConfig, slug: string) {
 
 /** Mint a browser auth link for one service. Returns { url } or throws. */
 export async function authorizeService(cfg: AppConfig, slug: string) {
-  if (!cfg.composio?.apiKey) throw new Error("No Composio project key configured");
+  if (brokerAccess() || !cfg.composio?.apiKey) {
+    const response = await brokerRequest(`/v1/connectors/${encodeURIComponent(slug)}/authorize`, { method: "POST" });
+    if (!response.ok) throw new Error(await responseError(response, `Connected apps: HTTP ${response.status}`));
+    const body = (await response.json()) as { url?: string };
+    return { url: trustedAuthUrl(body.url, slug) };
+  }
   const session = await ensureProjectSession(cfg);
   const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
     method: "POST",
@@ -206,8 +335,7 @@ export async function authorizeService(cfg: AppConfig, slug: string) {
   });
   if (!res.ok) throw new Error(await responseError(res, `Composio authorization: HTTP ${res.status}`));
   const body = (await res.json()) as { redirect_url?: string };
-  if (!body.redirect_url) throw new Error(`Composio returned no auth link for ${slug}`);
-  return { url: body.redirect_url };
+  return { url: trustedAuthUrl(body.redirect_url, slug) };
 }
 
 // ── marketplace catalog ────────────────────────────────────────────────
@@ -260,13 +388,15 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
   if (toolkitCache && Date.now() - toolkitCache.at < 10 * 60_000) {
     return { cards: toolkitCache.cards, source: "api" };
   }
-  const backendKey = cfg.composio?.apiKey;
-  if (backendKey) {
+  const backendKey = brokerAccess() ? undefined : cfg.composio?.apiKey;
+  if (backendKey || brokerAccess()) {
     try {
-      const res = await fetch(`${toolkitBase()}/toolkits?limit=500&sort_by=usage`, {
-        headers: { "x-api-key": backendKey },
-        signal: AbortSignal.timeout(15_000),
-      });
+      const res = backendKey
+        ? await fetch(`${toolkitBase()}/toolkits?limit=500&sort_by=usage`, {
+            headers: { "x-api-key": backendKey },
+            signal: AbortSignal.timeout(15_000),
+          })
+        : await brokerRequest("/v1/catalog", { signal: AbortSignal.timeout(15_000) });
       if (res.ok) {
         const json: any = await res.json();
         const items = json.items ?? json.data ?? [];
@@ -287,6 +417,20 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
     }
   }
   return { cards: CURATED, source: "curated" };
+}
+
+export async function toolkitCard(cfg: AppConfig, slug: string): Promise<ToolkitCard> {
+  const normalized = slug.toLowerCase();
+  const { cards } = await listToolkits(cfg);
+  return cards.find((card) => card.slug.toLowerCase() === normalized)
+    ?? CURATED.find((card) => card.slug === normalized)
+    ?? {
+      slug: normalized,
+      label: normalized.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      blurb: "Connect this app so your bot can continue",
+      logo: null,
+      domain: null,
+    };
 }
 
 export const CURATED_SLUGS = CURATED.map((c) => c.slug);

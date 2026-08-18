@@ -60,6 +60,33 @@ beforeAll(async () => {
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
+  writeFileSync(
+    join(home, ".openmausbot", "groups.json"),
+    JSON.stringify([
+      {
+        id: "test-dm",
+        threadId: "test-dm-thread",
+        name: "Private channel",
+        memberIds: ["test-bot-a", "test-bot-b"],
+        defaultResponder: { kind: "mentions" },
+        bulletin: "",
+        unread: false,
+        createdAt: 1,
+        dm: true,
+      },
+      {
+        id: "test-pinned-room",
+        threadId: "test-pinned-room-thread",
+        name: "Pinned room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 2,
+        pinnedCwd: null,
+      },
+    ]),
+  );
 
   boxStub = createServer(async (req, res) => {
     if (req.url?.startsWith("/api/v3.1/tool_router/session")) {
@@ -192,6 +219,24 @@ describe("harness HTTP API", () => {
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("keeps direct-message channels folderless at the API boundary", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-dm", { cwd: home });
+    expect(attempted.status).toBe(400);
+    expect(attempted.body.error).toMatch(/direct-message.*working folder/i);
+    const state = await api("GET", "/api/bots");
+    expect(state.body.groups.find((group: { id: string }) => group.id === "test-dm")).not.toHaveProperty("cwd");
+    expect((await api("DELETE", "/api/groups/test-dm")).status).toBe(200);
+  });
+
+  it("rejects working-folder changes after a room has pinned its first turn", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-pinned-room", { cwd: home });
+    expect(attempted.status).toBe(409);
+    expect(attempted.body.error).toMatch(/fixed after its first turn/i);
+    const state = await api("GET", "/api/bots");
+    expect(state.body.groups.find((group: { id: string }) => group.id === "test-pinned-room")).not.toHaveProperty("cwd");
+    expect((await api("DELETE", "/api/groups/test-pinned-room")).status).toBe(200);
+  });
+
   it("describes the configured fleet, shadows included", async () => {
     const { status, body } = await api("GET", "/api/instances");
     expect(status).toBe(200);
@@ -211,8 +256,15 @@ describe("harness HTTP API", () => {
     const hits = await api("GET", "/api/search?q=nice%20to%20meet");
     expect(hits.status).toBe(200);
     const hit = hits.body.hits.find((h: { botId?: string }) => h.botId === bot.id);
-    expect(hit).toMatchObject({ botId: bot.id, threadId: bot.threadId, name: bot.name });
+    expect(hit).toMatchObject({
+      botId: bot.id,
+      threadId: bot.threadId,
+      name: bot.name,
+      kind: "text",
+      onActivePath: true,
+    });
     expect(hit.snippet.toLowerCase()).toContain("nice to meet");
+    expect(hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength).toLowerCase()).toBe("nice to meet");
     expect((await api("GET", "/api/search?q=")).body.hits).toEqual([]);
 
     const markdown = await fetch(`${BASE}/api/threads/${bot.threadId}/export`);
@@ -563,7 +615,7 @@ describe("harness HTTP API", () => {
 
     const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
     expect(saved.status).toBe(200);
-    expect(saved.body.composio).toEqual({ configured: true });
+    expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
@@ -573,7 +625,7 @@ describe("harness HTTP API", () => {
     // A later ordinary setting save reloads config; the in-process secure-env
     // override must keep Composio configured until the next app launch.
     expect((await api("PUT", "/api/config", { profile: { name: "Grace" } })).status).toBe(200);
-    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true });
+    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true, mode: "self-hosted" });
   });
 
   it.skipIf(process.platform === "win32")("stores the credentials file with owner-only permissions", () => {
@@ -702,6 +754,19 @@ describe("harness HTTP API", () => {
     } finally {
       await api("DELETE", `/api/bots/${botId}`);
     }
+  });
+
+  it("validates the event inspector limit at the HTTP boundary", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    for (const value of ["nope", "0", "-1", "1.5", "Infinity"]) {
+      const response = await api("GET", `/api/threads/${bot.threadId}/events?limit=${value}`);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain("positive whole number");
+    }
+    const ok = await api("GET", `/api/threads/${bot.threadId}/events?limit=1`);
+    expect(ok.status).toBe(200);
+    expect(Array.isArray(ok.body.entries)).toBe(true);
+    expect(ok.body.total).toEqual({ runtime: expect.any(Number), native: expect.any(Number) });
   });
 
   it("404s unknown routes with the route in the error", async () => {
@@ -886,6 +951,19 @@ describe("message pages", () => {
     const top = await api("GET", `/api/threads/${full.threadId}/messages?limit=200`);
     expect(top.body.hasMore).toBe(false);
     expect(top.body.messages).toHaveLength(6);
+  });
+
+  it("returns a bounded transcript window around a search result", async () => {
+    const full = await seedRoom(9);
+    const target = full.messages[4];
+    const result = await api("GET", `/api/threads/${full.threadId}/messages?around=${target.id}&limit=5`);
+    expect(result.status).toBe(200);
+    expect(result.body.messages.map((message: { id: string }) => message.id)).toEqual(
+      full.messages.slice(2, 7).map((message: { id: string }) => message.id),
+    );
+    expect(result.body.hasMore).toBe(true);
+    expect((await api("GET", `/api/threads/${full.threadId}/messages?around=nope`)).status).toBe(404);
+    expect((await api("GET", `/api/threads/${full.threadId}/messages?around=${target.id}&before=${target.id}`)).status).toBe(400);
   });
 
   it("refuses a cursor or size it cannot page from", async () => {

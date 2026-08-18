@@ -36,11 +36,21 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/interrupt"],
     ["POST", "/api/bots/bot_123/read"],
     ["POST", "/api/bots/bot_123/always-allow"],
+    ["POST", "/api/bots/bot_123/messages/msg_2/edit"],
+    ["POST", "/api/bots/bot_123/active-branch"],
+    ["POST", "/api/bots/bot_123/tasks"],
+    ["POST", "/api/bots/bot_123/tasks/th_1"],
+    ["PATCH", "/api/bots/bot_123/tasks/th_1"],
+    ["DELETE", "/api/bots/bot_123/tasks/th_1"],
+    ["POST", "/api/bots/bot_123/computer/join"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/read"],
     ["GET", "/api/threads/th_1/messages"],
     ["GET", "/api/threads/th_1/messages/msg_2/image"],
+    ["POST", "/api/threads/th_1/messages/msg_2/reactions"],
+    ["GET", "/api/threads/th_1/export"],
     ["POST", "/api/threads/th_1/respond"],
+    ["GET", "/api/search"],
   ];
 
   for (const [method, path] of calls) {
@@ -77,6 +87,15 @@ describe("what it may not", () => {
   it("does not serve the desktop UI", () => {
     expect(ask("GET", "/")?.status).toBe(404);
     expect(ask("GET", "/index.html")?.status).toBe(404);
+  });
+
+  it("opens only a fresh cloud viewer, not the cloud computer control API", () => {
+    expect(allowed("POST", "/api/bots/bot_123/computer/join")).toBe(true);
+    expect(allowed("GET", "/api/bots/bot_123/computer")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/computer/provision")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/computer/sleep")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/computer/exec")).toBe(false);
+    expect(allowed("POST", "/api/bots/bot_123/computer/screenshot")).toBe(false);
   });
 
   // The method is part of the allowance, not decoration: reading the fleet

@@ -31,9 +31,23 @@ final class Discovery: ObservableObject {
     @Published private(set) var failure: String?
 
     private var browser: NWBrowser?
+    private var retryTask: Task<Void, Never>?
+    private var retryCount = 0
+    private var generation = 0
+    private var shouldBrowse = false
 
     func start() {
-        guard browser == nil else { return }
+        guard !shouldBrowse else { return }
+        shouldBrowse = true
+        retryCount = 0
+        startBrowser()
+    }
+
+    private func startBrowser() {
+        guard shouldBrowse, browser == nil else { return }
+        retryTask = nil
+        generation += 1
+        let currentGeneration = generation
         let parameters = NWParameters()
         parameters.includePeerToPeer = false
         let browser = NWBrowser(
@@ -43,16 +57,19 @@ final class Discovery: ObservableObject {
 
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
+                guard let self, self.generation == currentGeneration else { return }
                 switch state {
                 case .ready:
-                    self?.browsing = true
-                    self?.failure = nil
+                    self.retryCount = 0
+                    self.browsing = true
+                    self.failure = nil
+                case let .waiting(error):
+                    self.browsing = false
+                    self.failure = Self.failureMessage(for: error)
                 case let .failed(error):
-                    self?.browsing = false
-                    self?.failure = error.localizedDescription
-                    self?.stop()
+                    self.handleFailure(error)
                 case .cancelled:
-                    self?.browsing = false
+                    self.browsing = false
                 default:
                     break
                 }
@@ -73,9 +90,51 @@ final class Discovery: ObservableObject {
     }
 
     func stop() {
+        shouldBrowse = false
+        retryTask?.cancel()
+        retryTask = nil
+        generation += 1
         browser?.cancel()
         browser = nil
         browsing = false
+    }
+
+    /// A defunct DNS-SD connection means the system browser disappeared, not
+    /// that the companion or its Tailscale route is broken. Recreating the
+    /// browser is the only useful recovery; keep it bounded so a persistent
+    /// local-network problem does not turn into a retry loop.
+    private func handleFailure(_ error: NWError) {
+        browser?.cancel()
+        browser = nil
+        browsing = false
+        found = []
+
+        guard Self.isDefunct(error), retryCount < 3, shouldBrowse else {
+            failure = Self.failureMessage(for: error)
+            return
+        }
+
+        retryCount += 1
+        failure = "Local discovery was interrupted. Retrying…"
+        let delay = UInt64(retryCount) * 350_000_000
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.startBrowser() }
+        }
+    }
+
+    private static func isDefunct(_ error: NWError) -> Bool {
+        guard case let .dns(code) = error else { return false }
+        return Int(code) == kDNSServiceErr_DefunctConnection
+    }
+
+    private static func failureMessage(for error: NWError) -> String {
+        if case let .dns(code) = error,
+           Int(code) == kDNSServiceErr_PolicyDenied {
+            return "Local Network access is off. Enable it in iPhone Settings, or enter a Tailscale address below."
+        }
+        return "Local discovery isn't available right now. Enter the address shown by Companion below."
     }
 
     /// Resolve a browse result to something `Connection` can hold.

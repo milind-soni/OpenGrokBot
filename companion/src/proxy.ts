@@ -14,7 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
-import { denyReason } from "./routes.ts";
+import { denyReason, isCloudDesktopJoin } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -22,7 +22,7 @@ export interface ProxyOptions {
   /** Where the harness is listening on loopback. */
   harnessPort: number;
   /** Does this bearer token belong to a paired device? */
-  authenticate: (token: string | undefined) => boolean;
+  authenticate: (token: string | undefined) => { cloudDesktopAccess: boolean } | null;
   /** Redeem a pairing code. Handled here and never forwarded: the harness
    * has no such route and no idea devices exist — pairing is the sidecar's
    * own concern, and the one thing a device does before it has a token. */
@@ -131,6 +131,8 @@ export function createProxyHandler(options: ProxyOptions) {
       return sendJson(res, 403, { error: "forbidden: cross-origin request" });
     }
 
+    const token = bearerToken(req.headers.authorization);
+    const device = options.authenticate(token);
     const denial = denyReason({
       path,
       method,
@@ -138,16 +140,27 @@ export function createProxyHandler(options: ProxyOptions) {
       // reimplemented: this file used to have a second one, and two parsers
       // that disagree about what a credential looks like means the header a
       // phone sends authenticates on one code path and not the other.
-      authenticated: options.authenticate(bearerToken(req.headers.authorization)),
+      authenticated: Boolean(device),
     });
     if (denial) return sendJson(res, denial.status, { error: denial.error });
+
+    // Pairing a phone grants the ordinary companion surface, not a browser
+    // session with every credential that may exist inside the cloud desktop.
+    // The computer owner enables this capability per device, off by default.
+    if (isCloudDesktopJoin(method, path) && !device?.cloudDesktopAccess) {
+      return sendJson(res, 403, {
+        error: "cloud desktop access is off for this phone — enable it in OpenMausBot → Settings → Companion",
+      });
+    }
 
     // Pairing terminates here. Forwarding it would hand the harness a route
     // it does not have, and the 404 would read to a phone as "wrong address".
     if (method === "POST" && path === "/api/pair") {
       readJson(req).then(
         (body) => {
-          const result = options.redeem(String(body.code ?? ""), body.deviceName);
+          // New clients redeem the high-entropy credential carried by the QR.
+          // `code` remains accepted for manual entry and older mobile builds.
+          const result = options.redeem(String(body.credential ?? body.code ?? ""), body.deviceName);
           if ("error" in result) return sendJson(res, 401, { error: result.error });
           return sendJson(res, 201, { ...result, serverName: options.serverName() });
         },

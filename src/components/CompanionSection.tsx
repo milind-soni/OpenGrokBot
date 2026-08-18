@@ -14,6 +14,8 @@
 // sentence of explanation rather than a bare toggle.
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Smartphone, Trash2 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { companionPairingLink } from "../lib/companion-pairing";
 import { Card } from "./SettingsPrimitives";
 
 interface Device {
@@ -21,13 +23,14 @@ interface Device {
   name: string;
   createdAt: number;
   lastSeenAt: number;
+  cloudDesktopAccess: boolean;
 }
 
 interface CompanionState {
   enabled: boolean;
   port: number;
   devices: Device[];
-  pairing: { code: string; expiresAt: number } | null;
+  pairing: { code: string; token: string; expiresAt: number } | null;
   /** Every address a phone could dial, and which of them is which. */
   addresses?: string[];
   /** The tailnet address, when this machine is on one. */
@@ -51,10 +54,12 @@ type Bridge = {
   start: () => Promise<CompanionState>;
   stop: () => Promise<CompanionState>;
   pairing: (open: boolean) => Promise<CompanionState>;
+  cloudDesktop: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
   revoke: (deviceId: string) => Promise<CompanionState>;
 };
 
 const bridge = (): Bridge | null =>
+  // SAFETY: the preload owns `ogb.companion`; every call is still guarded for browser builds where it is absent.
   (globalThis as { ogb?: { companion?: Bridge } }).ogb?.companion ?? null;
 
 const relative = (at: number) => {
@@ -143,13 +148,29 @@ export function CompanionSection() {
   }
 
   const secondsLeft = state.pairing ? Math.max(0, Math.round((state.pairing.expiresAt - now) / 1000)) : 0;
-  // Prefer the tailnet when there is one: it survives changing wifi, works
+  // Prefer a MagicDNS name when there is one: it survives changing wifi, works
   // away from home, and gets through a guest network that isolates its
-  // clients — the case where a LAN address looks perfectly correct and
-  // reaches nothing. The name beats the address because a phone can only
-  // use the name.
-  const tailnet = state.tailnetName ?? state.tailscale;
-  const address = tailnet ?? state.addresses?.[0];
+  // clients. A bare 100.64/10 address is not dialable by the iOS app over
+  // HTTP, so fall back to LAN instead of putting a broken address in the QR.
+  const tailnet = state.tailnetName;
+  const address = tailnet ?? state.lan ?? state.addresses?.find((candidate) => candidate !== state.tailscale);
+  const pairingLink =
+    state.pairing && address
+      ? companionPairingLink({
+          address,
+          port: state.port,
+          code: state.pairing.code,
+          token: state.pairing.token,
+          name: state.discovery?.name,
+        })
+      : null;
+
+  const beginSetup = () =>
+    void act(async (companion) => {
+      const started = state.enabled ? state : await companion.start();
+      if (!started.enabled || started.error) return started;
+      return companion.pairing(true);
+    });
 
   return (
     <div className="flex flex-col gap-4">
@@ -216,50 +237,61 @@ export function CompanionSection() {
         )}
       </Card>
 
-      {state.enabled && (
-        <Card
-          title="Pair a phone"
-          subtitle={
-            state.pairing
-              ? state.discovery?.advertising
-                ? "Open OpenMausBot on your phone, pick this computer from the list, and enter the code."
-                : "Open OpenMausBot on your phone, enter the address below, then the code."
-              : "Start pairing, then enter the code on your phone. The code lasts two minutes."
-          }
-        >
-          {state.pairing ? (
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="font-mono text-[28px] tracking-[0.3em] text-ink">{state.pairing.code}</div>
-                <div className="mt-1 text-[13px] text-ink-secondary">
-                  Expires in {secondsLeft}s{address ? ` · ${address}:${state.port}` : ""}
-                </div>
+      <Card
+        title="Connect a phone"
+        subtitle={
+          state.pairing
+            ? pairingLink
+              ? "Scan with your phone's Camera, then confirm in OpenMausMobile. You can also use the code manually."
+              : "Open OpenMausMobile, choose this computer, and enter the code."
+            : state.enabled
+              ? "Open a short, single-use pairing window for a trusted phone."
+              : "This turns on Companion and opens a short, single-use pairing window in one step."
+        }
+      >
+        {state.pairing ? (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            {pairingLink && (
+              <div className="w-fit shrink-0 rounded-xl bg-white p-3" aria-label="Phone pairing QR code">
+                <QRCodeSVG value={pairingLink} size={144} level="M" bgColor="#ffffff" fgColor="#111111" />
               </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-medium uppercase tracking-wide text-ink-secondary">Manual code</div>
+              <div className="mt-1 font-mono text-[28px] tracking-[0.3em] text-ink">{state.pairing.code}</div>
+              <div className="mt-1 break-all text-[13px] text-ink-secondary">
+                Expires in {secondsLeft}s{address ? ` · ${address}:${state.port}` : ""}
+              </div>
+              {state.discovery?.advertising && (
+                <div className="mt-2 text-[13px] text-ink-secondary">
+                  Or open the mobile app and choose “{state.discovery.name}” under On this network.
+                </div>
+              )}
               <button
                 disabled={busy}
                 onClick={() => void act((c) => c.pairing(false))}
-                className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-raised disabled:opacity-40"
+                className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-raised disabled:opacity-40"
               >
                 Cancel
               </button>
             </div>
-          ) : (
-            <button
-              disabled={busy}
-              onClick={() => void act((c) => c.pairing(true))}
-              className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-raised disabled:opacity-40"
-            >
-              Start pairing
-            </button>
-          )}
-        </Card>
-      )}
+          </div>
+        ) : (
+          <button
+            disabled={busy}
+            onClick={beginSetup}
+            className="rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? "Preparing…" : state.devices.length ? "Pair another phone" : "Set up a phone"}
+          </button>
+        )}
+      </Card>
 
       <Card
         title="Paired devices"
         subtitle={
           state.devices.length
-            ? "Removing a device signs it out immediately."
+            ? "Cloud desktop is full interactive access. Enable it only for a phone you trust; removing a device signs it out immediately."
             : "No phones are paired yet."
         }
       >
@@ -271,6 +303,19 @@ export function CompanionSection() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] text-ink">{device.name}</div>
                   <div className="text-[12px] text-ink-secondary">Last seen {relative(device.lastSeenAt)}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] text-ink-secondary">Cloud desktop</span>
+                  <button
+                    role="switch"
+                    aria-checked={device.cloudDesktopAccess}
+                    aria-label={`Cloud desktop access for ${device.name}`}
+                    disabled={busy}
+                    onClick={() => void act((c) => c.cloudDesktop(device.id, !device.cloudDesktopAccess))}
+                    className={cnSwitch(device.cloudDesktopAccess)}
+                  >
+                    <span className={cnKnob(device.cloudDesktopAccess)} />
+                  </button>
                 </div>
                 <button
                   disabled={busy}

@@ -7,6 +7,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Bug,
+  Clock,
   Copy,
   Crown,
   Folder,
@@ -18,6 +20,7 @@ import {
   Webhook,
   X,
 } from "lucide-react";
+import { costCaption, formatTokens, formatUsd, usageChip } from "@/lib/usage";
 import {
   useStore,
   useStreaming,
@@ -36,6 +39,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
+import { ConnectorCard } from "./ConnectorCard";
 import { ModelPicker } from "./ModelPicker";
 import { RenameTitle } from "./RenameTitle";
 import { TaskPicker } from "./TaskPicker";
@@ -43,9 +47,16 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
+import { useFocusMessage } from "@/lib/focus-message";
 import { webhookMessageView } from "@/lib/webhook-message";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
-import { expandWindowStart, resolveTranscriptWindow, tailWindowStart } from "@/lib/transcript-window";
+import {
+  TRANSCRIPT_WINDOW_SIZE,
+  expandWindowStart,
+  focusWindowRange,
+  resolveTranscriptWindow,
+  tailWindowStart,
+} from "@/lib/transcript-window";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -389,6 +400,13 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
+      {/* busy-gated so a flag stranded by a server restart shows nothing */}
+      {user && message.queued && bot.busy && (
+        <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
+          <Clock size={11} aria-hidden="true" />
+          <span>Queued — sends when this turn finishes</span>
+        </div>
+      )}
       <ReactionChips threadId={bot.threadId} message={message} align={user ? "right" : "left"} />
       {versions.length > 1 && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
@@ -556,6 +574,8 @@ const MessagesList = memo(function MessagesList({
         const newDay = !prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString();
         const row = (() => {
           switch (m.kind) {
+            case "connector":
+              return m.connector ? <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
             case "options":
               // a live permission ask gets the approval box; questions and
               // the onboarding quiz keep the list card
@@ -594,7 +614,7 @@ const MessagesList = memo(function MessagesList({
         })();
         if (!row) return null;
         return (
-          <div key={m.id} className="contents">
+          <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && <DaySeparator at={m.at} />}
             {row}
           </div>
@@ -623,18 +643,28 @@ export function ChatView({ bot }: { bot: Bot }) {
   // never flashes into the new one. Everything derived below (lastBotTextId,
   // lastUserMessage, working dots) stays computed from the FULL list.
   const transcriptKey = `${bot.id}:${bot.threadId}`;
-  const [transcriptWindow, setTranscriptWindow] = useState(() => ({
+  const [transcriptWindow, setTranscriptWindow] = useState<{
+    key: string;
+    start: number;
+    end: number | null;
+  }>(() => ({
     key: transcriptKey,
     start: tailWindowStart(messages.length),
+    end: null,
   }));
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length) });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
   }
   const {
     visible: windowedMessages,
     hiddenCount,
+    laterCount,
     startIndex,
-  } = useMemo(() => resolveTranscriptWindow(messages, transcriptWindow.start), [messages, transcriptWindow.start]);
+    endIndex,
+  } = useMemo(
+    () => resolveTranscriptWindow(messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
+    [messages, transcriptWindow.start, transcriptWindow.end],
+  );
 
   const lastBotTextId = useMemo(
     () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
@@ -682,6 +712,23 @@ export function ChatView({ bot }: { bot: Bot }) {
   }, []);
 
   useEffect(() => setBottomFollow(true), [bot.id, setBottomFollow]);
+
+  // A search result may be hundreds of rows before the mounted tail. Open a
+  // bounded window around it first; useFocusMessage then scrolls and flashes
+  // the row after React commits that window.
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    const focus = state.focusMessage;
+    if (!focus || focus.consumed || focus.threadId !== bot.threadId || appliedFocus.current === focus.nonce) return;
+    const targetIndex = messages.findIndex((message) => message.id === focus.messageId);
+    if (targetIndex < 0) return;
+    appliedFocus.current = focus.nonce;
+    const range = focusWindowRange(messages.length, targetIndex);
+    setBottomFollow(false);
+    setTranscriptWindow({ key: transcriptKey, start: range.start, end: range.end });
+  }, [bot.threadId, messages, setBottomFollow, state.focusMessage, transcriptKey]);
+  useFocusMessage(bot.threadId, messages.length > 0);
+
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo
   useEffect(() => {
@@ -701,7 +748,7 @@ export function ChatView({ bot }: { bot: Bot }) {
     // event pin the viewport back to the bottom
     setBottomFollow(false);
     const start = expandWindowStart(startIndex);
-    setTranscriptWindow((w) => ({ key: w.key, start }));
+    setTranscriptWindow((w) => ({ ...w, start }));
   };
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -712,6 +759,12 @@ export function ChatView({ bot }: { bot: Bot }) {
     // downward user scroll
     previousScrollTop.current = el.scrollTop;
   }, [transcriptWindow.start]);
+
+  const showLater = () => {
+    setBottomFollow(false);
+    const nextEnd = Math.min(messages.length, endIndex + TRANSCRIPT_WINDOW_SIZE);
+    setTranscriptWindow((w) => ({ ...w, end: nextEnd >= messages.length ? null : nextEnd }));
+  };
 
   // keyboard is a scroll gesture too (upstream lesson): PageUp/Home break
   // follow like an upward wheel; the at-end onScroll check re-arms it
@@ -731,7 +784,10 @@ export function ChatView({ bot }: { bot: Bot }) {
   };
   const jumpToLatest = () => {
     setBottomFollow(true);
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    });
   };
 
   // on Windows the frameless window's min/max/close overlay sits at the
@@ -793,6 +849,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
+          <UsageChip bot={bot} />
           <WorkingFolderChip bot={bot} />
           <ModelPicker bot={bot} />
           <CallButton bot={bot} />
@@ -805,6 +862,18 @@ export function ChatView({ bot }: { bot: Bot }) {
             title="Bot's computer"
           >
             <Monitor size={18} />
+          </button>
+          <button
+            onClick={() => dispatch({ type: "toggleInspector" })}
+            aria-label="Inspector"
+            aria-pressed={state.inspectorOpen}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-raised",
+              state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+            )}
+            title="Inspector — runtime events and raw protocol for this thread"
+          >
+            <Bug size={18} />
           </button>
         </div>
       </div>
@@ -874,6 +943,16 @@ export function ChatView({ bot }: { bot: Bot }) {
             onSubmitEdit={submitEdit}
             onRegenerate={regenerate}
           />
+          {laterCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                onClick={showLater}
+                className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+              >
+                Show later messages ({laterCount} more)
+              </button>
+            </div>
+          )}
           {provisioning && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">
@@ -925,6 +1004,32 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
+  );
+}
+
+/** What the open task has spent — quiet until the first turn settles.
+ * Click opens the bot's settings, where the Usage card has the breakdown. */
+function UsageChip({ bot }: { bot: Bot }) {
+  const { state, dispatch } = useStore();
+  const usage = bot.tasks?.find((t) => t.threadId === bot.threadId)?.usage;
+  const text = usage ? usageChip(usage) : "";
+  if (!usage || !text) return null;
+  const billing = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)?.snapshot.billing;
+  const detail = [
+    `${usage.turns} turn${usage.turns === 1 ? "" : "s"}`,
+    `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`,
+    usage.costUsd !== null ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <button
+      onClick={() => dispatch({ type: "toggleSettings", open: true })}
+      className="rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12px] tabular-nums text-ink-secondary hover:bg-raised hover:text-ink"
+      title={detail}
+    >
+      {text}
+    </button>
   );
 }
 

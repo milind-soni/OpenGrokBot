@@ -101,6 +101,11 @@ describe.sequential("Composio Sessions", () => {
     });
     expect(calls.filter((call) => call.method === "POST" && call.path.endsWith("/session")).at(-1)?.body).toEqual({
       user_id: "openmausbot_existing",
+      manage_connections: {
+        enable: true,
+        enable_wait_for_connections: true,
+        enable_connection_removal: true,
+      },
     });
 
     const reused = await prepareProjectSession("ak_test", created);
@@ -115,9 +120,23 @@ describe.sequential("Composio Sessions", () => {
     const cfg: AppConfig = {
       composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
     };
-    await expect(mcpIntegration(cfg)).resolves.toEqual({
-      url: "https://app.composio.dev/tool_router/v3/trs_test/mcp",
-      headers: { "x-api-key": "ak_test" },
+    const integration = await mcpIntegration(cfg, {
+      harnessUrl: "http://127.0.0.1:8799",
+      commsToken: "secret",
+      botId: "bot-1",
+      threadId: "thread-1",
+    });
+    expect(integration).toMatchObject({
+      command: process.execPath,
+      args: [expect.stringContaining("connector-proxy")],
+      env: {
+        OMB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp",
+        OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: "Bearer secret" }),
+        OMB_HARNESS_URL: "http://127.0.0.1:8799",
+        OMB_COMMS_TOKEN: "secret",
+        OMB_BOT_ID: "bot-1",
+        OMB_THREAD_ID: "thread-1",
+      },
     });
   });
 

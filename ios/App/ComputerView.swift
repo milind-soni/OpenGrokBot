@@ -21,6 +21,10 @@ struct ComputerView: View {
     let bot: Bot
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmingDesktop = false
+    @State private var openingDesktop = false
+    @State private var desktopURL: URL?
+    @State private var desktopError: String?
 
     private var frame: ScreenFrame? { session.state.screens[bot.id] }
 
@@ -51,9 +55,59 @@ struct ComputerView: View {
                 // Busy is the difference between "the picture is a moment old"
                 // and "the picture is however it was left" — worth saying,
                 // because a still frame looks identical either way.
-                Text(current.busy == true ? "Live" : "Idle")
+                Text(current.busy == true ? "Preview" : "Idle")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(current.busy == true ? Color.green : Color.secondary)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if current.computer == "cloud" {
+                VStack(spacing: 8) {
+                    if let desktopError {
+                        Text(desktopError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+                    Button {
+                        confirmingDesktop = true
+                    } label: {
+                        if openingDesktop {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label("Open live cloud desktop", systemImage: "display")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(openingDesktop)
+                    Text("Interactive VNC session. Access must be enabled for this phone in the Mac's Companion settings.")
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(.ultraThinMaterial)
+            }
+        }
+        .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
+            Button("Cancel", role: .cancel) {}
+            Button("Open desktop") { Task { await openDesktop() } }
+        } message: {
+            Text("This gives this phone full control of the cloud computer, including anything signed in inside it.")
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { desktopURL != nil },
+                set: { if !$0 { desktopURL = nil } }
+            )
+        ) {
+            if let desktopURL {
+                CloudDesktopBrowser(url: desktopURL)
+                    .ignoresSafeArea()
             }
         }
         .onAppear {
@@ -79,6 +133,18 @@ struct ComputerView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
             }
+        }
+    }
+
+    @MainActor
+    private func openDesktop() async {
+        openingDesktop = true
+        desktopError = nil
+        defer { openingDesktop = false }
+        do {
+            desktopURL = try await session.cloudDesktop(for: current)
+        } catch {
+            desktopError = error.localizedDescription
         }
     }
 }

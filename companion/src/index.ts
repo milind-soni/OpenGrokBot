@@ -118,7 +118,7 @@ const companion = createServer(
     harnessPort: HARNESS_PORT,
     // `authenticate` also stamps lastSeenAt, which is what makes the control
     // page able to say when a phone was last heard from.
-    authenticate: (token) => Boolean(devices.authenticate(token)),
+    authenticate: (token) => devices.authenticate(token),
     redeem: (code, deviceName) => devices.redeem(code, deviceName),
     serverName: machineName,
   }),

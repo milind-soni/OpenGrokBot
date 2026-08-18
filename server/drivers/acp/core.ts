@@ -13,10 +13,7 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
 
@@ -37,13 +34,12 @@ import { newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath } from "../../env-path.ts";
 
-// the computer proxy entry: .ts in dev (node type stripping), .js in the
-// compiled dist-server the packaged app ships
-const COMPUTER_PROXY_PATH = (() => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "computer-proxy.ts");
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-})();
+// Resolved from the server root, never relative to this file: bundling inlines
+// this module two directories up, so the `".."` pair here would climb past the
+// packaged server dir entirely. See server/proxy-paths.ts.
+const COMPUTER_PROXY_PATH = SPAWNED_PROXIES.computer;
 import { appendNative } from "../native.ts";
+import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 
 export interface AcpConfig {
   cli: string;
@@ -222,6 +218,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const agents = turn.integrations?.agents;
         if (agents) {
           servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
+        }
+        const composio = turn.integrations?.composio;
+        if (composio) {
+          servers.push({
+            name: "composio",
+            command: composio.command,
+            args: composio.args,
+            env: acpEnv(composio.env),
+          });
         }
         // The bot's computer, mounted exactly like the Claude driver does.
         // Cloud boxes use the REST adapter; host and sandbox Cua connections
@@ -668,6 +673,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             sessionModelSwitch: "unsupported",
             agentsMcp: true,
             computerMcp: true,
+            composioMcp: true,
             effortLevels: support.effortLevels,
           },
           sendTurn,

@@ -2,16 +2,16 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { dirname, extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join } from "node:path";
 
 import { z } from "zod";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import { groupTurnCwd } from "./room-cwd.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
@@ -42,6 +42,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
+import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -55,6 +56,7 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
+import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import {
   ensureWorkspace,
@@ -73,9 +75,11 @@ import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
+import { readThreadEvents } from "./thread-events.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { WebhookManager } from "./webhooks.ts";
+import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
@@ -116,11 +120,10 @@ function authorizedComms(header: string | string[] | undefined): boolean {
 // a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
 // A→B is allowed but B→C (and A→B→A loops) never start.
 const MAX_COMMS_DEPTH = 1;
-// proxy entry: .ts in dev (node type-strips), .js in the packaged dist-server
-const agentsProxyPath = (() => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "agents-proxy.ts");
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-})();
+// Resolved from the server root — see server/proxy-paths.ts. This descending
+// path happened to survive bundling, but it goes through the same anchor so
+// there is exactly one way proxies are located.
+const agentsProxyPath = SPAWNED_PROXIES.agents;
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
 
@@ -137,6 +140,15 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_TURN_DEPTH: String(depth),
     },
   };
+}
+
+function connectedAppsIntegration(botId: string, threadId: string) {
+  return composio.mcpIntegration(cfg, {
+    harnessUrl: `http://127.0.0.1:${PORT}`,
+    commsToken: COMMS_TOKEN,
+    botId,
+    threadId,
+  });
 }
 
 /** Run a turn on `targetBotId` and resolve with its assistant text — the
@@ -191,14 +203,14 @@ const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
-/** A bot as a client may see it: no provider session cursors.
+/** A bot as a client may see it: no provider session bookkeeping.
  *
  * `resumeCursors` is the harness's own bookkeeping — the native session id
  * to resume, per instance, per task. No client has ever used it, and a
  * paired phone has even less business holding provider session identifiers
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
-const wireTask = ({ resumeCursors, ...task }: TaskRecord) => task;
+const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => task;
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
@@ -283,6 +295,18 @@ function messagePage(threadId: string, limit: number | undefined, before?: strin
   const end = before ? all.findIndex((msg) => msg.id === before) : -1;
   const stop = end === -1 ? all.length : end;
   const start = Math.max(0, stop - limit);
+  return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
+}
+
+/** A bounded page centred on a known message, used when a search result is
+ * opened on a client that only hydrated the newest part of the transcript. */
+function messageWindow(threadId: string, messageId: string, limit: number) {
+  const all = store.messagesFor(threadId);
+  const index = all.findIndex((message) => message.id === messageId);
+  if (index < 0) return null;
+  const before = Math.floor((limit - 1) / 2);
+  const start = Math.max(0, Math.min(index - before, all.length - limit));
+  const stop = Math.min(all.length, start + limit);
   return { messages: all.slice(start, stop).map(slimMessage), hasMore: start > 0 };
 }
 
@@ -730,13 +754,22 @@ bus.subscribe((event: RuntimeEvent) => {
     case "turn.completed": {
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
-      const usage = turnUsage.get(event.threadId);
+      const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       // group turns run on the room's thread — the speaking bot's task
       // tally is not the right home for a shared room's spend, so only
       // 1:1 task turns are tallied for now.
-      if (bot && usage) store.addTaskUsage(bot.id, event.threadId, usage);
       if (bot) {
+        // bank what this turn spent before the bot broadcast carries the
+        // task list to every window. The driver's own per-turn figure
+        // (turn.completed.usage) is authoritative; a driver that only
+        // streams the running indicator falls back to its last value.
+        const tokens = event.usage ?? lastReported;
+        store.addTaskUsage(bot.id, event.threadId, {
+          input: tokens?.input,
+          output: tokens?.output,
+          costUsd: event.cost ?? null,
+        });
         // settled → idle; a setup failure already marked it dead, keep that
         if (store.bot(bot.id)?.activity !== "dead") store.setActivity(bot.id, "idle");
         store.patchBot(bot.id, { unread: true });
@@ -889,6 +922,40 @@ bus.subscribe((event: RuntimeEvent) => {
   drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
 });
 
+// ── steer-queue drain: messages sent while the bot was busy ────────────
+// Runs on ANY turn.completed rather than resolving the settling thread: a
+// bot busy in a room settles on the room's thread, and by the time this
+// subscriber runs the main fold has already dropped the speaker record —
+// so the drain matches on "this queue's bot is idle now" instead.
+// Registration order puts this after the main fold, so busy is already
+// false when it looks. Deliberately NOT gated on event.ok (unlike the
+// delegation drain above): queued delegations are a bot's fan-out and
+// dropping them on Stop is a safety property, but queued messages are the
+// user's own words — stop-then-steer is the point, so an interrupted turn
+// drains too.
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed") return;
+  drainQueuedSends();
+});
+
+function drainQueuedSends() {
+  drainSteeredMessages(store, (botId, threadId, prompt, userMessage) =>
+    // A plain attended turn — no automationSource, no unattended, no comms
+    // depth: exactly what typing the same words into an idle bot would run.
+    // The messages are already in the transcript; userMessage keeps
+    // startTurn from appending the joined prompt as a duplicate.
+    startTurn(botId, prompt, { threadId, userMessage }).catch((err) => {
+      store.appendMessage(threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: {
+          name: `error: queued message could not start — ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`,
+          ok: false,
+        },
+      });
+    }),
+  );
+}
 
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
@@ -1010,6 +1077,10 @@ async function startTurn(
     automationSource?: RoutineRunTrigger;
     /** the caller was already running unattended, so this turn is too */
     unattended?: boolean;
+    /** Resume an agent after the user completed an inline connection card.
+     * The prompt is control-plane context: it reaches the provider without
+     * masquerading as another message authored by the user. */
+    connectorContinuation?: boolean;
     onDispatchError?: (message: string) => void;
   },
 ) {
@@ -1020,12 +1091,12 @@ async function startTurn(
   // a webhook turn, or one inherited from a bot already running unattended
   if (opts?.automationSource === "webhook" || opts?.unattended) markUnattended(bot.id);
   // a person typing into this bot ends the unattended window immediately
-  else if (opts?.automationSource === undefined && !opts?.commsDepth) clearUnattended(bot.id);
+  else if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
   // a task takes its name from the first thing you asked it to do
-  if (text.trim()) store.titleTaskFromFirstMessage(bot.id, text, threadId);
+  if (text.trim() && !opts?.connectorContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
   const instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
@@ -1057,7 +1128,9 @@ async function startTurn(
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
   if (!userMessage) {
-    userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
+    userMessage = opts?.connectorContinuation
+      ? { id: `connector-${randomUUID()}`, at: Date.now(), role: "user", kind: "text", text }
+      : store.appendMessage(threadId, { role: "user", kind: "text", text });
   }
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
@@ -1075,18 +1148,21 @@ async function startTurn(
   // cleared only once the turn is actually dispatched — clearing it here
   // would cost the next attempt its history if this dispatch fails.
   const rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  const turnText =
-    rewound && instance.driverKind !== "grok" && transcript.length
-      ? [
-          "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]",
-          "",
-          ...transcript.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`),
-          "",
-          "[Now reply to the user's latest message:]",
-          "",
-          text,
-        ].join("\n")
-      : text;
+  // A fresh engine — the user switched this bot's model mid-thread — has no
+  // current session here either, so it gets the same replay. Distinct from
+  // rewound: the OTHER instances' cursors are left alone (a rewind wipes
+  // them all), and "fresh" is decided by who ran the last turn, not by
+  // whether we hold a cursor — see engineIsFresh.
+  const fresh =
+    !rewound &&
+    engineIsFresh({ instanceId, lastInstanceId: task.lastInstanceId, resumeCursors: task.resumeCursors, transcript });
+  const { turnText, resume } = buildTurnContext({
+    text,
+    transcript,
+    rewound,
+    fresh,
+    replaysNatively: instance.driverKind === "grok",
+  });
 
   const persona = [
     `You are ${bot.name}, a personal bot in OpenMausBot.`,
@@ -1110,8 +1186,8 @@ async function startTurn(
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (bot.composio !== false && cfg.composio?.apiKey && instance.adapter.capabilities.composioMcp === true) {
-        const connection = await composio.mcpIntegration(cfg);
+      if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+        const connection = await connectedAppsIntegration(bot.id, threadId);
         if (connection) integrations.composio = connection;
       }
       // CLI engines work inside the bot's own workspace directory rather
@@ -1260,7 +1336,7 @@ async function startTurn(
         // a rewound thread never resumes the abandoned branch's session
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
-        resumeCursor: rewound ? undefined : task.resumeCursors[instanceId],
+        resumeCursor: resume ? task.resumeCursors[instanceId] : undefined,
         transcript,
         system:
           persona +
@@ -1294,6 +1370,8 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
+      // and this engine now owns the thread's most recent turn
+      store.markTaskDispatched(bot.id, threadId, instanceId);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy
@@ -1314,6 +1392,9 @@ async function startTurn(
       });
       store.setActivity(bot.id, "idle");
       opts?.onDispatchError?.(message);
+      // a dispatch failure never emits turn.completed, so the settle-driven
+      // drain would strand anything queued behind this turn
+      drainQueuedSends();
     }
   })();
 }
@@ -1434,6 +1515,7 @@ async function runGroupMemberTurn(
   // bots that already spoke for this user message — "@Scout ask @Pixel"
   // must not run Pixel twice (once chained, once as a direct responder)
   spoken: Set<string> = new Set(),
+  connectorContinuation?: string,
 ): Promise<boolean> {
   const group = store.group(groupId);
   const bot = store.bot(botId);
@@ -1463,6 +1545,21 @@ async function runGroupMemberTurn(
     });
     return true;
   }
+  const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
+  try {
+    if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      const connection = await connectedAppsIntegration(bot.id, group.threadId);
+      if (connection) integrations.composio = connection;
+    }
+  } catch (error) {
+    store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "activity",
+      from: { botId: bot.id, name: bot.name, color: bot.color },
+      tool: { name: `error: connected apps are unavailable — ${error instanceof Error ? error.message : String(error)}`, ok: false },
+    });
+    return true;
+  }
   store.setActivity(bot.id, "working");
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -1484,13 +1581,22 @@ async function runGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)`;
+  const text = `${serializeRoomContext(group.threadId, userName)}\n\n(Reply to the conversation above as ${bot.name}.)${
+    connectorContinuation ? `\n\n${connectorContinuation}` : ""
+  }`;
 
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
   const worksInWorkspace = instance.driverKind !== "grok" && instance.driverKind !== "boxAgent";
-  const cwd = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
-  const roomSystem = cwd ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
+  const workspace = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
+  // The room's folder pins here — on the first turn that actually
+  // dispatches, not at PATCH time — so a folder set on a never-used room
+  // still takes effect, while a room that already worked somewhere never
+  // has its folder moved underneath it. Off-host members skip the folder
+  // but must not decide the pin: the room's desk is a property of the
+  // room, not of whichever member happened to speak first.
+  const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id));
+  const roomSystem = workspace ? `${system}\n${memorySystemPrompt(bot.id).trim()}` : system;
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
@@ -1526,6 +1632,7 @@ async function runGroupMemberTurn(
         text,
         system: roomSystem,
         cwd,
+        integrations,
         ...memberTurnSelection(bot.modelSelection),
       })
       .catch((err) => {
@@ -1605,6 +1712,102 @@ function startGroupTurn(groupId: string, text: string) {
   groupQueues.set(groupId, next.catch(() => {}));
 }
 
+const CONNECTOR_SLUG = /^[a-z0-9][a-z0-9_-]{0,80}$/;
+const pendingConnectorResumes = new Map<
+  string,
+  { botId: string; threadId: string; resumeKey: string; labels: string[] }
+>();
+
+function connectorThread(botId: string, threadId: string) {
+  const bot = store.bot(botId);
+  if (!bot) return null;
+  if (store.taskByThread(botId, threadId)) return { bot, group: undefined };
+  const group = store.groupByThread(threadId);
+  if (group?.memberIds.includes(botId)) return { bot, group };
+  return null;
+}
+
+function connectorMessage(botId: string, threadId: string, messageId: string) {
+  if (!connectorThread(botId, threadId)) return null;
+  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  return message?.kind === "connector" && message.connector ? message : null;
+}
+
+function connectorCards(threadId: string, resumeKey: string) {
+  return store.messagesFor(threadId).filter(
+    (message) => message.kind === "connector" && message.connector?.resumeKey === resumeKey,
+  );
+}
+
+function markConnectorResumeFailed(threadId: string, resumeKey: string, error: string) {
+  for (const message of connectorCards(threadId, resumeKey)) {
+    if (!message.connector) continue;
+    store.patchMessage(threadId, message.id, {
+      connector: { ...message.connector, resumed: false, error: error.slice(0, 180) },
+    });
+  }
+}
+
+function dispatchConnectorResume(entry: { botId: string; threadId: string; resumeKey: string; labels: string[] }) {
+  const owner = connectorThread(entry.botId, entry.threadId);
+  if (!owner) return;
+  const names = entry.labels.join(", ");
+  const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
+  if (owner.bot.busy) {
+    pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    return;
+  }
+  if (owner.group) {
+    const previous = groupQueues.get(owner.group.id) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      const current = connectorThread(entry.botId, entry.threadId);
+      if (!current?.group) return;
+      if (current.bot.busy) {
+        pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+        return;
+      }
+      await runGroupMemberTurn(current.group.id, entry.botId, 0, new Set(), prompt);
+    });
+    groupQueues.set(owner.group.id, next.catch((error) => {
+      markConnectorResumeFailed(entry.threadId, entry.resumeKey, error instanceof Error ? error.message : String(error));
+    }));
+    return;
+  }
+  void startTurn(entry.botId, prompt, {
+    threadId: entry.threadId,
+    connectorContinuation: true,
+    onDispatchError: (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/already working/i.test(message)) pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
+    else markConnectorResumeFailed(entry.threadId, entry.resumeKey, message);
+  });
+}
+
+function maybeResumeConnectors(botId: string, threadId: string, resumeKey: string) {
+  const cards = connectorCards(threadId, resumeKey);
+  if (!cards.length || cards.some((message) => message.connector?.dismissed || message.connector?.status !== "connected")) return false;
+  if (cards.every((message) => message.connector?.resumed)) return true;
+  const labels = cards.map((message) => message.connector!.label);
+  for (const message of cards) {
+    store.patchMessage(threadId, message.id, { connector: { ...message.connector!, resumed: true, error: undefined } });
+  }
+  dispatchConnectorResume({ botId, threadId, resumeKey, labels });
+  return true;
+}
+
+function drainConnectorResumes() {
+  for (const [key, entry] of pendingConnectorResumes) {
+    if (store.bot(entry.botId)?.busy) continue;
+    pendingConnectorResumes.delete(key);
+    dispatchConnectorResume(entry);
+  }
+}
+
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed") drainConnectorResumes();
+});
+
 /** Pre-save probe for a CLI path override: run `<cli> --version` with the
  * same environment a real turn gets (augmented PATH). Returns ok + the
  * version line, or a fail the UI can act on — ENOENT on a GUI-launched app
@@ -1661,6 +1864,7 @@ function cliProbeEnvironment(): NodeJS.ProcessEnv {
     "BOX_TOKEN",
     "OPENCODE_API_KEY",
     "COMPOSIO_API_KEY",
+    "OMB_COMPOSIO_BROKER_TOKEN",
     "OMB_TTS_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -1680,7 +1884,8 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: {
-      configured: Boolean(cfg.composio?.apiKey),
+      configured: composio.configured(cfg),
+      mode: composio.connectionMode(cfg),
     },
     box: { configured: Boolean(cfg.box?.token) },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
@@ -1722,6 +1927,9 @@ async function reloadProviders() {
     });
     store.setActivity(b.id, "idle");
   }
+  // killed turns settle here without a turn.completed event, so anything
+  // queued behind them drains now — onto the freshly loaded fleet
+  drainQueuedSends();
 }
 
 // Config writes rebuild the whole provider registry. Keep the read-modify-write
@@ -1957,6 +2165,67 @@ const server = createServer(async (req, res) => {
             : `Delegation queued — @${targetName} will pick it up after your current turn finishes.`,
         });
       }
+      if (method === "POST" && path === "/api/internal/connectors/mcp") {
+        const body = await readBody(req);
+        const upstream = await composio.relayMcp(
+          cfg,
+          body,
+          Array.isArray(req.headers["mcp-session-id"])
+            ? req.headers["mcp-session-id"][0]
+            : req.headers["mcp-session-id"],
+        );
+        const headers: Record<string, string> = {
+          "content-type": upstream.contentType,
+          "cache-control": "no-store",
+        };
+        if (upstream.transportSessionId) headers["mcp-session-id"] = upstream.transportSessionId;
+        res.writeHead(upstream.status, headers);
+        return res.end(Buffer.from(upstream.bytes));
+      }
+      if (method === "POST" && path === "/api/internal/connectors/request") {
+        const body = await readBody(req);
+        const botId = String(body.botId ?? "");
+        const threadId = String(body.threadId ?? "");
+        const resumeKey = String(body.resumeKey ?? "");
+        const slugs: string[] = Array.isArray(body.slugs)
+          ? [...new Set<string>(body.slugs.map((slug: unknown) => String(slug).toLowerCase()).filter((slug: string) => CONNECTOR_SLUG.test(slug)))]
+          : [];
+        const owner = connectorThread(botId, threadId);
+        if (!owner) return json(res, 403, { error: "conversation does not belong to this bot" });
+        if (!/^[\w-]{8,100}$/.test(resumeKey)) return json(res, 400, { error: "invalid resume key" });
+        if (!slugs.length || slugs.length > 12) return json(res, 400, { error: "one to twelve valid apps are required" });
+        if (!composio.configured(cfg) || owner.bot.composio === false) {
+          return json(res, 409, { error: "connected apps are not enabled for this bot" });
+        }
+        const connectionState: Record<string, { connected?: boolean }> = await composio.connectionStatus(cfg, slugs).catch(() => ({}));
+        const messageIds: string[] = [];
+        for (const slug of slugs) {
+          const existing = store.messagesFor(threadId).find(
+            (message) => message.connector?.resumeKey === resumeKey && message.connector.slug === slug,
+          );
+          if (existing) {
+            messageIds.push(existing.id);
+            continue;
+          }
+          const toolkit = await composio.toolkitCard(cfg, slug);
+          const connected = connectionState[slug]?.connected === true;
+          const message = store.appendMessage(threadId, {
+            role: "bot",
+            kind: "connector",
+            ...(owner.group ? { from: { botId: owner.bot.id, name: owner.bot.name, color: owner.bot.color } } : {}),
+            connector: {
+              slug,
+              label: toolkit.label,
+              description: toolkit.blurb || `Connect ${toolkit.label} so the bot can continue`,
+              status: connected ? "connected" : "required",
+              resumeKey,
+            },
+          });
+          messageIds.push(message.id);
+        }
+        maybeResumeConnectors(botId, threadId, resumeKey);
+        return json(res, 200, { messageIds });
+      }
       return json(res, 404, { error: "unknown internal endpoint" });
     }
 
@@ -2108,6 +2377,13 @@ const server = createServer(async (req, res) => {
       const limit = pageSize(url.searchParams.get("limit"));
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
       const before = url.searchParams.get("before");
+      const around = url.searchParams.get("around");
+      if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (around) {
+        const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
+        if (!window) return json(res, 404, { error: "no such message" });
+        return json(res, 200, window);
+      }
       // An unknown cursor must not silently answer with the newest page —
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
@@ -2148,15 +2424,25 @@ const server = createServer(async (req, res) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
+      // whether each hit sits on its thread's visible branch — a click on
+      // one that does not has to switch versions first (and only then)
+      const activePaths = new Map<string, Set<string>>();
+      const onActivePath = (threadId: string, messageId: string) => {
+        let ids = activePaths.get(threadId);
+        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        return ids.has(messageId);
+      };
       const hits = searchMessages(q, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
+          if (!bot && !group) return null;
+          const active = onActivePath(hit.threadId, hit.messageId);
           if (bot) {
             const task = store.taskByThread(bot.id, hit.threadId);
-            return { ...hit, botId: bot.id, name: bot.name, task: task?.title };
+            return { ...hit, botId: bot.id, name: bot.name, task: task?.title, onActivePath: active };
           }
-          if (group) return { ...hit, groupId: group.id, name: group.name };
+          if (group) return { ...hit, groupId: group.id, name: group.name, onActivePath: active };
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);
@@ -2354,6 +2640,15 @@ const server = createServer(async (req, res) => {
         }
         if (!responder) return json(res, 400, { error: "invalid default responder" });
         patch.defaultResponder = responder;
+      }
+      if (body.cwd !== undefined) {
+        if (existing.dm) return json(res, 400, { error: "direct-message channels cannot have a working folder" });
+        if (existing.pinnedCwd !== undefined) {
+          return json(res, 409, { error: "the room's working folder is fixed after its first turn" });
+        }
+        const checked = validateBotCwd(body.cwd);
+        if (!checked.ok) return json(res, 400, { error: checked.error });
+        patch.cwd = checked.cwd ?? undefined;
       }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
@@ -2638,7 +2933,17 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      // A busy bot no longer refuses the message: it lands in the thread
+      // now (marked queued) and auto-sends when the turn settles — see the
+      // steer-queue drain above. Synchronous from the busy check to the
+      // queue insert, so a settle can't slip between them and strand it.
+      if (bot.busy) {
+        const message = queueSteeredMessage(store, bot, text);
+        return json(res, 202, { ok: true, queued: true, messageId: message.id });
+      }
+      await startTurn(bot.id, text);
       return json(res, 202, { ok: true });
     }
 
@@ -2840,6 +3145,25 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
+    // ── inspector: a thread's runtime events + native protocol tee ──
+    // Both logs already exist on disk; this only reads them back. Threads
+    // belong to bots or rooms — anything else is not a thread we know.
+    m = path.match(/^\/api\/threads\/([\w-]+)\/events$/);
+    if (m && method === "GET") {
+      const threadId = m[1];
+      const known =
+        store.bots.some((b) => store.tasks(b.id).some((t) => t.threadId === threadId)) ||
+        Boolean(store.groupByThread(threadId));
+      if (!known) return json(res, 404, { error: "no such thread" });
+      const rawLimit = url.searchParams.get("limit");
+      const parsedLimit = rawLimit === null ? undefined : Number(rawLimit);
+      if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
+        return json(res, 400, { error: "limit must be a positive whole number" });
+      }
+      const limit = parsedLimit;
+      return json(res, 200, readThreadEvents({ eventsDir: EVENTS_DIR, nativeDir: NATIVE_DIR, threadId, limit }));
+    }
+
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
       // Rescan PATH first: this endpoint is how the app answers "what can I
@@ -3031,11 +3355,11 @@ const server = createServer(async (req, res) => {
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
-      return json(res, 200, { configured: Boolean(cfg.composio?.apiKey), source, cards });
+      return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
-      if (!cfg.composio?.apiKey) {
+      if (!composio.configured(cfg)) {
         return json(res, 200, { configured: false, services: {} });
       }
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
@@ -3045,6 +3369,55 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") return json(res, 200, await composio.authorizeService(cfg, m[1]));
     m = path.match(/^\/api\/connectors\/([\w-]+)$/);
     if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
+
+    // Inline connection cards are bound to both the bot and the exact task
+    // or room thread that created them. The browser auth URL is returned
+    // only to this local UI and is never stored in the transcript.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/connector-cards\/([\w-]+)\/(authorize|status|resume|dismiss)$/);
+    if (m) {
+      const body = method === "POST" ? await readBody(req) : {};
+      const threadId = String(method === "GET" ? url.searchParams.get("threadId") ?? "" : body.threadId ?? "");
+      const message = connectorMessage(m[1], threadId, m[2]);
+      if (!message?.connector) return json(res, 404, { error: "no such connection request" });
+      const connector = message.connector;
+      if (m[3] === "authorize" && method === "POST") {
+        store.patchMessage(threadId, message.id, {
+          connector: { ...connector, status: "authorizing", error: undefined, dismissed: false },
+        });
+        try {
+          return json(res, 200, await composio.authorizeService(cfg, connector.slug));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          store.patchMessage(threadId, message.id, {
+            connector: { ...connector, status: "failed", error: detail.slice(0, 180) },
+          });
+          throw error;
+        }
+      }
+      if (m[3] === "status" && method === "GET") {
+        const state = (await composio.connectionStatus(cfg, [connector.slug]))[connector.slug];
+        const failed = /failed|expired|revoked|error/i.test(state?.status ?? "");
+        const next = {
+          ...connector,
+          status: state?.connected ? ("connected" as const) : failed ? ("failed" as const) : ("authorizing" as const),
+          error: failed ? `Connection ${state?.status ?? "failed"}` : undefined,
+        };
+        store.patchMessage(threadId, message.id, { connector: next });
+        if (state?.connected) maybeResumeConnectors(m[1], threadId, connector.resumeKey);
+        return json(res, 200, { connected: Boolean(state?.connected), pending: Boolean(state?.pending), status: state?.status });
+      }
+      if (m[3] === "resume" && method === "POST") {
+        const resumed = maybeResumeConnectors(m[1], threadId, connector.resumeKey);
+        return resumed
+          ? json(res, 200, { resumed: true })
+          : json(res, 409, { error: "finish connecting every requested app first" });
+      }
+      if (m[3] === "dismiss" && method === "POST") {
+        store.patchMessage(threadId, message.id, { connector: { ...connector, dismissed: true } });
+        return json(res, 200, { dismissed: true });
+      }
+      return json(res, 405, { error: "method not allowed" });
+    }
 
     // ── the bot's cloud computer (Box) ──
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);

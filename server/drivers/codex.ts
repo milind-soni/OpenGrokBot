@@ -116,14 +116,33 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const turnId = newId();
 
       const env = childEnv();
+      const appServerArgs = ["app-server", ...codexLocalProviderArgs(env, turn.model)];
+      if (turn.integrations?.composio) {
+        const bridge = turn.integrations.composio;
+        Object.assign(env, bridge.env);
+        const prefix = "mcp_servers.openmausbot_connectors";
+        appServerArgs.push(
+          "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
+          "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
+          "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
+          "-c", `${prefix}.default_tools_approval_mode="auto"`,
+        );
+      }
 
-      const child = spawnCli(config.cli, ["app-server", ...codexLocalProviderArgs(env, turn.model)], {
+      const child = spawnCli(config.cli, appServerArgs, {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
       });
 
-      const state = { settled: false, lastText: "", sawStreamDelta: false };
+      const state = {
+        settled: false,
+        lastText: "",
+        sawStreamDelta: false,
+        // codex reports token usage as a running THREAD total; the harness
+        // wants this turn's figure, so the last report is banked on settle
+        usage: undefined as { input: number; output: number } | undefined,
+      };
       const asks = new Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>();
       let nextId = 1;
       const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
@@ -165,7 +184,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null, ...(state.usage ? { usage: state.usage } : {}) });
         stop(); // the app-server never exits on its own
       };
 
@@ -290,6 +309,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             break;
           }
           case "thread/tokenUsage/updated": {
+            // `last` is the most recent turn when the server sends it;
+            // `total` is the thread so far — a fresh app-server per turn
+            // makes that this turn's figure too
+            const turnUsage = p.tokenUsage?.last ?? p.tokenUsage?.total;
+            if (turnUsage) state.usage = { input: turnUsage.inputTokens ?? 0, output: turnUsage.outputTokens ?? 0 };
             const t = p.tokenUsage?.total;
             if (t) {
               emit({
@@ -447,7 +471,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           resolve(!err && /logged in/i.test(stdout)),
         );
       });
-      return { state: "available", version, authenticated };
+      // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login
+      return { state: "available", version, authenticated, billing: "subscription" };
     };
 
     return {
@@ -464,6 +489,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         provider: DRIVER_KIND,
         capabilities: {
           sessionModelSwitch: "unsupported",
+          composioMcp: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         sendTurn,

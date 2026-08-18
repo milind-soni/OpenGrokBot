@@ -91,6 +91,11 @@ export type RuntimeEvent = RuntimeEventBase &
         stopReason?: string | null;
         cost?: number | null;
         denials?: string[];
+        /** THIS turn's token total, as the provider reports it at the end.
+         * The one figure the harness accumulates — thread.token-usage.updated
+         * is a live indicator whose meaning differs per driver (a per-call
+         * delta, a thread total, a per-step figure) and must never be summed. */
+        usage?: { input: number; output: number };
       }
     | { type: "item.started"; itemType: "tool" | "reasoning"; title?: string }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
@@ -143,7 +148,10 @@ export interface SendTurnInput {
   system?: string;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
-    composio?: { url: string; headers: Record<string, string> };
+    /** A local stdio bridge owns the remote Composio transport. Keeping the
+     * bridge harness-controlled lets it turn connection requests into trusted
+     * chat cards consistently across provider CLIs. */
+    composio?: { command: string; args: string[]; env: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */
@@ -208,6 +216,9 @@ export interface ProviderSnapshot {
   reason?: string;
   authenticated?: boolean;
   version?: string | null;
+  /** How this instance is paid for, when the driver can tell: a reported
+   * cost on a subscription is notional and the UI labels it as such. */
+  billing?: "metered" | "subscription";
 }
 
 // ── engine install descriptor ───────────────────────────────────────────

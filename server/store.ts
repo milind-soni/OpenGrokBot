@@ -50,12 +50,26 @@ export interface OptionCardData {
   allowKey?: string;
 }
 
+export interface ConnectorCardData {
+  /** Composio toolkit slug. It is validated server-side before every action. */
+  slug: string;
+  label: string;
+  description: string;
+  status: "required" | "authorizing" | "connected" | "failed";
+  /** Cards created by one agent request resume together after all connect. */
+  resumeKey: string;
+  error?: string;
+  dismissed?: boolean;
+  resumed?: boolean;
+}
+
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "connector";
   text?: string;
   card?: OptionCardData;
+  connector?: ConnectorCardData;
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent
@@ -77,6 +91,11 @@ export interface Message {
   /** comm chips: "Messaged @X" in the caller's chat, linking to the
    * bot⇄bot channel where the exchange is mirrored. */
   comm?: { groupId: string; withBotId: string; withName: string; withColor: string };
+  /** user messages sent while the bot was mid-turn, waiting in the
+   * steer-queue to auto-send on settle. Cleared when the drain consumes
+   * them; a true stranded by a restart is inert because the client only
+   * shows the affordance while the bot is busy. */
+  queued?: boolean;
 }
 
 export type GroupDefaultResponder =
@@ -102,6 +121,14 @@ export interface GroupRecord {
   dm?: boolean;
   /** transient: the member currently running a turn (never persisted) */
   busyBotId?: string | null;
+  /** the room's shared desk: where member turns run their shell tools,
+   * overriding each member's own folder. The room pins its own copy on its
+   * first turn (pinnedCwd). Absent = each member's own default. */
+  cwd?: string;
+  /** the folder this room's turns actually run in, pinned on the first
+   * turn that dispatches. null = each member's own default; absent = not
+   * pinned yet. See pinGroupCwd for why it never moves. */
+  pinnedCwd?: string | null;
 }
 
 /** One task = one conversation with its own context.
@@ -118,16 +145,28 @@ export interface TaskRecord {
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
-  /** cumulative token spend across this task's settled turns — providers
-   * report running totals per turn; the fold adds each turn's final total
-   * here when the turn completes. Informational, not billing. */
-  usage?: { input: number; output: number; turns: number };
+  /** which instance dispatched the most recent turn. A cursor alone can't
+   * say whether an engine's session is current — another engine may have
+   * taken turns since — so this is what decides an inline replay. Absent
+   * on tasks from before the field existed. */
+  lastInstanceId?: string;
+  /** what this task has spent: banked once per turn from turn.completed */
+  usage?: TaskUsage;
   /** the folder this task's turns run in, pinned on its first turn from
    * the bot's `cwd` at that moment. Pinned, not read live: Claude keeps
    * sessions per project directory and Codex threads carry their cwd, so
    * a folder that moved under a live session would break resume. `null`
    * = pinned to the default (home); absent = not pinned yet. */
   cwd?: string | null;
+}
+
+export interface TaskUsage {
+  input: number;
+  output: number;
+  /** null until any turn reports a cost — most engines never do. Records
+   * written by builds before cost existed lack the field; read as null. */
+  costUsd: number | null;
+  turns: number;
 }
 
 /** Everything the BOT authored is scrubbed of content-shaped secrets before
@@ -147,6 +186,14 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
     if (typeof card.subtitle === "string") card.subtitle = redactSecretsInText(card.subtitle);
     if (typeof card.summary === "string") card.summary = redactSecretsInText(card.summary);
     out.card = card;
+  }
+  if (out.connector) {
+    out.connector = {
+      ...out.connector,
+      label: redactSecretsInText(out.connector.label),
+      description: redactSecretsInText(out.connector.description),
+      error: out.connector.error ? redactSecretsInText(out.connector.error) : undefined,
+    };
   }
   return out;
 }
@@ -504,7 +551,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     Object.assign(group, patch);
@@ -801,6 +848,43 @@ export class Store {
     this.emit({ type: "bot", botId });
   }
 
+  /** Record which instance just took a turn on this task. Called at
+   * dispatch, not at cursor time — transcript-replay engines never
+   * produce a cursor, and they still count as having run last. */
+  markTaskDispatched(botId: string, threadId: string, instanceId: string) {
+    const task = this.taskByThread(botId, threadId);
+    if (!task || task.lastInstanceId === instanceId) return;
+    task.lastInstanceId = instanceId;
+    this.saveBots();
+  }
+
+  /** Bank one settled turn onto its task. Called once per turn.completed;
+   * the running per-driver token indicator is deliberately not used here
+   * because its meaning differs by driver. */
+  addTaskUsage(
+    botId: string,
+    threadId: string,
+    turn: { input?: number; output?: number; costUsd: number | null },
+  ): TaskUsage | null {
+    const task = this.taskByThread(botId, threadId);
+    if (!task) return null;
+    const prev: TaskUsage = { input: 0, output: 0, costUsd: null, turns: 0, ...task.usage };
+    const cost = typeof turn.costUsd === "number" && Number.isFinite(turn.costUsd) ? turn.costUsd : null;
+    const prevCost = typeof prev.costUsd === "number" ? prev.costUsd : null;
+    // providers occasionally report NaN or a negative on a partial turn —
+    // never let that poison a running tally
+    const clean = (n: number | undefined) => (typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0);
+    task.usage = {
+      input: prev.input + clean(turn.input),
+      output: prev.output + clean(turn.output),
+      costUsd: cost === null ? prevCost : (prevCost ?? 0) + cost,
+      turns: prev.turns + 1,
+    };
+    this.saveBots();
+    this.emit({ type: "bot", botId });
+    return task.usage;
+  }
+
   /** The folder a task's turn runs in. Pins on first call from the bot's
    * current folder — unless the task already has a session (a thread from
    * before folders existed), which pins to the default so the folder can't
@@ -823,6 +907,25 @@ export class Store {
       this.emit({ type: "bot", botId });
     }
     return task.cwd;
+  }
+
+  /** The folder a room's member turns run in. Pins on the first turn that
+   * dispatches, from the room's `cwd` at that moment. Pinned, not read
+   * live, for the same reason tasks pin (see pinTaskCwd): engines key
+   * their sessions and files to the folder a thread starts in, and a room
+   * lives on ONE thread forever — so changing the room's folder applies to
+   * future rooms, never under a room that already started working
+   * somewhere. Returns the pinned value: a path, or null = each member's
+   * own default. */
+  pinGroupCwd(groupId: string): string | null {
+    const group = this.group(groupId);
+    if (!group) return null;
+    if (group.pinnedCwd === undefined) {
+      group.pinnedCwd = group.cwd ?? null;
+      this.saveGroups();
+      this.emit({ type: "group", groupId: group.id });
+    }
+    return group.pinnedCwd;
   }
 
   // ── tasks ─────────────────────────────────────────────────────────────
@@ -881,23 +984,6 @@ export class Store {
     const task = this.bot(botId)?.tasks?.find((t) => t.threadId === threadId);
     if (!task) return null;
     task.title = title.trim().slice(0, 80) || UNTITLED_TASK;
-    this.saveBots();
-    this.emit({ type: "bot", botId });
-    return task;
-  }
-
-  /** Add one settled turn's final token totals to its task's tally. */
-  addTaskUsage(botId: string, threadId: string, usage: { input: number; output: number }): TaskRecord | null {
-    const task = this.taskByThread(botId, threadId);
-    if (!task) return null;
-    const prev = task.usage ?? { input: 0, output: 0, turns: 0 };
-    const input = Number.isFinite(usage.input) ? Math.max(0, Math.trunc(usage.input)) : 0;
-    const output = Number.isFinite(usage.output) ? Math.max(0, Math.trunc(usage.output)) : 0;
-    task.usage = {
-      input: prev.input + input,
-      output: prev.output + output,
-      turns: prev.turns + 1,
-    };
     this.saveBots();
     this.emit({ type: "bot", botId });
     return task;

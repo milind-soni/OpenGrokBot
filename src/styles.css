@@ -19,6 +19,9 @@
   --color-ink-secondary: #fcfcfc99;
   --color-accent: #1084fe;
   --color-accent-border: #459ffe;
+  /* the ring a keyboard user follows; sits on the accent so focus reads as
+     "the app is talking to you", not as a browser default */
+  --color-focus: #459ffe;
   --color-bubble-user: #5a5a5a;
   --color-success: #38d591;
   --color-danger: #ff5667;
@@ -45,14 +48,42 @@ body {
   overflow: hidden;
 }
 
+/* Keep focus visible after components clear the browser outline. These
+   unlayered rules outrank Tailwind utilities without needing !important. */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Chromium intentionally matches :focus-visible on text controls after a
+   pointer click too. Make that behavior explicit: every focused editor has
+   a clear inset ring, while retaining each control's own border radius. */
+:is(input, textarea, select):focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 45%, transparent);
+  color: var(--color-ink);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-thumb {
   background: #3d3d3d;
   border-radius: 4px;
 }
+/* the thumb was inert — it never acknowledged the pointer */
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-raised-hover);
+}
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -78,6 +109,10 @@ body {
 @keyframes shimmer {
   from { background-position: 200% 50%; }
   to { background-position: -200% 50%; }
+}
+@keyframes reduced-loader-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 .thinking-shimmer {
   background: linear-gradient(90deg, var(--color-ink-secondary) 40%, var(--color-ink) 50%, var(--color-ink-secondary) 60%);
@@ -556,4 +591,20 @@ body {
   }
 
   .maus-eyes { transform: none; }
+
+  /* Stop spatial motion instead of accelerating infinite animations. Loading
+     icons keep a slow opacity pulse, so progress remains visible without
+     rotation, bounce, or flicker. */
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation: reduced-loader-pulse 1.6s ease-in-out infinite !important;
+  }
 }

@@ -16,9 +16,12 @@ struct CompanionApp: App {
             RootView()
                 .environmentObject(session)
                 .onAppear { session.connect() }
+                .onOpenURL { session.receivePairingURL($0) }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
-                    case .active: session.connect()
+                    case .active:
+                        session.connect()
+                        Task { await session.refreshNotificationAuthorization() }
                     case .background: session.disconnect()
                     case .inactive: break
                     @unknown default: break

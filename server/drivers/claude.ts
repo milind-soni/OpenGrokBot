@@ -8,11 +8,10 @@
 //   - Composio Sessions (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
@@ -32,6 +31,7 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { applyClaudeInject, mergeLocalInject } from "./local-inject.ts";
 import { appendNative } from "./native.ts";
+import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 
 /** Whether `claude` has been signed in.
  *
@@ -147,15 +147,12 @@ export function readClaudeModelCatalog(env: Record<string, string | undefined> =
   return { default: STATIC_CLAUDE_MODELS.default, options };
 }
 
-// proxy entry files live next to this one as .ts in dev (node type
-// stripping) and .js in the compiled dist-server the packaged app ships
-const proxyPath = (basename: string) => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", `${basename}.ts`);
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-};
-const PROXY_PATH = proxyPath("computer-proxy");
-const PERM_PROXY_PATH = proxyPath("permission-proxy");
-const DWEB_PROXY_PATH = proxyPath("drivers/dweb-proxy");
+// Resolved from the server root, never relative to this file: bundling inlines
+// this module into an entry one directory up, so a `".."` here would climb too
+// far. See server/proxy-paths.ts.
+const PROXY_PATH = SPAWNED_PROXIES.computer;
+const PERM_PROXY_PATH = SPAWNED_PROXIES.permission;
+const DWEB_PROXY_PATH = SPAWNED_PROXIES.dweb;
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
 const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
@@ -380,11 +377,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
       if (turn.integrations?.composio) {
-        mcpServers.composio = {
-          type: "http",
-          url: turn.integrations.composio.url,
-          headers: turn.integrations.composio.headers,
-        };
+        mcpServers.composio = { ...turn.integrations.composio };
         allowed.push("mcp__composio");
       }
       if (turn.integrations?.computer) {
@@ -476,7 +469,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
 
       let settled = false;
-      const settle = (ok: boolean, stopReason: string | null, cost: number | null = null) => {
+      const settle = (
+        ok: boolean,
+        stopReason: string | null,
+        cost: number | null = null,
+        usage?: { input: number; output: number },
+      ) => {
         if (settled) return;
         settled = true;
         broker?.close();
@@ -487,7 +485,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           } catch {}
         }
         active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost });
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost, ...(usage ? { usage } : {}) });
       };
 
       // token streaming: true while --include-partial-messages is delivering
@@ -560,7 +558,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             break;
           case "result":
-            settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
+            // result.usage is this invocation's total — one process per turn,
+            // so it is the turn's figure. cache reads count as input: they
+            // are billed (at the cache rate) and they fill the window.
+            settle(
+              o.is_error !== true,
+              o.stop_reason ?? o.terminal_reason ?? null,
+              o.total_cost_usd ?? null,
+              o.usage
+                ? {
+                    input: (o.usage.input_tokens || 0) + (o.usage.cache_read_input_tokens || 0) + (o.usage.cache_creation_input_tokens || 0),
+                    output: o.usage.output_tokens || 0,
+                  }
+                : undefined,
+            );
             break;
         }
       };
@@ -623,7 +634,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
       const authenticated = await claudeSignedIn(config.cli, env);
-      return { state: "available", version, authenticated };
+      // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
+      // CLI's own login (Pro/Max): the cost it reports is what the call
+      // WOULD bill, not a charge
+      return { state: "available", version, authenticated, billing: "subscription" };
     };
 
     return {

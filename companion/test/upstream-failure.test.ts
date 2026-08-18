@@ -39,7 +39,7 @@ const stand = async (harness: Server): Promise<string> => {
   const sidecar = createServer(
     createProxyHandler({
       harnessPort,
-      authenticate: () => true,
+      authenticate: () => ({ cloudDesktopAccess: true }),
       redeem: () => ({ error: "not in this test" }),
       serverName: () => "Ada's computer",
     }),
@@ -142,7 +142,7 @@ describe("an upstream that fails mid-stream", () => {
     const sidecar = createServer(
       createProxyHandler({
         harnessPort,
-        authenticate: () => true,
+        authenticate: () => ({ cloudDesktopAccess: true }),
         redeem: () => ({ error: "not in this test" }),
         serverName: () => "Ada's computer",
       }),

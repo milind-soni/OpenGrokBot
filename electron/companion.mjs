@@ -222,3 +222,11 @@ export async function companionRevoke(deviceId) {
   await control("DELETE", `/devices/${deviceId}`).catch(() => {});
   return companionState();
 }
+
+/** Enable or remove interactive cloud-desktop access for one paired phone. */
+export async function companionCloudDesktopAccess(deviceId, allowed) {
+  if (!proc) return companionState();
+  if (!/^[\w-]{1,64}$/.test(String(deviceId ?? ""))) return companionState();
+  await control(allowed ? "POST" : "DELETE", `/devices/${deviceId}/cloud-desktop`).catch(() => {});
+  return companionState();
+}

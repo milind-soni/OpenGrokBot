@@ -128,15 +128,17 @@ export function Composer({
     });
   };
 
-  // One message may be queued while the bot works; it auto-sends the moment
-  // the turn settles. Enter during a turn queues instead of silently dying.
+  // Rooms hold one message client-side while a member speaks; it auto-sends
+  // the moment the room settles. 1:1 sends go straight to the server even
+  // mid-turn — the harness queues them (steer-queue), so the message shows
+  // in the transcript immediately with a queued affordance.
   const [queued, setQueued] = useState<string | null>(null);
   // a chip on its own is a message: the send control has to appear for it
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const send = () => {
     const t = composeMessage(text, attachments);
     if (!t) return;
-    if (busy) {
+    if (busy && group) {
       setQueued(t);
       setText("");
       setAttachments([]);
@@ -147,19 +149,18 @@ export function Composer({
       track("message_sent", { room: true });
     } else if (bot) {
       dispatch({ type: "send", botId: bot.id, text: t });
-      track("message_sent", { driver: bot.modelSelection?.instanceId });
+      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy });
     }
     setText("");
     setAttachments([]);
   };
   useEffect(() => {
-    if (!busy && queued) {
-      if (group) dispatch({ type: "sendGroup", groupId: group.id, text: queued });
-      else if (bot) dispatch({ type: "send", botId: bot.id, text: queued });
-      track("message_sent", { queued: true });
+    if (!busy && queued && group) {
+      dispatch({ type: "sendGroup", groupId: group.id, text: queued });
+      track("message_sent", { room: true, queued: true });
       setQueued(null);
     }
-  }, [busy, queued, bot, group, dispatch]);
+  }, [busy, queued, group, dispatch]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
@@ -349,7 +350,9 @@ export function Composer({
               : recording
               ? "Listening…"
               : busy
-                ? `${busyName} is working — Enter queues your message`
+                ? group
+                  ? `${busyName} is working — Enter queues your message`
+                  : `${busyName} is working — sends when this turn finishes`
                 : group
                   ? `Message ${group.name} — ${groupComposerHint(group, members ?? [])}`
                   : `Message ${bot?.name ?? ""}`
@@ -389,7 +392,7 @@ export function Composer({
           <button
             onClick={send}
             aria-label={busy ? "Queue message" : "Send message"}
-            title={busy ? "Queue — sends when the bot finishes" : "Send"}
+            title={busy ? "Sends when the current turn finishes" : "Send"}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
               busy ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",

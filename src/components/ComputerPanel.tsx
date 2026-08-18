@@ -15,6 +15,7 @@ import {
   Plus,
   Power,
   Settings,
+  Smartphone,
   X,
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
@@ -23,6 +24,7 @@ import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutineEditor } from "./RoutinesPage";
+import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -83,11 +85,18 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creatingRoutine, setCreatingRoutine] = useState(false);
+  const [panelView, setPanelView] = useState<"computer" | "android">("computer");
+  const androidStatus = useAndroidUsbDevices();
+  const androidConnected = androidStatus.devices.length > 0;
   // bumped when a Box API key is saved inline, to re-run the spin-up flow
   const [retry, setRetry] = useState(0);
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
+
+  useEffect(() => {
+    if (!androidConnected && panelView === "android") setPanelView("computer");
+  }, [androidConnected, panelView]);
   const vmSupported = Boolean(
     selectedInstance?.snapshot.state === "available" &&
       selectedInstance.capabilities?.computerMcp &&
@@ -333,7 +342,32 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         >
           <Settings size={18} />
         </button>
-        <span className="text-[15px] font-semibold text-ink">Computer</span>
+        {androidConnected ? (
+          <div className="flex overflow-hidden rounded-lg border border-hairline/40">
+            <button
+              onClick={() => setPanelView("computer")}
+              aria-pressed={panelView === "computer"}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 text-[12.5px]",
+                panelView === "computer" ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
+              )}
+            >
+              <Monitor size={13} /> Computer
+            </button>
+            <button
+              onClick={() => setPanelView("android")}
+              aria-pressed={panelView === "android"}
+              className={cn(
+                "flex items-center gap-1.5 border-l border-hairline/40 px-2.5 py-1 text-[12.5px]",
+                panelView === "android" ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
+              )}
+            >
+              <Smartphone size={13} /> Android
+            </button>
+          </div>
+        ) : (
+          <span className="text-[15px] font-semibold text-ink">Computer</span>
+        )}
         <button
           onClick={() => dispatch({ type: "toggleComputer", open: false })}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -342,6 +376,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </button>
       </div>
 
+      {panelView === "android" && androidConnected ? (
+        <div className="flex-1 overflow-y-auto px-4 pt-2">
+          <AndroidDevicePanel status={androidStatus} />
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto px-5 pb-5">
           {/* Screen preview */}
           <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
@@ -569,6 +608,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </div>
         </div>
       </div>
+      )}
       {creatingRoutine && (
         <RoutineEditor
           bots={[bot]}

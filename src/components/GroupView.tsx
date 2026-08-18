@@ -256,7 +256,7 @@ export function GroupView({ group }: { group: Group }) {
   const appliedFocus = useRef<number | null>(null);
   useEffect(() => {
     const focus = state.focusMessage;
-    if (!focus || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
+    if (!focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
     const targetIndex = group.messages.findIndex((message) => message.id === focus.messageId);
     if (targetIndex < 0) return;
     appliedFocus.current = focus.nonce;

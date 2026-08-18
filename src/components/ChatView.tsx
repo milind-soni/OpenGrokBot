@@ -706,7 +706,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   const appliedFocus = useRef<number | null>(null);
   useEffect(() => {
     const focus = state.focusMessage;
-    if (!focus || focus.threadId !== bot.threadId || appliedFocus.current === focus.nonce) return;
+    if (!focus || focus.consumed || focus.threadId !== bot.threadId || appliedFocus.current === focus.nonce) return;
     const targetIndex = messages.findIndex((message) => message.id === focus.messageId);
     if (targetIndex < 0) return;
     appliedFocus.current = focus.nonce;

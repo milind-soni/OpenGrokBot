@@ -7,6 +7,7 @@ import { api, useStore, type Bot, type Group } from "@/state/store";
 import { rankByName } from "@/lib/palette-rank";
 import { cn } from "@/lib/cn";
 import type { SearchHit } from "@/lib/search-hit";
+import { landOnSearchHit } from "@/lib/focus-message";
 
 type PaletteEntry =
   | { kind: "bot"; bot: Bot }
@@ -90,29 +91,8 @@ export function CommandPalette() {
   const activate = async (entry: PaletteEntry) => {
     if (entry.kind === "message") {
       const hit = entry.hit;
-      const id = hit.botId ?? hit.groupId;
-      if (!id) return;
-      const targetBot = hit.botId ? state.bots.find((b) => b.id === hit.botId) : undefined;
-      const targetGroup = hit.groupId ? state.groups.find((g) => g.id === hit.groupId) : undefined;
-      if (!targetBot && !targetGroup) return;
       try {
-        dispatch({ type: "select", id });
-        // Wait for the exact task before focusing; the old optimistic action
-        // raced the focus request against loading its messages.
-        if (targetBot && targetBot.threadId !== hit.threadId) {
-          const result = await api(`/api/bots/${targetBot.id}/tasks/${hit.threadId}`, { method: "POST" });
-          if (result?.bot) dispatch({ type: "taskSwitched", bot: result.bot });
-        }
-        if (targetBot && !hit.onActivePath) {
-          const branch = await api(`/api/bots/${targetBot.id}/active-branch`, {
-            method: "POST",
-            body: JSON.stringify({ messageId: hit.messageId }),
-          });
-          if (branch?.activeLeafId) {
-            dispatch({ type: "threadActive", threadId: hit.threadId, activeLeafId: branch.activeLeafId });
-          }
-        }
-        dispatch({ type: "focusMessage", threadId: hit.threadId, messageId: hit.messageId });
+        await landOnSearchHit(hit, state, dispatch);
       } catch (error) {
         dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
       }

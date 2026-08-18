@@ -4,10 +4,11 @@
 // bot, right task, right branch — rather than just opening the chat.
 import { useEffect, useState } from "react";
 import { GitBranch, Wrench } from "lucide-react";
-import { api, useStore, formatTime, type Bot } from "@/state/store";
+import { api, useStore, formatTime } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
 import type { SearchHit } from "@/lib/search-hit";
+import { landOnSearchHit } from "@/lib/focus-message";
 
 export const MIN_QUERY = 2;
 const DEBOUNCE_MS = 250;
@@ -44,31 +45,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
 
   const land = async (hit: SearchHit) => {
     try {
-      const ownerId = hit.botId ?? hit.groupId;
-      if (!ownerId) throw new Error("That conversation is no longer available.");
-      dispatch({ type: "select", id: ownerId });
-      if (hit.botId) {
-        const bot = state.bots.find((b) => b.id === hit.botId);
-        if (bot && bot.threadId !== hit.threadId) {
-          // another task: switch first so the thread's messages are on screen
-          const r = await api(`/api/bots/${hit.botId}/tasks/${hit.threadId}`, { method: "POST" });
-          if (r?.bot) dispatch({ type: "taskSwitched", bot: r.bot as Bot });
-        }
-        // only when the hit is on an abandoned version — this rewinds the
-        // leaf and marks the provider session stale, so never do it idly
-        if (!hit.onActivePath) {
-          const branch = await api(`/api/bots/${hit.botId}/active-branch`, {
-            method: "POST",
-            body: JSON.stringify({ messageId: hit.messageId }),
-          });
-          // The store also broadcasts this over SSE, but apply the response
-          // now so rendering the target never depends on cross-stream timing.
-          if (branch?.activeLeafId) {
-            dispatch({ type: "threadActive", threadId: hit.threadId, activeLeafId: branch.activeLeafId });
-          }
-        }
-      }
-      dispatch({ type: "focusMessage", threadId: hit.threadId, messageId: hit.messageId });
+      await landOnSearchHit(hit, state, dispatch);
       onLanded();
     } catch (e) {
       dispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });

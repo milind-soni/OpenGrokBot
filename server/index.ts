@@ -2160,6 +2160,7 @@ const server = createServer(async (req, res) => {
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
+          if (!bot && !group) return null;
           const active = onActivePath(hit.threadId, hit.messageId);
           if (bot) {
             const task = store.taskByThread(bot.id, hit.threadId);

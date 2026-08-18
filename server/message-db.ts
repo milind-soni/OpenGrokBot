@@ -229,7 +229,8 @@ export function searchMessages(query: string, limit = 40): SearchHit[] {
       kind: row.kind,
       snippet,
       matchStart: matchStart < 0 ? head.length : matchStart,
-      matchLength: folded.length,
+      // A defensive fallback must not mark arbitrary snippet text as the hit.
+      matchLength: matchStart < 0 ? 0 : folded.length,
       ...(row.from_name ? { from: row.from_name } : {}),
     };
   });

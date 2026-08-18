@@ -62,7 +62,7 @@ function BotUsageCard({ bot }: { bot: Bot }) {
         </div>
         <div>
           <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Cost</div>
-          <div className="mt-0.5 tabular-nums text-ink">{usage.costUsd === null ? "—" : formatUsd(usage.costUsd)}</div>
+          <div className="mt-0.5 tabular-nums text-ink">{typeof usage.costUsd === "number" ? formatUsd(usage.costUsd) : "—"}</div>
         </div>
       </div>
       <div className="mt-2 text-[12px] text-ink-secondary">

@@ -1018,7 +1018,7 @@ function UsageChip({ bot }: { bot: Bot }) {
   const detail = [
     `${usage.turns} turn${usage.turns === 1 ? "" : "s"}`,
     `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`,
-    usage.costUsd !== null ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
+    typeof usage.costUsd === "number" ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
   ]
     .filter(Boolean)
     .join("\n");

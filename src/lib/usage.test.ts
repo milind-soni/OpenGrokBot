@@ -16,6 +16,14 @@ describe("usage formatting", () => {
     expect(formatUsd(0.31)).toBe("$0.31");
   });
 
+  it("does not throw on missing usage fields from older bots.json", () => {
+    expect(formatUsd(undefined as unknown as number)).toBe("");
+    expect(formatTokens(undefined as unknown as number)).toBe("0");
+    expect(
+      usageChip({ input: 100, output: 20, turns: 1 } as { input: number; output: number; costUsd: null; turns: number }),
+    ).toBe("120 tok");
+  });
+
   it("builds the chip: tokens always, cost only when known, nothing when unused", () => {
     expect(usageChip({ input: 0, output: 0, costUsd: null, turns: 0 })).toBe("");
     expect(usageChip({ input: 10_000, output: 2_400, costUsd: null, turns: 3 })).toBe("12.4k tok");

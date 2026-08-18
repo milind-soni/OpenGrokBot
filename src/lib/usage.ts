@@ -23,6 +23,7 @@ export function botUsage(bot: Pick<Bot, "tasks">): TaskUsage {
 
 /** 950 → "950", 12_400 → "12.4k", 2_300_000 → "2.3M" */
 export function formatTokens(n: number): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "0";
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${trim(n / 1000)}k`;
   return `${trim(n / 1_000_000)}M`;
@@ -31,6 +32,7 @@ const trim = (x: number) => (x >= 100 ? Math.round(x).toString() : x.toFixed(1).
 
 /** Dollars, with enough precision that a cheap turn isn't "$0.00". */
 export function formatUsd(usd: number): string {
+  if (typeof usd !== "number" || !Number.isFinite(usd)) return "";
   if (usd === 0) return "$0";
   if (usd < 0.01) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;

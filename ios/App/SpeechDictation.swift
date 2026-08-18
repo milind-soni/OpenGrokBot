@@ -17,7 +17,6 @@
 // the opposite of that.
 import AVFoundation
 import Speech
-import SwiftUI
 import CompanionCore
 
 @MainActor
@@ -56,7 +55,7 @@ final class SpeechDictation: ObservableObject {
         }
     }
 
-    func start(base: String) {
+    private func start(base: String) {
         guard !isListening, !starting else { return }
         error = nil
         self.base = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,14 +179,14 @@ final class SpeechDictation: ObservableObject {
         stopping = false
         isListening = true
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, recognitionError in
             Task { @MainActor in
-                self?.handle(result: result, error: error)
+                self?.handle(result: result, recognitionError: recognitionError)
             }
         }
     }
 
-    private func handle(result: SFSpeechRecognitionResult?, error: Error?) {
+    private func handle(result: SFSpeechRecognitionResult?, recognitionError: Error?) {
         if let result {
             transcript = result.bestTranscription.formattedString
             // Composer dictation does not wait for isFinal — the last
@@ -197,8 +196,8 @@ final class SpeechDictation: ObservableObject {
                 stop()
             }
         }
-        guard let error, !stopping, isListening else { return }
-        let ns = error as NSError
+        guard let recognitionError, !stopping, isListening else { return }
+        let ns = recognitionError as NSError
         // 209/216 are the cancellation codes Speech uses when we tear
         // the task down ourselves. Surfacing those as "Couldn't
         // transcribe that" is how a tap-to-stop looks like a failure.

@@ -234,7 +234,10 @@ struct ChatView: View {
     }
 
     private func submit() {
-        if dictation.isListening { dictation.stop() }
+        // Always, not only when `isListening`: send during the permission
+        // prompt must cancel the in-flight start, or capture would begin
+        // after the message has already left.
+        dictation.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""

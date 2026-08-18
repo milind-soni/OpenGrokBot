@@ -34,7 +34,7 @@ real `URLSession` tests:
 
 ## Layout
 
-```
+```text
 ios/
   Package.swift                  CompanionCore + its tests
   project.yml                    XcodeGen spec for the app target
@@ -91,8 +91,11 @@ scope`, which reads like a code error and is not one.
 If you'd rather not install XcodeGen, make an iOS App target by hand, add the
 `App/` folder and the local `CompanionCore` package, and copy the Info.plist
 keys out of `project.yml` — `NSLocalNetworkUsageDescription` and
-`NSBonjourServices` especially. Without them `NWBrowser` returns no results at
-all, *silently*, which looks exactly like "no computers on this network".
+`NSBonjourServices` especially, plus `NSMicrophoneUsageDescription` and
+`NSSpeechRecognitionUsageDescription` for the composer mic. Without the
+Bonjour pair, `NWBrowser` returns no results at all, *silently*, which looks
+exactly like "no computers on this network". Without the speech pair, the
+first tap on the mic crashes rather than prompting.
 
 ## Regenerating the fixtures
 

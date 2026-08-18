@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Circle, Loader2, RotateCcw, ShieldCheck, Smartphone } from "lucide-react";
+import { ArrowLeft, Circle, Loader2, RotateCcw, ShieldCheck, Smartphone, Usb } from "lucide-react";
 import type { AndroidDeviceInput, AndroidDeviceStatus, AndroidUsbDevice } from "@/types/ogb";
 
 type UnitPoint = { x: number; y: number };
@@ -313,6 +313,27 @@ export function AndroidDevicePanel({ status }: { status: AndroidDeviceStatus }) 
           {error}
         </div>
       )}
+
+      <div className="rounded-xl bg-card p-4">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+          <Usb size={15} className="text-accent" /> First-time USB setup
+        </div>
+        <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-[11.5px] leading-relaxed text-ink-secondary">
+          <li>Connect the phone with a data-capable USB cable and keep it unlocked.</li>
+          <li>
+            Enable Developer options by tapping <span className="text-ink">Build number</span> seven times in
+            About phone, then turn on <span className="text-ink">USB debugging</span>.
+          </li>
+          <li>
+            Accept <span className="text-ink">Allow USB debugging</span> on the phone. You can choose Always allow
+            for this trusted computer.
+          </li>
+        </ol>
+        <div className="mt-2 text-[11px] leading-relaxed text-ink-secondary">
+          Agent control uses this same authorized USB connection. No phone companion app, account, Tailscale, or
+          wireless pairing is needed.
+        </div>
+      </div>
     </div>
   );
 }

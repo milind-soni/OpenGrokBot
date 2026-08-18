@@ -30,6 +30,7 @@ struct PairingView: View {
                 if let chosen {
                     codeSection(for: chosen)
                 } else {
+                    setupSection
                     discoverySection
                     manualSection
                 }
@@ -40,15 +41,14 @@ struct PairingView: View {
                     }
                 }
 
-                Section {
-                    Text("On your computer, open OpenMausBot → Settings → Companion, turn it on, and start pairing.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Pair with a computer")
-            .onAppear { discovery.start() }
+            .onAppear {
+                discovery.start()
+                accept(session.pairingInvite)
+            }
             .onDisappear { discovery.stop() }
+            .onChange(of: session.pairingInvite) { _, invite in accept(invite) }
             .task {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 searchedLongEnough = true
@@ -57,6 +57,16 @@ struct PairingView: View {
     }
 
     // MARK: - Choosing a computer
+
+    private var setupSection: some View {
+        Section("On your computer") {
+            Label("Open OpenMausBot → Settings → Companion", systemImage: "1.circle.fill")
+            Label("Choose Set up a phone", systemImage: "2.circle.fill")
+            Text("Then select the computer below and enter its code. You can also scan the QR code with this phone's Camera to fill everything in automatically.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private var discoverySection: some View {
         Section("On this network") {
@@ -136,7 +146,7 @@ struct PairingView: View {
                 .font(.system(.title, design: .monospaced))
                 .multilineTextAlignment(.center)
                 .onChange(of: code) { _, value in
-                    code = String(value.filter(\.isNumber).prefix(6))
+                    code = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
                 }
 
             Button {
@@ -145,7 +155,7 @@ struct PairingView: View {
                 if pairing {
                     ProgressView()
                 } else {
-                    Text("Pair")
+                    Text("Connect")
                 }
             }
             .disabled(code.count != 6 || pairing)
@@ -170,6 +180,14 @@ struct PairingView: View {
             failure = error.localizedDescription
             code = ""
         }
+    }
+
+    private func accept(_ invite: PairingInvite?) {
+        guard let invite else { return }
+        chosen = invite.connection
+        code = invite.code
+        failure = nil
+        session.consumePairingInvite()
     }
 
     // MARK: - Helpers

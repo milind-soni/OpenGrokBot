@@ -113,6 +113,47 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// A pairing window handed from the desktop to the app as a QR/deep link.
+/// It contains only the address and the same six-digit, two-minute code the
+/// desktop already shows. The long-lived device token is created later by
+/// `CompanionClient.pair` and never appears in the link.
+public struct PairingInvite: Equatable, Sendable {
+    public let connection: Connection
+    public let code: String
+
+    public init(connection: Connection, code: String) {
+        self.connection = connection
+        self.code = code
+    }
+
+    public static func parse(_ url: URL) -> PairingInvite? {
+        guard url.scheme?.lowercased() == "openmausbot",
+              url.host?.lowercased() == "pair",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+
+        var values: [String: String] = [:]
+        for item in components.queryItems ?? [] {
+            guard values[item.name] == nil, let value = item.value else { return nil }
+            values[item.name] = value
+        }
+        guard let address = values["address"],
+              let code = values["code"],
+              code.utf8.count == 6,
+              code.utf8.allSatisfy({ (48...57).contains($0) }),
+              var connection = Connection.parse(address)
+        else { return nil }
+
+        if let name = values["name"]?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            let cleaned = name.filter {
+                (!$0.isASCII && !$0.isNewline) || $0.asciiValue.map { $0 >= 32 && $0 != 127 } == true
+            }
+            if !cleaned.isEmpty { connection.name = String(cleaned.prefix(80)) }
+        }
+        return PairingInvite(connection: connection, code: code)
+    }
+}
+
 public enum APIError: Error, LocalizedError, Sendable {
     /// The harness answered, and said no.
     case status(code: Int, message: String?)

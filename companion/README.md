@@ -84,8 +84,10 @@ on your phone, enter  macbook.tail1234.ts.net:8810
 ```
 
 Open the pairing page, click **Start pairing**, and type the six digits into
-the phone. Stopping the process is the off switch — running it *is* the
-opt-in, so there is no toggle to forget.
+the phone. The normal desktop panel also turns that short-lived code and the
+dialable address into a QR handoff, so the mobile app can fill both in without
+putting the long-lived device token in the QR. Stopping the process is the off
+switch — running it *is* the opt-in, so there is no toggle to forget.
 
 That is the standalone way to run it, and it is what to reach for when the
 harness is running on its own — a headless box, or `pnpm dev:server` in a

@@ -11,7 +11,7 @@ same harness the desktop app talks to, through the restricted sidecar described 
 ## Status
 
 Built and verified against a real harness on both a simulator and an iPhone:
-Bonjour discovery, manual LAN and Tailscale pairing, the roster, paged chat,
+QR handoff, Bonjour discovery, manual LAN and Tailscale pairing, the roster, paged chat,
 streaming replies, the computer view, and — the one that matters — an approval
 raised by a bot on the Mac, answered on the phone, with the bot carrying on.
 
@@ -55,7 +55,7 @@ ios/
     Discovery.swift              NWBrowser for _openmausbot._tcp
     Keychain.swift               the device token
     MausAvatar.swift             the mascot face, in the desktop's palette
-    PairingView.swift            find a computer, type the six digits
+    PairingView.swift            QR handoff, discovery, address and code fallback
     ChatListView.swift           roster, with "waiting on you" pulled to the top
     ChatView.swift               transcript, approval cards, composer
     ComputerView.swift           opt-in live view of a bot's computer

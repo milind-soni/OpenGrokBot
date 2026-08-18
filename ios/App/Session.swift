@@ -38,6 +38,8 @@ final class Session: ObservableObject {
     /// One exact message the next opened chat should reveal.
     @Published private(set) var focusedMessageId: String?
     @Published private(set) var notificationAuthorization: UNAuthorizationStatus = .notDetermined
+    /// A short-lived desktop handoff waiting for PairingView to present it.
+    @Published private(set) var pairingInvite: PairingInvite?
 
     private var client: CompanionClient?
     private var streamTask: Task<Void, Never>?
@@ -133,6 +135,22 @@ final class Session: ObservableObject {
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
         connect()
+    }
+
+    func receivePairingURL(_ url: URL) {
+        guard status == .unpaired else {
+            actionError = "This phone is already paired. Unpair it in Settings before connecting it to another computer."
+            return
+        }
+        guard let invite = PairingInvite.parse(url) else {
+            actionError = "That pairing code is not valid. Start pairing again on your computer."
+            return
+        }
+        pairingInvite = invite
+    }
+
+    func consumePairingInvite() {
+        pairingInvite = nil
     }
 
     func signOut() {

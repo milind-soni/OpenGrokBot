@@ -16,6 +16,7 @@ struct CompanionApp: App {
             RootView()
                 .environmentObject(session)
                 .onAppear { session.connect() }
+                .onOpenURL { session.receivePairingURL($0) }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:

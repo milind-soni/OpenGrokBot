@@ -158,7 +158,14 @@ paid account is required to run on your own phone.
 
 On the phone, in order:
 
-1. **Pair.** The computer should appear by name. Tap it, type the code.
+1. **Pair.** In OpenMausBot → Settings → Companion, choose **Set up a
+   phone**. Scan the QR code with the phone's Camera, open OpenMausMobile,
+   confirm that the computer and six-digit code are filled in, then tap
+   **Connect**. The computer should also appear by name for the manual path:
+   tap it and type the same code.
+   - Relaunch the app after pairing once. It should return to the roster
+     without asking for another code; that proves the device token made it
+     into Keychain rather than only living in memory.
    - If the list stays empty, check in this order:
      1. **Local Network permission.** iOS asks once, and a denial is
         permanent and silent. Settings → OpenMausBot → Local Network. If the
@@ -224,9 +231,10 @@ so this is also how the phone reaches the Mac over cellular.
    `192.168.x.x` address, the sidecar could not find the Tailscale CLI — it
    asks once at startup, so turn the Companion toggle off and on again (or
    restart `pnpm companion` if running it by hand) after Tailscale is up.
-4. **On the phone:** pair by typing that name. Discovery does not help here —
-   Bonjour is multicast and a tailnet does not carry it — so the typed address
-   is the path, and it is the one path that works from anywhere.
+4. **On the phone:** scan the Companion panel's QR code, which carries that
+   MagicDNS name, or pair by typing the name. Discovery does not help here —
+   Bonjour is multicast and a tailnet does not carry it — so the QR/manual
+   address is the path, and it is the one path that works from anywhere.
 
 **Use the name, not the address.** Both reach the harness, but only the name
 gets past App Transport Security. iOS exempts local networking, and `100.64/10`

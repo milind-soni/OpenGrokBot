@@ -147,7 +147,9 @@ export function createProxyHandler(options: ProxyOptions) {
     if (method === "POST" && path === "/api/pair") {
       readJson(req).then(
         (body) => {
-          const result = options.redeem(String(body.code ?? ""), body.deviceName);
+          // New clients redeem the high-entropy credential carried by the QR.
+          // `code` remains accepted for manual entry and older mobile builds.
+          const result = options.redeem(String(body.credential ?? body.code ?? ""), body.deviceName);
           if ("error" in result) return sendJson(res, 401, { error: result.error });
           return sendJson(res, 201, { ...result, serverName: options.serverName() });
         },

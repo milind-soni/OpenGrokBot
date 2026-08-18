@@ -6,8 +6,10 @@ To review the app:
 
 1. Install and start OpenMausBot on a Mac, Windows, or Linux computer.
 2. Open **Settings → Companion**, enable the companion, and choose **Start pairing**.
-3. On the iPhone, select the discovered computer or enter the address shown by the desktop panel.
-4. Enter the six-digit pairing code.
+3. On the iPhone, choose **Scan QR Code**, scan the code shown by the desktop,
+   review the computer and address, and confirm pairing.
+4. If the camera is unavailable, select the discovered computer or enter the
+   address and six-digit code shown by the desktop panel.
 5. Create a bot on the desktop or with the `+` button in the iPhone roster, then send a message.
 
 The phone and computer must be on the same trusted network. Alternatively, both may be signed into the same Tailscale network and the reviewer may enter the computer's `.ts.net` MagicDNS name.

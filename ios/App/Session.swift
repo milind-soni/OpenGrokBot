@@ -116,11 +116,15 @@ final class Session: ObservableObject {
         status = .connecting
     }
 
-    /// Redeem a pairing code. On success the token goes to the keychain and
-    /// the connection to defaults — deliberately apart, so the thing that
-    /// gets backed up is never the credential.
-    func pair(with connection: Connection, code: String, deviceName: String) async throws {
-        let paired = try await CompanionClient.pair(connection: connection, code: code, deviceName: deviceName)
+    /// Redeem a one-time pairing credential. On success the device token goes
+    /// to the keychain and the connection to defaults — deliberately apart,
+    /// so the thing that gets backed up is never the credential.
+    func pair(with connection: Connection, credential: String, deviceName: String) async throws {
+        let paired = try await CompanionClient.pair(
+            connection: connection,
+            credential: credential,
+            deviceName: deviceName
+        )
         // prefer the name the computer calls itself over the Bonjour label
         var stored = connection
         if !paired.serverName.isEmpty { stored.name = paired.serverName }
@@ -143,7 +147,7 @@ final class Session: ObservableObject {
             return
         }
         guard let invite = PairingInvite.parse(url) else {
-            actionError = "That pairing code is not valid. Start pairing again on your computer."
+            actionError = "That pairing invitation is not valid. Start pairing again on your computer."
             return
         }
         pairingInvite = invite

@@ -114,16 +114,17 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// A pairing window handed from the desktop to the app as a QR/deep link.
-/// It contains only the address and the same six-digit, two-minute code the
-/// desktop already shows. The long-lived device token is created later by
-/// `CompanionClient.pair` and never appears in the link.
+/// It contains only the address and a short-lived, single-use credential.
+/// New desktop builds put a high-entropy token in the QR; older builds carry
+/// the same six-digit code shown on screen. The long-lived device token is
+/// created later by `CompanionClient.pair` and never appears in the link.
 public struct PairingInvite: Equatable, Sendable {
     public let connection: Connection
-    public let code: String
+    public let credential: String
 
-    public init(connection: Connection, code: String) {
+    public init(connection: Connection, credential: String) {
         self.connection = connection
-        self.code = code
+        self.credential = credential
     }
 
     public static func parse(_ url: URL) -> PairingInvite? {
@@ -138,9 +139,7 @@ public struct PairingInvite: Equatable, Sendable {
             values[item.name] = value
         }
         guard let address = values["address"],
-              let code = values["code"],
-              code.utf8.count == 6,
-              code.utf8.allSatisfy({ (48...57).contains($0) }),
+              let credential = Self.credential(from: values),
               var connection = Connection.parse(address)
         else { return nil }
 
@@ -150,7 +149,25 @@ public struct PairingInvite: Equatable, Sendable {
             }
             if !cleaned.isEmpty { connection.name = String(cleaned.prefix(80)) }
         }
-        return PairingInvite(connection: connection, code: code)
+        return PairingInvite(connection: connection, credential: credential)
+    }
+
+    private static func credential(from values: [String: String]) -> String? {
+        if let token = values["token"] {
+            guard token.hasPrefix("omb_pair_"),
+                  token.utf8.count == 52,
+                  token.dropFirst("omb_pair_".count).utf8.allSatisfy({
+                      (48...57).contains($0) || (65...90).contains($0) ||
+                      (97...122).contains($0) || $0 == 45 || $0 == 95
+                  })
+            else { return nil }
+            return token
+        }
+        guard let code = values["code"],
+              code.utf8.count == 6,
+              code.utf8.allSatisfy({ (48...57).contains($0) })
+        else { return nil }
+        return code
     }
 }
 
@@ -262,15 +279,26 @@ public struct CompanionClient: Sendable {
 
     // MARK: - Pairing
 
-    /// Redeem a code for a device token. The only call made without one.
+    /// Redeem a one-time pairing credential for a device token. The only call
+    /// made without a device token.
     public static func pair(
         connection: Connection,
-        code: String,
+        credential: String,
         deviceName: String,
         session: URLSession = .shared
     ) async throws -> PairResponse {
         let client = CompanionClient(connection: connection, token: nil, session: session)
-        let pairRequest = try client.makeRequest("POST", "/api/pair", body: ["code": code, "deviceName": deviceName])
+        // A six-digit credential is an older desktop or manual entry. Keep
+        // its field name for compatibility; new QR credentials use the
+        // explicit field and are never persisted by the app.
+        let key = credential.utf8.count == 6 && credential.utf8.allSatisfy({ (48...57).contains($0) })
+            ? "code"
+            : "credential"
+        let pairRequest = try client.makeRequest(
+            "POST",
+            "/api/pair",
+            body: [key: credential, "deviceName": deviceName]
+        )
         return try await client.send(pairRequest, as: PairResponse.self)
     }
 

@@ -28,14 +28,16 @@ export interface DeviceRecord {
 /** What the UI is allowed to see: a device without its secret. */
 export type PublicDevice = Omit<DeviceRecord, "tokenHash">;
 
-/** A pairing window: one short-lived code, deliberately single-use.
+/** A pairing window: two short-lived credentials, deliberately single-use.
  *
- * Six digits is only 1e6 possibilities, which is brute-forceable in seconds
- * against a LAN service — so the code is never the whole defence. It lives
- * for two minutes, dies after a handful of wrong guesses, and only exists at
- * all while the user is looking at the pairing screen. */
+ * `token` is the primary path carried inside the QR code. It has enough
+ * entropy to stand on its own and is never typed or persisted. `code` is the
+ * human fallback: six digits is only 1e6 possibilities, so it lives for two
+ * minutes, dies after a handful of wrong guesses, and only exists while the
+ * user is looking at the pairing screen. Redeeming either burns both. */
 export interface PairingWindow {
   code: string;
+  token: string;
   expiresAt: number;
   attemptsLeft: number;
 }
@@ -62,9 +64,9 @@ function sameDigest(a: string, b: string): boolean {
   }
 }
 
-/** Same treatment for the pairing code, which is compared far more often
+/** Same treatment for a pairing credential, which is compared far more often
  * than it is correct. */
-function sameCode(a: string, b: string): boolean {
+function sameCredential(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
   const right = Buffer.from(b, "utf8");
   if (left.length !== right.length) return false;
@@ -163,6 +165,7 @@ export class DeviceRegistry {
   openPairing(): PairingWindow {
     this.window = {
       code: String(randomInt(0, 1_000_000)).padStart(6, "0"),
+      token: `omb_pair_${randomBytes(32).toString("base64url")}`,
       expiresAt: Date.now() + PAIRING_TTL_MS,
       attemptsLeft: MAX_PAIRING_ATTEMPTS,
     };
@@ -173,14 +176,15 @@ export class DeviceRegistry {
     this.window = null;
   }
 
-  /** Redeem a pairing code for a device token.
+  /** Redeem either pairing credential for a device token.
    *
    * The token is returned exactly once, here. There is no endpoint that can
    * read it back — a phone that loses it pairs again. */
-  redeem(code: string, name: unknown): { device: PublicDevice; token: string } | { error: string } {
+  redeem(credential: string, name: unknown): { device: PublicDevice; token: string } | { error: string } {
     const window = this.pairing();
     if (!window) return { error: "no pairing is in progress — open Companion settings on your computer" };
-    if (!sameCode(window.code, String(code ?? ""))) {
+    const presented = String(credential ?? "");
+    if (!sameCredential(window.code, presented) && !sameCredential(window.token, presented)) {
       window.attemptsLeft -= 1;
       // A burned window is the whole point: without this, six digits is a
       // few seconds of guessing.
@@ -188,7 +192,7 @@ export class DeviceRegistry {
         this.closePairing();
         return { error: "too many incorrect codes — start pairing again" };
       }
-      return { error: "that code is not right" };
+      return { error: "that pairing credential is not right" };
     }
     // After the code, not before. Checked first, a full fleet answers every
     // wrong guess with "too many paired devices" — which tells a guesser

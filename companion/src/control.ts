@@ -98,7 +98,7 @@ export function companionState(options: ControlOptions) {
     ...(tailscale ? { tailscale } : {}),
     ...(tailscale && name ? { tailnetName: name } : {}),
     lan: addresses.find((a) => a !== tailscale) ?? null,
-    pairing: pairing ? { code: pairing.code, expiresAt: pairing.expiresAt } : null,
+    pairing: pairing ? { code: pairing.code, token: pairing.token, expiresAt: pairing.expiresAt } : null,
     devices: options.devices.list(),
     discovery: options.discovery(),
   };
@@ -163,7 +163,14 @@ export function createControlServer(options: ControlOptions): Server {
     if (method === "GET" && path === "/state") return json(res, 200, companionState(options));
     if (method === "POST" && path === "/pairing") {
       const window = options.devices.openPairing();
-      return json(res, 201, { ...companionState(options), code: window.code });
+      // Keep the freshly issued credentials at the top level as well as in
+      // `pairing`, matching the existing code response and making this write
+      // sufficient for native control clients that do not immediately poll.
+      return json(res, 201, {
+        ...companionState(options),
+        code: window.code,
+        token: window.token,
+      });
     }
     if (method === "DELETE" && path === "/pairing") {
       options.devices.closePairing();

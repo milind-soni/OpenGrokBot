@@ -1,6 +1,6 @@
 // Companion device registry contract. The three properties that matter:
-// a token is never recoverable from disk, a pairing code cannot be ground
-// down by guessing, and revoking a device actually revokes it.
+// a token is never recoverable from disk, pairing credentials are one-time,
+// a manual code cannot be ground down by guessing, and revocation works.
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,7 +106,7 @@ describe("DeviceRegistry", () => {
     const wrong = code === "000000" ? "111111" : "000000";
 
     for (let i = 1; i < MAX_PAIRING_ATTEMPTS; i++) {
-      expect(registry.redeem(wrong, "iPhone")).toEqual({ error: "that code is not right" });
+      expect(registry.redeem(wrong, "iPhone")).toEqual({ error: "that pairing credential is not right" });
       expect(registry.pairing()).not.toBeNull();
     }
     // the last one closes the window rather than counting down forever
@@ -123,6 +123,18 @@ describe("DeviceRegistry", () => {
     const { code } = registry.openPairing();
     expect(registry.redeem(code, "iPhone")).toHaveProperty("token");
     expect(registry.redeem(code, "iPad")).toMatchObject({ error: expect.stringContaining("no pairing") });
+    expect(registry.count()).toBe(1);
+  });
+
+  it("uses a high-entropy QR credential and burns the manual fallback with it", () => {
+    const registry = new DeviceRegistry();
+    const { code, token } = registry.openPairing();
+
+    expect(token).toMatch(/^omb_pair_[A-Za-z0-9_-]{43}$/);
+    expect(registry.redeem(token, "iPhone")).toHaveProperty("token");
+    expect(registry.redeem(code, "iPad")).toMatchObject({
+      error: expect.stringContaining("no pairing"),
+    });
     expect(registry.count()).toBe(1);
   });
 

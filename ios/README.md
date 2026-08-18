@@ -56,6 +56,7 @@ ios/
     Keychain.swift               the device token
     MausAvatar.swift             the mascot face, in the desktop's palette
     PairingView.swift            QR handoff, discovery, address and code fallback
+    PairingScanner.swift         native QR camera, permission and recovery UI
     ChatListView.swift           roster, with "waiting on you" pulled to the top
     ChatView.swift               transcript, approval cards, composer
     ComputerView.swift           opt-in live view of a bot's computer
@@ -131,6 +132,10 @@ mean losing the ability to lock it out.
 
 - **Zero third-party dependencies.** The raw-byte SSE reader, Keychain,
   `NWBrowser`, and notifications are all first-party.
+- **QR scan confirms before connecting.** The QR carries a short-lived,
+  high-entropy credential rather than relying on the visible six-digit code.
+  The app validates the target, asks the user to confirm it, exchanges the
+  credential once, and persists only the resulting device token in Keychain.
 - **Thin client.** The harness already folds provider events into settled
   messages. The phone folds `message`, `message.patch`, and `bot` frames, plus
   the small `runtime` delta subset needed to show a reply while it is typed.

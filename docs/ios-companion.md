@@ -12,7 +12,8 @@ The first version includes:
 
 - Bonjour discovery on the same LAN and manual address entry.
 - Remote access through a Tailscale MagicDNS name.
-- One-time pairing codes, per-device tokens, device listing, and revocation.
+- QR-first pairing with a short-lived, single-use credential and a six-digit
+  manual fallback, plus per-device tokens, device listing, and revocation.
 - Bot and room lists, paged transcripts, sending, interruption, and unread
   state.
 - Approvals and questions, including narrow “always allow” grants.
@@ -87,7 +88,7 @@ The sidecar advertises `_openmausbot._tcp` over Bonjour. The app browses with
 `NWBrowser`, resolves the chosen service, and connects directly. If multicast
 is unavailable, the desktop shows the LAN address for manual entry.
 
-LAN traffic is plain HTTP. Use it only on a network you trust. Pairing tokens
+LAN traffic is plain HTTP. Use it only on a network you trust. Device tokens
 are bearer credentials, so someone able to observe that LAN traffic could copy
 one until the device is revoked.
 
@@ -109,14 +110,27 @@ the local data in this design.
 
 ## Pairing and device security
 
-1. The user enables Companion in desktop Settings.
-2. The desktop opens a short-lived six-digit pairing window.
-3. The phone sends the code and a device name to `POST /api/pair`.
-4. The sidecar returns a random device token once and stores only its SHA-256
-   digest.
-5. The phone stores the token in Keychain and sends it as a bearer token.
-6. Revoking the device on the Mac invalidates future requests and sends the
+1. The user enables Companion in desktop Settings and starts pairing.
+2. The desktop opens a two-minute pairing window. Its QR contains the reachable
+   address and a high-entropy, single-use credential; the visible six-digit code
+   remains available for manual entry and older app builds.
+3. The phone scans and validates the invitation, shows the computer and address,
+   and asks the user to confirm before it connects. Scanning never auto-pairs.
+4. The phone sends the one-time credential and a device name to `POST /api/pair`.
+   Redeeming either the QR credential or manual code closes the entire window,
+   so neither can be replayed.
+5. The sidecar returns a separate random device token once and stores only its
+   SHA-256 digest.
+6. The phone stores the device token in Keychain and sends it as a bearer token.
+   It never persists the QR credential or manual code.
+7. Revoking the device on the Mac invalidates future requests and sends the
    phone back to pairing.
+
+This mirrors the direct-pairing security shape used by T3 Code: a high-entropy
+bootstrap credential, explicit confirmation of the scanned target, and a
+one-time exchange for a securely stored long-lived credential. An OpenMausBot
+account is not required because the phone connects directly to the user's Mac;
+authentication would only become necessary for a future hosted relay.
 
 The device-facing socket rejects browser `Origin` headers before reading a
 token. Its route policy in `companion/src/routes.ts` is default-deny: a new

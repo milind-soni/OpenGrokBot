@@ -29,7 +29,7 @@ interface CompanionState {
   enabled: boolean;
   port: number;
   devices: Device[];
-  pairing: { code: string; expiresAt: number } | null;
+  pairing: { code: string; token: string; expiresAt: number } | null;
   /** Every address a phone could dial, and which of them is which. */
   addresses?: string[];
   /** The tailnet address, when this machine is on one. */
@@ -158,6 +158,7 @@ export function CompanionSection() {
           address,
           port: state.port,
           code: state.pairing.code,
+          token: state.pairing.token,
           name: state.discovery?.name,
         })
       : null;

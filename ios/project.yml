@@ -72,6 +72,9 @@ targets:
         NSLocalNetworkUsageDescription: >-
           OpenMausBot finds your computer on this network so your bots can
           reach you here.
+        NSCameraUsageDescription: >-
+          OpenMausBot uses the camera only to scan a pairing QR code shown on
+          your computer.
         NSBonjourServices:
           - _openmausbot._tcp
         # The companion listener is plain HTTP on a local address. ATS has

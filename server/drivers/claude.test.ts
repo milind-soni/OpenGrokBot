@@ -475,6 +475,37 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     conn.end();
   });
 
+  it("drops a late question on an already-closed broker with an answer, not a deny (#211)", async () => {
+    // systemEndedReply(kind) branches on "question" vs "permission" — cover
+    // the question arm too, since the deny arm above doesn't exercise it.
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-question-late", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-question-late"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+
+    await instance.adapter.interruptTurn("t-question-late");
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const reply = new Promise<{ id: string; behavior: string }>((resolve) => {
+      let buf = "";
+      conn.on("data", (c) => {
+        buf += c;
+        const nl = buf.indexOf("\n");
+        if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+      });
+    });
+    conn.write(JSON.stringify({ t: "ask", kind: "question", id: "q-late", tool: "ask_user", input: { question: "still there?" } }) + "\n");
+
+    expect(await reply).toMatchObject({ id: "q-late", behavior: "answer" });
+
+    conn.end();
+  });
+
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");

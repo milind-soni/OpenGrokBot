@@ -2,9 +2,9 @@
 //
 // Everything the phone can do to the harness, in one place. The rules it
 // encodes come from the default-deny policy in `companion/src/routes.ts`: a
-// paired phone may chat, answer approvals, and read rooms — it may not touch
-// credentials, pairing, or the Local VM. Those routes are simply absent here
-// rather than present and failing at runtime.
+// paired phone may chat, attach a file, answer approvals, and read rooms —
+// it may not touch credentials, pairing, or the Local VM. Those routes are
+// simply absent here rather than present and failing at runtime.
 import Foundation
 
 /// Where a companion connects, and with what. The token is *not* held here
@@ -150,6 +150,9 @@ public struct CompanionClient: Sendable {
     public let connection: Connection
     private let token: String?
     private let session: URLSession
+    /// RFC 3986 unreserved. Used for `X-OpenMaus-Filename` so the header
+    /// stays ASCII even when the photo is named in another script.
+    private static let filenameHeaderAllowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     public init(connection: Connection, token: String?, session: URLSession = .shared) {
         self.connection = connection
@@ -280,6 +283,25 @@ public struct CompanionClient: Sendable {
 
     public func send(text: String, toRoom groupId: String) async throws {
         try await send(try makeRequest("POST", "/api/groups/\(groupId)/messages", body: ["text": text]))
+    }
+
+    /// Put a phone file onto the computer. The sidecar writes the bytes and
+    /// returns a host path; send that path as `<attached-file>` the way the
+    /// desktop composer already does. Not forwarded to the harness.
+    public func upload(data: Data, filename: String) async throws -> InboxFile {
+        var request = try makeRequest("POST", "/api/inbox")
+        // Photos over a tailnet are larger than a chat message. Twenty
+        // seconds is the right timeout for the rest of this client and the
+        // wrong one here.
+        request.timeoutInterval = 60
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        // RFC 3986 unreserved only: this value is an HTTP header, so spaces,
+        // quotes and non-ASCII have to leave as percent-escapes. The sidecar
+        // runs them through decodeURIComponent before sanitising the name.
+        let encoded = filename.addingPercentEncoding(withAllowedCharacters: Self.filenameHeaderAllowed) ?? "file"
+        request.setValue(encoded, forHTTPHeaderField: "X-OpenMaus-Filename")
+        request.httpBody = data
+        return try await send(request, as: InboxFile.self)
     }
 
     /// Answer an approval or a question.

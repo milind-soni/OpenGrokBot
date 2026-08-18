@@ -15,6 +15,8 @@ import CompanionCore
 // lives.
 import UIKit
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     let chat: Chat
@@ -24,6 +26,13 @@ struct ChatView: View {
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
+    @State private var pending: [PendingAttachment] = []
+    @State private var attachError: String?
+    @State private var pickingPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var pickingCamera = false
+    @State private var pickingFiles = false
+    @State private var sendingAttachments = false
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -230,7 +239,11 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        sendingAttachments == false
+            && (
+                !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !pending.isEmpty
+            )
     }
 
     private func submit() {
@@ -239,9 +252,107 @@ struct ChatView: View {
         // after the message has already left.
         dictation.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        Task { await session.send(text, to: current) }
+        let ids = pending.map(\.id)
+        guard !text.isEmpty || !ids.isEmpty, !sendingAttachments else { return }
+        sendingAttachments = true
+        attachError = nil
+        Task {
+            var files: [Attachment.File] = []
+            for id in ids {
+                guard let index = pending.firstIndex(where: { $0.id == id }) else { continue }
+                if let host = pending[index].host {
+                    files.append(host)
+                    continue
+                }
+                let item = pending[index]
+                guard let stored = await session.upload(item.data, filename: item.name) else {
+                    sendingAttachments = false
+                    attachError = session.actionError ?? "Couldn't send that file."
+                    return
+                }
+                let file = Attachment.File(path: stored.path, name: stored.name, size: stored.size)
+                pending[index].host = file
+                files.append(file)
+            }
+            let body = Attachment.draft(text: text, files: files)
+            guard !body.isEmpty else {
+                sendingAttachments = false
+                return
+            }
+            let sent = await session.send(body, to: current)
+            sendingAttachments = false
+            guard sent else {
+                attachError = session.actionError ?? "Couldn't send that."
+                return
+            }
+            draft = ""
+            pending = []
+        }
+    }
+
+    private func addPhoto(_ image: UIImage, name: String = "photo.jpg") {
+        guard pending.count < PendingMedia.maxCount else {
+            attachError = "You can attach up to \(PendingMedia.maxCount) files."
+            return
+        }
+        guard let item = PendingMedia.jpegAttachment(from: image, name: uniqueName(name)) else {
+            attachError = "That image is too large to send."
+            return
+        }
+        attachError = nil
+        pending.append(item)
+    }
+
+    private func addFile(name: String, data: Data, preview: UIImage? = nil) {
+        guard !data.isEmpty else { return }
+        guard pending.count < PendingMedia.maxCount else {
+            attachError = "You can attach up to \(PendingMedia.maxCount) files."
+            return
+        }
+        guard data.count <= PendingMedia.maxBytes else {
+            attachError = "\(name) is larger than 8 MB."
+            return
+        }
+        attachError = nil
+        pending.append(PendingAttachment(name: uniqueName(name), data: data, preview: preview))
+    }
+
+    /// Chip labels stay distinct when two photos would otherwise both be `photo.jpg`.
+    private func uniqueName(_ name: String) -> String {
+        if !pending.contains(where: { $0.name == name }) { return name }
+        let ns = name as NSString
+        let ext = ns.pathExtension
+        let stem = ext.isEmpty ? name : ns.deletingPathExtension
+        var n = 2
+        while true {
+            let candidate = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
+            if !pending.contains(where: { $0.name == candidate }) { return candidate }
+            n += 1
+        }
+    }
+
+    private func consumePhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                addPhoto(image, name: "photo.jpg")
+            } else {
+                attachError = "Couldn't read that photo."
+            }
+        }
+        photoItems = []
+    }
+
+    private func consumeFiles(_ urls: [URL]) {
+        for url in urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else {
+                attachError = "Couldn't open \(url.lastPathComponent)."
+                continue
+            }
+            addFile(name: url.lastPathComponent, data: data, preview: UIImage(data: data))
+        }
     }
 
     private var composer: some View {
@@ -253,7 +364,29 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
             }
+            if attachError != nil || !pending.isEmpty {
+                ComposerAttachBar(items: $pending, error: attachError)
+            }
             HStack(spacing: 10) {
+                ComposerAttachMenu(
+                    enabled: !dictation.isListening && !sendingAttachments,
+                    onAttachImage: {
+                        dictation.stop()
+                        pickingPhotos = true
+                    },
+                    onTakePhoto: {
+                        dictation.stop()
+                        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                            attachError = "This device has no camera."
+                            return
+                        }
+                        pickingCamera = true
+                    },
+                    onChooseFile: {
+                        dictation.stop()
+                        pickingFiles = true
+                    }
+                )
                 TextField(
                     dictation.isListening ? "Listening…" : "Ask \(current.name)",
                     text: $draft,
@@ -325,6 +458,38 @@ struct ChatView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.bar)
+        .photosPicker(
+            isPresented: $pickingPhotos,
+            selection: $photoItems,
+            maxSelectionCount: 8,
+            matching: .images
+        )
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await consumePhotos(items) }
+        }
+        .fullScreenCover(isPresented: $pickingCamera) {
+            CameraPicker(
+                onImage: { image in
+                    pickingCamera = false
+                    addPhoto(image)
+                },
+                onCancel: { pickingCamera = false }
+            )
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $pickingFiles,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                consumeFiles(urls)
+            case .failure:
+                attachError = "Couldn't open that file."
+            }
+        }
     }
 }
 

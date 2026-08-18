@@ -41,6 +41,7 @@ describe("what the app may do", () => {
     ["GET", "/api/threads/th_1/messages"],
     ["GET", "/api/threads/th_1/messages/msg_2/image"],
     ["POST", "/api/threads/th_1/respond"],
+    ["POST", "/api/inbox"],
   ];
 
   for (const [method, path] of calls) {
@@ -84,6 +85,7 @@ describe("what it may not", () => {
   it("allows a path only for the methods it was allowed for", () => {
     expect(allowed("GET", "/api/bots")).toBe(true);
     expect(allowed("DELETE", "/api/bots/bot_123")).toBe(false);
+    expect(allowed("GET", "/api/inbox")).toBe(false);
     expect(allowed("POST", "/api/threads/th_1/messages")).toBe(false);
     expect(allowed("GET", "/api/groups/room-1")).toBe(false);
     expect(allowed("PATCH", "/api/bots/bot_123")).toBe(false);

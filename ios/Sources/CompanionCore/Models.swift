@@ -231,6 +231,13 @@ public struct PairResponse: Codable, Sendable {
     public var serverName: String
 }
 
+/// `POST /api/inbox` — the sidecar wrote this file onto the computer.
+public struct InboxFile: Codable, Sendable {
+    public var path: String
+    public var name: String
+    public var size: Int
+}
+
 public struct ProviderSnapshot: Codable, Hashable, Sendable {
     public var state: String
     public var reason: String?

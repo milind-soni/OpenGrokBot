@@ -14,6 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
+import { MAX_INBOX_BYTES, storeInboxFile } from "./inbox.ts";
 import { denyReason } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -76,6 +77,25 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
         reject(new Error("invalid JSON body"));
       }
     });
+  });
+
+/** Read a raw body, bounded. Used for the inbox: those bytes are a file,
+ * not JSON, and an unbounded read is a way to be memory-exhausted. */
+const readBytes = (req: IncomingMessage, limit: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("error", reject);
+    req.on("end", () => resolve(Buffer.concat(chunks)));
   });
 
 /** Answer with JSON the sidecar wrote itself — a refusal, or a pairing
@@ -152,6 +172,34 @@ export function createProxyHandler(options: ProxyOptions) {
           return sendJson(res, 201, { ...result, serverName: options.serverName() });
         },
         (error: Error) => sendJson(res, 400, { error: error.message }),
+      );
+      return;
+    }
+
+    // Phone attachments terminate here. Forwarding them would hand the
+    // harness a route it does not have. The sidecar writes the bytes onto
+    // this computer and returns the path; the next request is an ordinary
+    // text message carrying `<attached-file path="…">`.
+    if (method === "POST" && path === "/api/inbox") {
+      readBytes(req, MAX_INBOX_BYTES).then(
+        (bytes) => {
+          try {
+            const header = req.headers["x-openmaus-filename"];
+            const raw = Array.isArray(header) ? header[0] : header;
+            let filename = "file";
+            try {
+              filename = decodeURIComponent(String(raw ?? "file"));
+            } catch {
+              filename = String(raw ?? "file");
+            }
+            return sendJson(res, 201, storeInboxFile(bytes, filename));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "could not store that file";
+            return sendJson(res, message.includes("too large") ? 413 : 400, { error: message });
+          }
+        },
+        (error: Error) =>
+          sendJson(res, error.message === "body too large" ? 413 : 400, { error: error.message }),
       );
       return;
     }

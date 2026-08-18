@@ -277,12 +277,35 @@ final class Session: ObservableObject {
     // the source of truth, and a phone that draws its own version of events
     // is a phone that disagrees with the laptop.
 
-    func send(_ text: String, to chat: Chat) async {
-        await perform {
+    func send(_ text: String, to chat: Chat) async -> Bool {
+        guard let client else { return false }
+        do {
             switch chat {
-            case let .bot(bot): try await $0.send(text: text, toBot: bot.id)
-            case let .room(room): try await $0.send(text: text, toRoom: room.id)
+            case let .bot(bot): try await client.send(text: text, toBot: bot.id)
+            case let .room(room): try await client.send(text: text, toRoom: room.id)
             }
+            return true
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return false
+        } catch {
+            actionError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Write a phone file onto the computer. Returns the host path to fold
+    /// into the next message; the harness never sees the bytes.
+    func upload(_ data: Data, filename: String) async -> InboxFile? {
+        guard let client else { return nil }
+        do {
+            return try await client.upload(data: data, filename: filename)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
+        } catch {
+            actionError = error.localizedDescription
+            return nil
         }
     }
 

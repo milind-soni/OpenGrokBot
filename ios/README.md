@@ -45,12 +45,14 @@ ios/
     Client.swift                 every call the phone is allowed to make
     Store.swift                  the fold: frames → state
     Dictation.swift              composer text + transcript join
+    Attachments.swift            composer text + host file paths
   Tests/CompanionCoreTests/
     Fixtures/                    captured from a real server — do not hand-edit
     DecodingTests.swift          the contract with the harness
     SSETests.swift               the parser, which is where this goes wrong
     StoreTests.swift             the fold
     DictationTests.swift         partials replace, they do not stack
+    AttachmentTests.swift        tagged paths, escaped attributes
   App/                           SwiftUI, and everything that needs a device
     CompanionApp.swift           entry; owns when the stream lives and dies
     Session.swift                connection, lifecycle, actions
@@ -61,6 +63,8 @@ ios/
     ChatListView.swift           roster, with "waiting on you" pulled to the top
     ChatView.swift               transcript, approval cards, composer
     SpeechDictation.swift        SFSpeechRecognizer, press-to-stop
+    ComposerAttach.swift         pending files, plus menu, chips
+    CameraPicker.swift           take a photo for the composer
     ComputerView.swift           opt-in live view of a bot's computer
     MarkdownText.swift           the supported Markdown presentation layer
     SettingsView.swift           status, and unpair
@@ -92,10 +96,12 @@ If you'd rather not install XcodeGen, make an iOS App target by hand, add the
 `App/` folder and the local `CompanionCore` package, and copy the Info.plist
 keys out of `project.yml` — `NSLocalNetworkUsageDescription` and
 `NSBonjourServices` especially, plus `NSMicrophoneUsageDescription` and
-`NSSpeechRecognitionUsageDescription` for the composer mic. Without the
-Bonjour pair, `NWBrowser` returns no results at all, *silently*, which looks
-exactly like "no computers on this network". Without the speech pair, the
-first tap on the mic crashes rather than prompting.
+`NSSpeechRecognitionUsageDescription` for the composer mic, and
+`NSCameraUsageDescription` for Take Photo. Without the Bonjour pair,
+`NWBrowser` returns no results at all, *silently*, which looks exactly like
+"no computers on this network". Without the speech pair, the first tap on
+the mic crashes rather than prompting. Without the camera string, Take Photo
+does the same.
 
 ## Regenerating the fixtures
 
@@ -124,6 +130,7 @@ here by simply not having the methods:
 | **Answer approvals and questions** | Drive the Local VM |
 | Interrupt a bot, mark chats read | Reach `/api/internal/*` |
 | Fetch screen images on demand | Load the packaged desktop UI |
+| Attach a photo or file (`POST /api/inbox`) | Write bytes into the harness |
 
 Marking a chat read and remembering an approval use purpose-built server
 verbs. The sidecar does not expose the general bot or room `PATCH` routes,
@@ -166,11 +173,15 @@ mean losing the ability to lock it out.
   send so you can add another sentence by voice, and so you can stop
   without an Escape key. Search and the roster's "+" are real: the latter
   creates the same basic bot the desktop endpoint creates, then opens it.
+- **Composer attach is a photo or a file.** Plus menu: library, camera, or
+  Files. The sidecar writes the bytes onto this computer (`POST /api/inbox`)
+  and the message the bot receives is the same `<attached-file path="…">`
+  tag the desktop composer already sends. The harness never sees the bytes.
 
 ## Not in this version
 
 The app is foreground-only. There is no APNs delivery while it is closed, no
 call mode or spoken replies, no task-management or SQLite transcript-search UI,
-and no hosted relay. Composer dictation is in. Tailscale is supported through
-manual MagicDNS entry; it is not a dependency and OpenMausBot does not operate
-a cloud copy of local data.
+and no hosted relay. Composer dictation and photo/file attach are in. Tailscale
+is supported through manual MagicDNS entry; it is not a dependency and
+OpenMausBot does not operate a cloud copy of local data.

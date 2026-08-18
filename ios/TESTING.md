@@ -204,7 +204,14 @@ On the phone, in order:
    phone mid-sentence and confirm it is not still listening when you come
    back. Opening the computer panel must also release it (ChatView stays
    mounted under the push).
-7. **Revoke.** Remove the device in Settings → Companion on the computer. The
+7. **Attach.** Open a chat, tap +, pick Attach Image / Take Photo / Choose
+   File. A chip should appear above the field. Send with or without a caption.
+   On the computer, the file lands under the sidecar inbox
+   (`~/.openmausbot-companion/inbox/`) and the bot's prompt contains
+   `<attached-file path="…">` — the same tag a desktop drop produces. The
+   first Take Photo prompts for Camera. A simulator has no camera and should
+   say so rather than crash. Eight files, 8 MB each, is the ceiling.
+8. **Revoke.** Remove the device in Settings → Companion on the computer. The
    phone should land on "This phone was unpaired" rather than silently failing.
 
 ---
@@ -255,7 +262,7 @@ port — only the route to it is different.
 Not built yet, so not bugs:
 
 - **Nothing arrives while the app is closed.** No push until APNs.
-- **No call mode, spoken replies, routines, task management, or transcript search.** Composer dictation is in.
+- **No call mode, spoken replies, routines, task management, or transcript search.** Composer dictation and photo/file attach are in.
 
 (Two entries that used to sit on this list have since shipped: replies stream
 token by token as the provider emits them, and each bot has a computer panel —

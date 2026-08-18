@@ -93,3 +93,8 @@ targets:
         NSSpeechRecognitionUsageDescription: >-
           OpenMausMobile converts your speech into text so you can send it
           to a bot. Recognition runs on this phone when it can.
+        # Take Photo in the composer. PhotosPicker (the library) does not
+        # need a library string; the camera still does, and without it the
+        # first tap crashes rather than prompting.
+        NSCameraUsageDescription: >-
+          OpenMausMobile uses the camera so you can send a photo to a bot.

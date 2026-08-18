@@ -98,7 +98,7 @@ export function companionState(options: ControlOptions) {
     ...(tailscale ? { tailscale } : {}),
     ...(tailscale && name ? { tailnetName: name } : {}),
     lan: addresses.find((a) => a !== tailscale) ?? null,
-    pairing: pairing ? { code: pairing.code, expiresAt: pairing.expiresAt } : null,
+    pairing: pairing ? { code: pairing.code, token: pairing.token, expiresAt: pairing.expiresAt } : null,
     devices: options.devices.list(),
     discovery: options.discovery(),
   };
@@ -163,10 +163,28 @@ export function createControlServer(options: ControlOptions): Server {
     if (method === "GET" && path === "/state") return json(res, 200, companionState(options));
     if (method === "POST" && path === "/pairing") {
       const window = options.devices.openPairing();
-      return json(res, 201, { ...companionState(options), code: window.code });
+      // Keep the freshly issued credentials at the top level as well as in
+      // `pairing`, matching the existing code response and making this write
+      // sufficient for native control clients that do not immediately poll.
+      return json(res, 201, {
+        ...companionState(options),
+        code: window.code,
+        token: window.token,
+      });
     }
     if (method === "DELETE" && path === "/pairing") {
       options.devices.closePairing();
+      return json(res, 200, companionState(options));
+    }
+    const cloudDesktop = path.match(/^\/devices\/([\w-]+)\/cloud-desktop$/);
+    if (cloudDesktop && (method === "POST" || method === "DELETE")) {
+      try {
+        if (!options.devices.setCloudDesktopAccess(cloudDesktop[1], method === "POST")) {
+          return json(res, 404, { error: "no such device" });
+        }
+      } catch {
+        return json(res, 500, { error: "could not save cloud desktop access" });
+      }
       return json(res, 200, companionState(options));
     }
     const revoke = path.match(/^\/devices\/([\w-]+)$/);
@@ -272,7 +290,9 @@ function render(s) {
     (s.devices.length
       ? "<ul>" + s.devices.map((d) =>
           "<li><div class='grow'><div class=name>" + esc(d.name) + "</div>" +
-          "<div class=dim>Last seen " + ago(d.lastSeenAt) + "</div></div>" +
+          "<div class=dim>Last seen " + ago(d.lastSeenAt) + "</div>" +
+          "<button data-cloud='" + esc(d.id) + "' data-allowed='" + (d.cloudDesktopAccess ? "1" : "0") + "'>" +
+          (d.cloudDesktopAccess ? "Cloud desktop on" : "Allow cloud desktop") + "</button></div>" +
           "<button data-revoke='" + esc(d.id) + "'>Remove</button></li>").join("") + "</ul>"
       : "<p class=dim>No phones are paired yet.</p>");
 
@@ -280,6 +300,12 @@ function render(s) {
   el("cancel")?.addEventListener("click", async () => render(await api("/pairing", "DELETE")));
   for (const b of document.querySelectorAll("[data-revoke]")) {
     b.addEventListener("click", async () => render(await api("/devices/" + b.dataset.revoke, "DELETE")));
+  }
+  for (const b of document.querySelectorAll("[data-cloud]")) {
+    b.addEventListener("click", async () => render(await api(
+      "/devices/" + b.dataset.cloud + "/cloud-desktop",
+      b.dataset.allowed === "1" ? "DELETE" : "POST"
+    )));
   }
   if (s.pairing) {
     const tick = () => {

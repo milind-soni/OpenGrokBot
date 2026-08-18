@@ -615,7 +615,7 @@ describe("harness HTTP API", () => {
 
     const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
     expect(saved.status).toBe(200);
-    expect(saved.body.composio).toEqual({ configured: true });
+    expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
@@ -625,7 +625,7 @@ describe("harness HTTP API", () => {
     // A later ordinary setting save reloads config; the in-process secure-env
     // override must keep Composio configured until the next app launch.
     expect((await api("PUT", "/api/config", { profile: { name: "Grace" } })).status).toBe(200);
-    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true });
+    expect((await api("GET", "/api/config")).body.composio).toEqual({ configured: true, mode: "self-hosted" });
   });
 
   it.skipIf(process.platform === "win32")("stores the credentials file with owner-only permissions", () => {
@@ -754,6 +754,19 @@ describe("harness HTTP API", () => {
     } finally {
       await api("DELETE", `/api/bots/${botId}`);
     }
+  });
+
+  it("validates the event inspector limit at the HTTP boundary", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    for (const value of ["nope", "0", "-1", "1.5", "Infinity"]) {
+      const response = await api("GET", `/api/threads/${bot.threadId}/events?limit=${value}`);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain("positive whole number");
+    }
+    const ok = await api("GET", `/api/threads/${bot.threadId}/events?limit=1`);
+    expect(ok.status).toBe(200);
+    expect(Array.isArray(ok.body.entries)).toBe(true);
+    expect(ok.body.total).toEqual({ runtime: expect.any(Number), native: expect.any(Number) });
   });
 
   it("404s unknown routes with the route in the error", async () => {

@@ -12,6 +12,7 @@ import { DeviceRegistry } from "../src/devices.ts";
 
 let control: Server;
 let port = 0;
+let devices: DeviceRegistry;
 
 const ask = async (
   method: string,
@@ -28,8 +29,9 @@ const ask = async (
 };
 
 beforeAll(async () => {
+  devices = new DeviceRegistry();
   control = createControlServer({
-    devices: new DeviceRegistry(),
+    devices,
     companionPort: 8810,
     discovery: () => ({ advertising: false, name: "Test computer" }),
   });
@@ -43,6 +45,39 @@ afterAll(async () => {
 });
 
 describe("origins the control server will change state for", () => {
+  it("controls cloud desktop access per paired device", async () => {
+    const { code } = devices.openPairing();
+    const paired = devices.redeem(code, "iPhone");
+    if ("error" in paired) throw new Error(paired.error);
+
+    expect(paired.device.cloudDesktopAccess).toBe(false);
+    expect((await ask("POST", `/devices/${paired.device.id}/cloud-desktop`)).status).toBe(200);
+    expect(devices.authenticate(paired.token)?.cloudDesktopAccess).toBe(true);
+    expect((await ask("DELETE", `/devices/${paired.device.id}/cloud-desktop`)).status).toBe(200);
+    expect(devices.authenticate(paired.token)?.cloudDesktopAccess).toBe(false);
+    expect((await ask("POST", "/devices/missing/cloud-desktop")).status).toBe(404);
+  });
+
+  it("reports a permission write failure without dropping the control server", async () => {
+    const [device] = devices.list();
+    const writable = devices as unknown as { persist: () => void };
+    const persist = writable.persist;
+    writable.persist = () => {
+      throw new Error("ENOSPC: no space left on device");
+    };
+    try {
+      const failed = await ask("POST", `/devices/${device.id}/cloud-desktop`);
+      expect(failed).toEqual({
+        status: 500,
+        body: { error: "could not save cloud desktop access" },
+      });
+      expect(devices.list().find((candidate) => candidate.id === device.id)?.cloudDesktopAccess).toBe(false);
+      expect((await ask("GET", "/state")).status).toBe(200);
+    } finally {
+      writable.persist = persist;
+    }
+  });
+
   it("refuses a state change from a foreign page", async () => {
     // The attack this exists for: a form POST needs no preflight, and the
     // Host header on it is the loopback one this server already approves.

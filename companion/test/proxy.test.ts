@@ -170,7 +170,7 @@ beforeAll(async () => {
   sidecar = createServer(
     createProxyHandler({
       harnessPort: HARNESS_PORT,
-      authenticate: (t) => t === TOKEN,
+      authenticate: (t) => (t === TOKEN ? { cloudDesktopAccess: true } : null),
       redeem: (code, deviceName) =>
         code === "424242"
           ? { token: TOKEN, device: { id: "d1", name: String(deviceName) } }
@@ -417,7 +417,7 @@ describe("the sidecar in front of an unmodified harness", () => {
     const orphan = createServer(
       createProxyHandler({
         harnessPort: 1,
-        authenticate: () => true,
+        authenticate: () => ({ cloudDesktopAccess: true }),
         redeem: () => ({ error: "no" }),
         serverName: () => "Test computer",
       }),
@@ -449,7 +449,7 @@ describe("the sidecar in front of an unmodified harness", () => {
     const stalled = createServer(
       createProxyHandler({
         harnessPort: mutePort,
-        authenticate: () => true,
+        authenticate: () => ({ cloudDesktopAccess: true }),
         redeem: () => ({ error: "no" }),
         serverName: () => "Test computer",
         // the shipped value is 30s; the behaviour under test is the same one
@@ -500,7 +500,7 @@ describe("the sidecar in front of an unmodified harness", () => {
     const relay = createServer(
       createProxyHandler({
         harnessPort: slowPort,
-        authenticate: () => true,
+        authenticate: () => ({ cloudDesktopAccess: true }),
         redeem: () => ({ error: "no" }),
         serverName: () => "Test computer",
       }),
@@ -559,7 +559,7 @@ describe("the sidecar in front of an unmodified harness", () => {
     const relay = createServer(
       createProxyHandler({
         harnessPort: floodPort,
-        authenticate: () => true,
+        authenticate: () => ({ cloudDesktopAccess: true }),
         redeem: () => ({ error: "no" }),
         serverName: () => "Test computer",
       }),
@@ -584,11 +584,12 @@ describe("the sidecar in front of an unmodified harness", () => {
 });
 
 // The whole loop, with the real registry rather than a stub: open a pairing
-// window on the control surface, redeem the code the way the phone does, and
+// window on the control surface, redeem its QR credential the way the phone
+// does, and
 // use the token that comes back. This is the path that has no unit-test
 // equivalent — every piece is real except the phone.
 describe("pairing, end to end", () => {
-  it("turns a code shown on the computer into a working device token", async () => {
+  it("turns a QR credential into a working device token", async () => {
     const { DeviceRegistry } = await import("../src/devices.ts");
     const { createControlServer } = await import("../src/control.ts");
 
@@ -596,7 +597,7 @@ describe("pairing, end to end", () => {
     const paired = createServer(
       createProxyHandler({
         harnessPort: HARNESS_PORT,
-        authenticate: (t) => Boolean(registry.authenticate(t ?? undefined)),
+        authenticate: (t) => registry.authenticate(t ?? undefined),
         redeem: (code, deviceName) => registry.redeem(code, deviceName),
         serverName: () => "Ada's computer",
       }),
@@ -621,9 +622,13 @@ describe("pairing, end to end", () => {
 
       // the person clicks "Start pairing" on the computer
       // SAFETY: POST /pairing is this sidecar's own API and always answers
-      // with the window's code; the toMatch below fails if the shape drifts.
-      const opened = (await (await fetch(`${ctl}/pairing`, { method: "POST" })).json()) as { code: string };
+      // with both credentials; the matches below fail if the shape drifts.
+      const opened = (await (await fetch(`${ctl}/pairing`, { method: "POST" })).json()) as {
+        code: string;
+        token: string;
+      };
       expect(opened.code).toMatch(/^\d{6}$/);
+      expect(opened.token).toMatch(/^omb_pair_[A-Za-z0-9_-]{43}$/);
 
       // a wrong code is refused, and does not burn the window
       const wrong = await fetch(`${base}/api/pair`, {
@@ -633,11 +638,11 @@ describe("pairing, end to end", () => {
       });
       expect(wrong.status).toBe(401);
 
-      // the right one is redeemed exactly once, and never forwarded upstream
+      // The QR token is redeemed exactly once and never forwarded upstream.
       const res = await fetch(`${base}/api/pair`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: opened.code, deviceName: "Ada's iPhone" }),
+        body: JSON.stringify({ credential: opened.token, deviceName: "Ada's iPhone" }),
       });
       expect(res.status).toBe(201);
       // SAFETY: a 201 from /api/pair carries exactly this shape — the

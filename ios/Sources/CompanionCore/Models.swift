@@ -268,6 +268,31 @@ public struct InboxFile: Codable, Sendable {
     public var size: Int
 }
 
+/// A freshly minted provider viewer. It is deliberately not Codable for
+/// persistence: the URL is a short-lived bearer credential and belongs only
+/// in memory for the browser session that requested it.
+public struct CloudDesktopSession: Decodable, Sendable {
+    public let url: URL
+
+    private enum CodingKeys: String, CodingKey { case joinUrl }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .joinUrl)
+        guard let parsed = URL(string: raw),
+              parsed.scheme?.lowercased() == "https",
+              parsed.host != nil
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .joinUrl,
+                in: container,
+                debugDescription: "Cloud desktop URL must be HTTPS"
+            )
+        }
+        url = parsed
+    }
+}
+
 public struct ProviderSnapshot: Codable, Hashable, Sendable {
     public var state: String
     public var reason: String?

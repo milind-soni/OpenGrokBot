@@ -32,6 +32,18 @@ export interface RouteRequest {
   authenticated: boolean;
 }
 
+/** The one companion route that crosses into full interactive desktop
+ * control. Both the allowlist and capability gate consume this classifier so
+ * their security decisions cannot drift apart. */
+export const CLOUD_DESKTOP_JOIN_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/computer\/join$/,
+} as const;
+
+export function isCloudDesktopJoin(method: string, path: string): boolean {
+  return method === CLOUD_DESKTOP_JOIN_ROUTE.method && CLOUD_DESKTOP_JOIN_ROUTE.path.test(path);
+}
+
 /** Every request the iOS app makes, and nothing else.
  *
  * Ids are `[\w-]+`, matching the harness's own route patterns. The paths
@@ -61,6 +73,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
   { method: "DELETE", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+  // Full cloud desktop access. The route is narrow and the proxy applies a
+  // second, per-device capability check before it reaches the harness.
+  CLOUD_DESKTOP_JOIN_ROUTE,
 
   // rooms
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },

@@ -39,12 +39,24 @@ export interface OptionCardData {
   allowKey?: string;
 }
 
+export interface ConnectorCardData {
+  slug: string;
+  label: string;
+  description: string;
+  status: "required" | "authorizing" | "connected" | "failed";
+  resumeKey: string;
+  error?: string;
+  dismissed?: boolean;
+  resumed?: boolean;
+}
+
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "connector";
   text?: string;
   card?: OptionCardData;
+  connector?: ConnectorCardData;
   /** activity messages: tool name + outcome. `spoken` is the server's
    * narration of the same chip ("reading a file"), used by call mode. */
   /** `setup` marks an error fixed by installing something, not by retrying. */
@@ -196,7 +208,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  composio: { configured: boolean };
+  composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
   opencodeGo?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
@@ -274,6 +286,8 @@ export interface AppState {
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
+  /** the per-thread event inspector (runtime stream + native protocol tee) */
+  inspectorOpen: boolean;
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
   /** latest live frame of a bot's computer, per botId */
@@ -291,6 +305,8 @@ export interface AppState {
     kind: Exclude<MausMotion, "none">;
   } | null;
 }
+
+type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
 export type Action =
   | { type: "hydrate"; bots: Bot[]; groups: Group[] }
@@ -351,7 +367,7 @@ export type Action =
   | { type: "deleteBot"; botId: string }
   | { type: "duplicateBot"; botId: string }
   | { type: "markUnread"; botId: string }
-  | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
+  | { type: "botPatched"; bot: BotAnnouncement }
   | { type: "messageAdded"; threadId: string; message: Message }
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
@@ -363,6 +379,7 @@ export type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
+  | { type: "toggleInspector"; open?: boolean }
   | { type: "focusMessage"; threadId: string; messageId: string }
   | { type: "focusMessageConsumed"; nonce: number }
   | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
@@ -420,7 +437,7 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
-function reducer(state: AppState, action: Action): AppState {
+export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
@@ -434,6 +451,7 @@ function reducer(state: AppState, action: Action): AppState {
         activeView: "routines",
         settingsOpen: false,
         computerOpen: false,
+        inspectorOpen: false,
         appSettingsOpen: false,
         pluginsOpen: false,
       };
@@ -541,12 +559,15 @@ function reducer(state: AppState, action: Action): AppState {
       return updateBot(withMascotMotion(state, action.botId, "surprise"), action.botId, (b) => ({ ...b, unread: true }));
     case "botPatched": {
       const before = state.bots.find((b) => b.id === action.bot.id);
-      // A bot event can announce a bot created by another app window (team
-      // import). Patch events for unknown partial records remain ignored.
+      // Bot frames are complete except for their transcript. An unknown one
+      // was created by another client (the phone, another app window, or a
+      // team import), so add it now; the following message frames will fill
+      // its greeting without waiting for a full-page hydration.
       if (!before) {
-        return Array.isArray(action.bot.messages)
-          ? { ...state, bots: [action.bot as Bot, ...state.bots] }
-          : state;
+        return {
+          ...state,
+          bots: [{ ...action.bot, messages: action.bot.messages ?? [] }, ...state.bots],
+        };
       }
       const kind =
         action.bot.unread && !before?.unread
@@ -685,6 +706,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         settingsOpen: open,
         computerOpen: open ? false : state.computerOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
@@ -709,6 +731,17 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         computerOpen: open,
         settingsOpen: open ? false : state.settingsOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
+        appSettingsOpen: open ? false : state.appSettingsOpen,
+      };
+    }
+    case "toggleInspector": {
+      const open = action.open ?? !state.inspectorOpen;
+      return {
+        ...state,
+        inspectorOpen: open,
+        settingsOpen: open ? false : state.settingsOpen,
+        computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
@@ -720,6 +753,7 @@ function reducer(state: AppState, action: Action): AppState {
         appSettingsSection: action.section ?? state.appSettingsSection,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
+        inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
       };
     }
@@ -815,7 +849,7 @@ function reducer(state: AppState, action: Action): AppState {
 /** Newest screen frames whose pixels stay in memory per thread. */
 const MAX_KEPT_SCREEN_FRAMES = 8;
 
-const initialState: AppState = {
+export const initialState: AppState = {
   bots: [],
   groups: [],
   instances: [],
@@ -830,6 +864,7 @@ const initialState: AppState = {
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
+  inspectorOpen: false,
   appSettingsOpen: false,
   appSettingsSection: "general",
   screens: {},
@@ -1274,7 +1309,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           clearStream(frame.threadId);
           break;
         case "bot": {
-          const bot = frame.bot as Partial<Bot> & { id: string };
+          const bot = frame.bot as BotAnnouncement;
           // reading the selected chat clears its badge immediately
           if (bot.unread && bot.id === stateRef.current.selectedId) {
             bot.unread = false;

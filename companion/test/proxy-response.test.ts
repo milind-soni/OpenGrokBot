@@ -23,6 +23,7 @@ const deeplyNested = (() => {
 let harness: Server;
 let sidecar: Server;
 let sidecarPort = 0;
+let cloudDesktopAccess = true;
 /** What the stub harness answers with next. Set per test. */
 let respond: (res: ServerResponse) => void = (res) => res.end();
 
@@ -33,8 +34,9 @@ const close = (server: Server | undefined): Promise<void> =>
   new Promise((resolve) => (server ? server.close(() => resolve()) : resolve()));
 
 /** A request as a paired device makes it. */
-const device = async (path = "/api/bots"): Promise<{ status: number; text: string }> => {
+const device = async (path = "/api/bots", method = "GET"): Promise<{ status: number; text: string }> => {
   const res = await fetch(`http://127.0.0.1:${sidecarPort}${path}`, {
+    method,
     headers: { authorization: `Bearer ${TOKEN}` },
   });
   return { status: res.status, text: await res.text() };
@@ -47,7 +49,7 @@ beforeAll(async () => {
   sidecar = createServer(
     createProxyHandler({
       harnessPort,
-      authenticate: (t) => t === TOKEN,
+      authenticate: (t) => (t === TOKEN ? { cloudDesktopAccess } : null),
       redeem: () => ({ error: "not used here" }),
       serverName: () => "Test computer",
     }),
@@ -61,6 +63,27 @@ afterAll(async () => {
 });
 
 describe("preparing a harness response for a device", () => {
+  it("requires the Mac to enable cloud desktop for this phone", async () => {
+    cloudDesktopAccess = false;
+    try {
+      const { status, text } = await device("/api/bots/b1/computer/join", "POST");
+      expect(status).toBe(403);
+      expect(text).toContain("enable it in OpenMausBot");
+    } finally {
+      cloudDesktopAccess = true;
+    }
+  });
+
+  it("forwards only the enabled device's request for a fresh viewer", async () => {
+    respond = (res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ joinUrl: "https://desktop.example/session/fresh", state: "ready" }));
+    };
+    const { status, text } = await device("/api/bots/b1/computer/join", "POST");
+    expect(status).toBe(200);
+    expect(JSON.parse(text).joinUrl).toBe("https://desktop.example/session/fresh");
+  });
+
   it("never forwards a body it could not scrub", async () => {
     // `scrub` recurses once per level, so a deeply nested body throws
     // RangeError while JSON.parse handles it without complaint. That gap is

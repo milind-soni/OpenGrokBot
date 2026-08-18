@@ -1,4 +1,4 @@
-// Pairing: pick the computer, type the six digits it is showing.
+// Pairing: scan the computer's QR, confirm its identity, and connect.
 //
 // Two ways in, because discovery is allowed to fail. Bonjour finds the
 // computer by name when the network cooperates; when it does not — a guest
@@ -17,9 +17,11 @@ struct PairingView: View {
 
     @State private var manualAddress = ""
     @State private var code = ""
+    @State private var scannedCredential: String?
     @State private var chosen: Connection?
     @State private var pairing = false
     @State private var failure: String?
+    @State private var showingScanner = false
     /// "Looking…" forever is not an answer. After a few seconds with nothing
     /// found, say the thing that is almost always true.
     @State private var searchedLongEnough = false
@@ -30,6 +32,7 @@ struct PairingView: View {
                 if let chosen {
                     codeSection(for: chosen)
                 } else {
+                    setupSection
                     discoverySection
                     manualSection
                 }
@@ -40,15 +43,23 @@ struct PairingView: View {
                     }
                 }
 
-                Section {
-                    Text("On your computer, open OpenMausBot → Settings → Companion, turn it on, and start pairing.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Pair with a computer")
-            .onAppear { discovery.start() }
+            .onAppear {
+                discovery.start()
+                accept(session.pairingInvite)
+            }
             .onDisappear { discovery.stop() }
+            .onChange(of: session.pairingInvite) { _, invite in accept(invite) }
+            .fullScreenCover(isPresented: $showingScanner) {
+                PairingScannerSheet { payload in
+                    guard let url = URL(string: payload), let invite = PairingInvite.parse(url) else {
+                        return "That isn't an OpenMausBot pairing QR code."
+                    }
+                    accept(invite)
+                    return nil
+                }
+            }
             .task {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 searchedLongEnough = true
@@ -57,6 +68,25 @@ struct PairingView: View {
     }
 
     // MARK: - Choosing a computer
+
+    private var setupSection: some View {
+        Section("On your computer") {
+            Label("Open OpenMausBot → Settings → Companion", systemImage: "1.circle.fill")
+            Label("Choose Set up a phone", systemImage: "2.circle.fill")
+            Button {
+                failure = nil
+                showingScanner = true
+            } label: {
+                Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Text("Scan the QR code, check the computer name, and confirm. The address and one-time credential are filled securely for you.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private var discoverySection: some View {
         Section("On this network") {
@@ -108,6 +138,7 @@ struct PairingView: View {
                     failure = "That should look like 192.168.1.42:8810."
                     return
                 }
+                scannedCredential = nil
                 chosen = connection
             }
             .disabled(manualAddress.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -130,46 +161,93 @@ struct PairingView: View {
     // MARK: - The code
 
     private func codeSection(for connection: Connection) -> some View {
-        Section(connection.name) {
-            TextField("000000", text: $code)
-                .keyboardType(.numberPad)
-                .font(.system(.title, design: .monospaced))
-                .multilineTextAlignment(.center)
-                .onChange(of: code) { _, value in
-                    code = String(value.filter(\.isNumber).prefix(6))
-                }
+        Section(scannedCredential == nil ? connection.name : "Confirm computer") {
+            if let credential = scannedCredential {
+                Label(connection.name, systemImage: "desktopcomputer")
+                    .font(.headline)
+                LabeledContent("Address", value: "\(connection.host):\(connection.port)")
+                Text("Only continue if this is the computer whose QR code you just scanned. This phone will be able to open chats, send work, and answer approvals on it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
-            Button {
-                Task { await submit(connection) }
-            } label: {
-                if pairing {
-                    ProgressView()
-                } else {
-                    Text("Pair")
+                Button {
+                    Task { await submit(connection, credential: credential) }
+                } label: {
+                    if pairing {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Pair with this computer")
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(pairing)
+            } else {
+                TextField("000000", text: $code)
+                    .keyboardType(.numberPad)
+                    .font(.system(.title, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .onChange(of: code) { _, value in
+                        code = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
+                    }
+
+                Button {
+                    Task { await submit(connection, credential: code) }
+                } label: {
+                    if pairing {
+                        ProgressView()
+                    } else {
+                        Text("Connect")
+                    }
+                }
+                .disabled(code.count != 6 || pairing)
             }
-            .disabled(code.count != 6 || pairing)
 
             Button("Choose a different computer", role: .cancel) {
                 chosen = nil
                 code = ""
+                scannedCredential = nil
                 failure = nil
             }
         }
     }
 
-    private func submit(_ connection: Connection) async {
+    private func submit(_ connection: Connection, credential: String) async {
         pairing = true
         failure = nil
         defer { pairing = false }
+        let cameFromScanner = scannedCredential != nil
         do {
-            try await session.pair(with: connection, code: code, deviceName: Self.deviceName())
+            try await session.pair(
+                with: connection,
+                credential: credential,
+                deviceName: Self.deviceName()
+            )
         } catch {
-            // the harness's own wording ("that code is not right", "too many
-            // incorrect codes — start pairing again") is better than ours
-            failure = error.localizedDescription
-            code = ""
+            if cameFromScanner {
+                // A one-time token may have reached the computer even if its
+                // response did not reach us. Never replay it and risk making
+                // a second device record; request a fresh window instead.
+                failure = "\(error.localizedDescription) Start pairing again on your computer and rescan the new QR code."
+                chosen = nil
+                scannedCredential = nil
+            } else {
+                // The harness's own wording ("too many incorrect codes —
+                // start pairing again") is better than ours.
+                failure = error.localizedDescription
+                code = ""
+            }
         }
+    }
+
+    private func accept(_ invite: PairingInvite?) {
+        guard let invite else { return }
+        chosen = invite.connection
+        scannedCredential = invite.credential
+        code = ""
+        failure = nil
+        session.consumePairingInvite()
     }
 
     // MARK: - Helpers

@@ -11,7 +11,7 @@ same harness the desktop app talks to, through the restricted sidecar described 
 ## Status
 
 Built and verified against a real harness on both a simulator and an iPhone:
-Bonjour discovery, manual LAN and Tailscale pairing, the roster, paged chat,
+QR handoff, Bonjour discovery, manual LAN and Tailscale pairing, the roster, paged chat,
 streaming replies, the computer view, and — the one that matters — an approval
 raised by a bot on the Mac, answered on the phone, with the bot carrying on.
 
@@ -59,7 +59,8 @@ ios/
     Discovery.swift              NWBrowser for _openmausbot._tcp
     Keychain.swift               the device token
     MausAvatar.swift             the mascot face, in the desktop's palette
-    PairingView.swift            find a computer, type the six digits
+    PairingView.swift            QR handoff, discovery, address and code fallback
+    PairingScanner.swift         native QR camera, permission and recovery UI
     ChatListView.swift           roster, with "waiting on you" pulled to the top
     ChatView.swift               transcript, approval cards, composer
     SpeechDictation.swift        SFSpeechRecognizer, press-to-stop
@@ -129,10 +130,11 @@ here by simply not having the methods:
 |---|---|
 | Read bots, rooms and transcripts | Write API keys (`PUT /api/config`) |
 | Send messages | Manage pairing or revoke devices |
-| **Answer approvals and questions** | Drive the Local VM |
+| **Answer approvals and questions** | Drive the Local VM or this computer |
 | Interrupt a bot, mark chats read | Reach `/api/internal/*` |
 | Fetch screen images on demand | Load the packaged desktop UI |
 | Attach a photo or file (`POST /api/inbox`) | Write bytes into the harness |
+| Open an explicitly enabled cloud desktop | Provision, sleep or run shell commands on cloud computers |
 
 Marking a chat read and remembering an approval use purpose-built server
 verbs. The sidecar does not expose the general bot or room `PATCH` routes,
@@ -142,10 +144,20 @@ working directories.
 Companion settings stay on the computer on purpose: losing the phone must not
 mean losing the ability to lock it out.
 
+Interactive cloud desktop access is additionally enabled per paired device and
+starts off. The phone asks the Mac to mint a fresh provider URL after an
+explicit warning, validates that it is HTTPS, opens it in an in-app Safari
+sheet, and never persists it. The Local VM's loopback-only noVNC listener and
+the host computer remain unreachable through the companion.
+
 ## Design notes
 
 - **Zero third-party dependencies.** The raw-byte SSE reader, Keychain,
   `NWBrowser`, and notifications are all first-party.
+- **QR scan confirms before connecting.** The QR carries a short-lived,
+  high-entropy credential rather than relying on the visible six-digit code.
+  The app validates the target, asks the user to confirm it, exchanges the
+  credential once, and persists only the resulting device token in Keychain.
 - **Thin client.** The harness already folds provider events into settled
   messages. The phone folds `message`, `message.patch`, and `bot` frames, plus
   the small `runtime` delta subset needed to show a reply while it is typed.

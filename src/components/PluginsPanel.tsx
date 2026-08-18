@@ -64,6 +64,7 @@ export function PluginsPanel() {
   const [cards, setCards] = useState<ToolkitCard[] | null>(null);
   const [source, setSource] = useState<"api" | "curated">("curated");
   const [configured, setConfigured] = useState(true);
+  const [mode, setMode] = useState<"managed" | "self-hosted" | "unavailable">("unavailable");
   const [status, setStatus] = useState<Record<string, ConnectorStatus>>({});
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [busySlug, setBusySlug] = useState<string | null>(null);
@@ -119,6 +120,7 @@ export function PluginsPanel() {
         setCards(r.cards ?? []);
         setSource(r.source ?? "curated");
         setConfigured(Boolean(r.configured));
+        setMode(r.mode ?? "unavailable");
         if (r.configured) void refreshStatus((r.cards ?? []).map((c: ToolkitCard) => c.slug).slice(0, 40));
       })
       .catch((e) => alive && setError(e.message));
@@ -248,7 +250,7 @@ export function PluginsPanel() {
       >
         <header className="flex items-start justify-between gap-4 px-6 pb-3 pt-6 sm:px-8 sm:pt-7">
           <div>
-            <h2 id="connected-apps-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Plugins</h2>
+            <h2 id="connected-apps-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Connected apps</h2>
             <p className="mt-1 text-[13px] text-ink-secondary">Connect the apps your bots can use.</p>
           </div>
           <div className="flex items-center gap-1">
@@ -261,7 +263,7 @@ export function PluginsPanel() {
             </button>
             <button
               onClick={close}
-              aria-label="Close plugins"
+              aria-label="Close connected apps"
               className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
             >
               <X size={21} />
@@ -270,7 +272,7 @@ export function PluginsPanel() {
         </header>
 
         <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Plugin view">
+          <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Connected apps view">
             <button
               role="tab"
               aria-selected={tab === "marketplace"}
@@ -299,8 +301,8 @@ export function PluginsPanel() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search plugins"
-              aria-label="Search plugins"
+              placeholder="Search apps"
+              aria-label="Search apps"
               className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
             />
           </label>
@@ -308,7 +310,7 @@ export function PluginsPanel() {
 
         {!configured && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
-            Add your Composio project key to connect apps.{" "}
+            Connected apps are temporarily unavailable. You can retry after restarting, or configure your own connection service.{" "}
             <button
               className="font-medium underline underline-offset-2"
               onClick={() => {
@@ -320,7 +322,7 @@ export function PluginsPanel() {
             </button>
           </div>
         )}
-        {configured && source === "curated" && (
+        {configured && source === "curated" && mode === "self-hosted" && (
           <div className="mx-6 mb-1 text-[12px] text-ink-secondary sm:mx-8">
             Showing featured apps.{" "}
             <button
@@ -330,7 +332,7 @@ export function PluginsPanel() {
                 dispatch({ type: "toggleAppSettings", open: true });
               }}
             >
-              Use your Composio key
+              Update your Composio key
             </button>{" "}
             for the full catalog.
           </div>
@@ -404,7 +406,7 @@ export function PluginsPanel() {
           {cards !== null && visible.length === 0 && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
-                {tab === "connected" ? "No connected plugins yet" : "No plugins found"}
+                {tab === "connected" ? "No connected apps yet" : "No apps found"}
               </div>
               <div className="mt-1 text-[12.5px] text-ink-secondary">
                 {tab === "connected" ? "Connect an app from Marketplace and it will appear here." : "Try a different search."}

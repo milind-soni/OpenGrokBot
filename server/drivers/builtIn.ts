@@ -13,6 +13,7 @@ import { DroidAgentDriver } from "./acp/droid.ts";
 import { OpenCodeGoDriver } from "./acp/opencode-go.ts";
 import { QwenAgentDriver } from "./acp/qwen.ts";
 import { HermesAgentDriver } from "./acp/hermes.ts";
+import { MulticaAgentDriver } from "./multica.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   GrokDriver,
@@ -27,4 +28,5 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   CodexDriver,
   AntigravityDriver,
   BoxAgentDriver,
+  MulticaAgentDriver,
 ];

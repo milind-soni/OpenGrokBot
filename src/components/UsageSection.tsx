@@ -5,7 +5,7 @@
 import { useStore } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
-import { botUsage, costCaption, formatTokens, formatUsd, sumUsage } from "@/lib/usage";
+import { botUsage, costCaption, formatTokens, formatUsd, hasFiniteCost, sumUsage } from "@/lib/usage";
 
 export function UsageSection() {
   const { state } = useStore();
@@ -44,16 +44,16 @@ export function UsageSection() {
               <span className="text-right tabular-nums text-ink" title={`${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`}>
                 {formatTokens(usage.input + usage.output)}
               </span>
-              <span className="text-right tabular-nums text-ink">{typeof usage.costUsd === "number" ? formatUsd(usage.costUsd) : <span className="text-ink-secondary">—</span>}</span>
+              <span className="text-right tabular-nums text-ink">{hasFiniteCost(usage.costUsd) ? formatUsd(usage.costUsd) : <span className="text-ink-secondary">—</span>}</span>
             </div>
           ))}
           <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-5 pt-2.5 text-[13px] font-medium text-ink">
             <span>All bots</span>
             <span className="text-right tabular-nums">{total.turns}</span>
             <span className="text-right tabular-nums">{formatTokens(total.input + total.output)}</span>
-            <span className="text-right tabular-nums">{typeof total.costUsd === "number" ? formatUsd(total.costUsd) : "—"}</span>
+            <span className="text-right tabular-nums">{hasFiniteCost(total.costUsd) ? formatUsd(total.costUsd) : "—"}</span>
           </div>
-          {total.costUsd !== null && (
+          {hasFiniteCost(total.costUsd) && (
             <div className="mt-3 text-[12px] leading-relaxed text-ink-secondary">
               Cost is {billings.size === 1 ? costCaption([...billings][0]) : "as each engine reports it — on a subscription it's an equivalent, not a charge"}.
             </div>

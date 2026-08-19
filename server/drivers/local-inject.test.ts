@@ -361,6 +361,66 @@ describe("ensureKimiInjectAlias", () => {
     expect(text).toContain('protocol = "openai"');
   });
 
+  it("treats whitespace around dotted heading keys as the same table", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-dots-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      ['[models . "omlx/GLM-5.2-fp8"]', 'provider = "omlx"', 'model = "GLM-5.2-fp8"', ""].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text.match(/\[models/g)?.length).toBe(1);
+    expect(text).toContain('protocol = "openai"');
+    expect(text).toContain("max_context_size = 262144");
+  });
+
+  it("does not treat a triple-quote inside a single-line string as multiline", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-squote-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        `note = '"""'`,
+        'protocol = "openai"',
+        "",
+      ].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text.match(/protocol = "openai"/g)?.length).toBe(1);
+    expect(text).toContain("max_context_size = 262144");
+  });
+
+  it("does not treat a triple-quote inside a comment as multiline", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-kimi-hash-"));
+    scratchDirs.push(home);
+    const root = join(home, ".kimi-code");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "config.toml"),
+      [
+        '[models."omlx/GLM-5.2-fp8"]',
+        'provider = "omlx"',
+        'model = "GLM-5.2-fp8"',
+        'note = "x" # """',
+        'protocol = "openai"',
+        "",
+      ].join("\n"),
+    );
+    ensureKimiInjectAlias("omlx::GLM-5.2-fp8", { HOME: home });
+    const text = readFileSync(join(root, "config.toml"), "utf8");
+    expect(text.match(/protocol = "openai"/g)?.length).toBe(1);
+    expect(text).toContain("max_context_size = 262144");
+  });
+
   it("does not treat a bracket line inside a multiline string as a table", () => {
     const home = mkdtempSync(join(tmpdir(), "omb-kimi-ml-"));
     scratchDirs.push(home);
@@ -546,6 +606,16 @@ describe("applyDroidLocalAuthEnv", () => {
     applyDroidLocalAuthEnv(cloud, "claude-opus-5");
     applyDroidLocalAuthEnv(cloud, undefined);
     expect(cloud.FACTORY_API_KEY).toBeUndefined();
+  });
+
+  it("does not invent a Factory key when a Droid auth file already exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-droid-authfile-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".factory"), { recursive: true });
+    writeFileSync(join(home, ".factory", "auth.v2.file"), "signed-in");
+    const env: Record<string, string | undefined> = { FACTORY_HOME_OVERRIDE: home };
+    applyDroidLocalAuthEnv(env, "ollama::ornith:35b-bf16");
+    expect(env).toEqual({ FACTORY_HOME_OVERRIDE: home });
   });
 
   it("puts the placeholder on the Droid child only for a local inject pick", async () => {

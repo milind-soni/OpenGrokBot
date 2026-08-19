@@ -4,6 +4,11 @@ import type { Bot, TaskUsage } from "@/state/store";
 
 export const EMPTY_USAGE: TaskUsage = { input: 0, output: 0, costUsd: null, turns: 0 };
 
+/** True when a stored cost is a real number (not null, NaN, or Infinity). */
+export function hasFiniteCost(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 /** Sum a set of usages; cost stays null until any of them has one. */
 export function sumUsage(items: Array<TaskUsage | undefined>): TaskUsage {
   const out: TaskUsage = { ...EMPTY_USAGE };
@@ -12,7 +17,7 @@ export function sumUsage(items: Array<TaskUsage | undefined>): TaskUsage {
     out.input += u.input;
     out.output += u.output;
     out.turns += u.turns;
-    if (typeof u.costUsd === "number") out.costUsd = (out.costUsd ?? 0) + u.costUsd;
+    if (hasFiniteCost(u.costUsd)) out.costUsd = (out.costUsd ?? 0) + u.costUsd;
   }
   return out;
 }
@@ -23,7 +28,7 @@ export function botUsage(bot: Pick<Bot, "tasks">): TaskUsage {
 
 /** 950 → "950", 12_400 → "12.4k", 2_300_000 → "2.3M" */
 export function formatTokens(n: number): string {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "0";
+  if (!hasFiniteCost(n)) return "0";
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${trim(n / 1000)}k`;
   return `${trim(n / 1_000_000)}M`;
@@ -32,7 +37,7 @@ const trim = (x: number) => (x >= 100 ? Math.round(x).toString() : x.toFixed(1).
 
 /** Dollars, with enough precision that a cheap turn isn't "$0.00". */
 export function formatUsd(usd: number): string {
-  if (typeof usd !== "number" || !Number.isFinite(usd)) return "";
+  if (!hasFiniteCost(usd)) return "";
   if (usd === 0) return "$0";
   if (usd < 0.01) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
@@ -43,7 +48,7 @@ export function formatUsd(usd: number): string {
 export function usageChip(u: TaskUsage): string {
   if (u.turns === 0 && u.input + u.output === 0) return "";
   const parts = [`${formatTokens(u.input + u.output)} tok`];
-  if (typeof u.costUsd === "number") parts.push(formatUsd(u.costUsd));
+  if (hasFiniteCost(u.costUsd)) parts.push(formatUsd(u.costUsd));
   return parts.join(" · ");
 }
 

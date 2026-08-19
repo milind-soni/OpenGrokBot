@@ -77,11 +77,11 @@ function canonicalizeTomlHeading(heading: string): string | null {
   const parts: string[] = [];
   const inner = match[1]!;
   let i = 0;
+  const skipSep = () => {
+    while (i < inner.length && (inner[i] === "." || inner[i] === " " || inner[i] === "\t")) i += 1;
+  };
+  skipSep();
   while (i < inner.length) {
-    if (inner[i] === ".") {
-      i += 1;
-      continue;
-    }
     const q = inner[i];
     if (q === '"' || q === "'") {
       i += 1;
@@ -97,6 +97,7 @@ function canonicalizeTomlHeading(heading: string): string | null {
       }
       if (inner[i] === q) i += 1;
       parts.push(value);
+      skipSep();
       continue;
     }
     let value = "";
@@ -104,9 +105,11 @@ function canonicalizeTomlHeading(heading: string): string | null {
       value += inner[i];
       i += 1;
     }
-    parts.push(value);
+    const part = value.trim();
+    if (part) parts.push(part);
+    skipSep();
   }
-  return parts.join(".");
+  return parts.length ? parts.join(".") : null;
 }
 
 /** Unwrap `"key"` / `'key'` so a quoted assignment matches the bare name. */
@@ -209,10 +212,12 @@ function tomlTables(text: string): Array<{ name: string; headingStart: number; b
 /** Keys assigned at line start in a table body, including `"quoted"` keys. */
 function tomlKeys(block: string): Set<string> {
   const keys = new Set<string>();
+  type Mode = "out" | "basic" | "literal" | "mlbasic" | "mllit";
+  let mode: Mode = "out";
   let lineStart = 0;
-  let mode: "out" | "mlbasic" | "mllit" = "out";
+  let lineStartMode: Mode = "out";
   const take = (end: number) => {
-    if (mode !== "out") return;
+    if (lineStartMode !== "out") return;
     const line = stripTomlLineComment(block.slice(lineStart, end));
     const eq = line.indexOf("=");
     if (eq > 0) keys.add(unquoteTomlKey(line.slice(0, eq)));
@@ -228,15 +233,31 @@ function tomlKeys(block: string): Set<string> {
         mode = "out";
         i += 2;
       }
+    } else if (mode === "basic") {
+      if (block[i] === "\\") i += 1;
+      else if (block[i] === '"') mode = "out";
+    } else if (mode === "literal") {
+      if (block[i] === "'") mode = "out";
+    } else if (block[i] === "#") {
+      const nl = block.indexOf("\n", i);
+      i = nl < 0 ? block.length : nl;
+      if (nl < 0) break;
     } else if (block.startsWith('"""', i)) {
       mode = "mlbasic";
       i += 2;
     } else if (block.startsWith("'''", i)) {
       mode = "mllit";
       i += 2;
-    } else if (block[i] === "\n") {
+    } else if (block[i] === '"') {
+      mode = "basic";
+    } else if (block[i] === "'") {
+      mode = "literal";
+    }
+    if (i < block.length && block[i] === "\n") {
       take(i);
       lineStart = i + 1;
+      if (mode === "basic" || mode === "literal") mode = "out";
+      lineStartMode = mode;
     }
   }
   take(block.length);

@@ -20,7 +20,7 @@ import {
   Webhook,
   X,
 } from "lucide-react";
-import { costCaption, formatTokens, formatUsd, usageChip } from "@/lib/usage";
+import { costCaption, formatTokens, formatUsd, hasFiniteCost, usageChip } from "@/lib/usage";
 import {
   useStore,
   useStreaming,
@@ -1018,7 +1018,7 @@ function UsageChip({ bot }: { bot: Bot }) {
   const detail = [
     `${usage.turns} turn${usage.turns === 1 ? "" : "s"}`,
     `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`,
-    typeof usage.costUsd === "number" ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
+    hasFiniteCost(usage.costUsd) ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
   ]
     .filter(Boolean)
     .join("\n");

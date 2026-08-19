@@ -13,7 +13,7 @@ import { ModelPicker } from "./ModelPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { requestNotificationPermission } from "@/lib/notify";
-import { botUsage, costCaption, formatTokens, formatUsd } from "@/lib/usage";
+import { botUsage, costCaption, formatTokens, formatUsd, hasFiniteCost } from "@/lib/usage";
 import { shortPath } from "@/lib/short-path";
 
 function Field({
@@ -62,11 +62,11 @@ function BotUsageCard({ bot }: { bot: Bot }) {
         </div>
         <div>
           <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Cost</div>
-          <div className="mt-0.5 tabular-nums text-ink">{typeof usage.costUsd === "number" ? formatUsd(usage.costUsd) : "—"}</div>
+          <div className="mt-0.5 tabular-nums text-ink">{hasFiniteCost(usage.costUsd) ? formatUsd(usage.costUsd) : "—"}</div>
         </div>
       </div>
       <div className="mt-2 text-[12px] text-ink-secondary">
-        {usage.costUsd === null ? "This engine doesn't report a price; tokens are counted." : `Cost ${costCaption(instance?.snapshot.billing)}.`}
+        {hasFiniteCost(usage.costUsd) ? `Cost ${costCaption(instance?.snapshot.billing)}.` : "This engine doesn't report a price; tokens are counted."}
       </div>
     </div>
   );

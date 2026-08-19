@@ -129,6 +129,10 @@ export function applyDroidLocalAuthEnv(
 ): void {
   if (!decodeInjectId(modelId)) return;
   if (env.FACTORY_API_KEY?.trim()) return;
+  // session/new already succeeds on a Factory login file. A placeholder
+  // FACTORY_API_KEY can take precedence over that login, so leave env
+  // alone when one of the auth files is present.
+  if (authFilePaths(env).some(existsSync)) return;
   env.FACTORY_API_KEY = "openmausbot-local";
 }
 

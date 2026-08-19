@@ -107,7 +107,6 @@ export function codexLocalProviderArgs(
 function firstUnslothToken(row: unknown): string | null {
   if (!row || typeof row !== "object") return null;
   const rec = row as { minted?: unknown; saved?: unknown; api_key?: unknown };
-  if (typeof rec.api_key === "string" && rec.api_key) return rec.api_key;
   for (const bucket of [rec.minted, rec.saved]) {
     if (typeof bucket === "string" && bucket) return bucket;
     if (Array.isArray(bucket)) {
@@ -115,6 +114,7 @@ function firstUnslothToken(row: unknown): string | null {
       if (typeof token === "string") return token;
     }
   }
+  if (typeof rec.api_key === "string" && rec.api_key) return rec.api_key;
   return null;
 }
 
@@ -127,17 +127,20 @@ function readUnslothKey(env: Record<string, string | undefined>): string | null 
     };
     // Older Studio wrote `{ api_key }`. Current Studio writes
     // `{ servers: { "http://127.0.0.1:8888": { minted: ["sk-unsloth-…"] } } }`.
+    // Prefer the localhost minted token so a stale mixed-format file cannot
+    // win; keep the top-level key as fallback.
+    if (raw.servers && typeof raw.servers === "object") {
+      const servers = raw.servers as Record<string, unknown>;
+      for (const url of ["http://127.0.0.1:8888", "http://localhost:8888"]) {
+        const token = firstUnslothToken(servers[url]);
+        if (token) return token;
+      }
+      for (const row of Object.values(servers)) {
+        const token = firstUnslothToken(row);
+        if (token) return token;
+      }
+    }
     if (typeof raw.api_key === "string" && raw.api_key) return raw.api_key;
-    if (!raw.servers || typeof raw.servers !== "object") return null;
-    const servers = raw.servers as Record<string, unknown>;
-    for (const url of ["http://127.0.0.1:8888", "http://localhost:8888"]) {
-      const token = firstUnslothToken(servers[url]);
-      if (token) return token;
-    }
-    for (const row of Object.values(servers)) {
-      const token = firstUnslothToken(row);
-      if (token) return token;
-    }
     return null;
   } catch {
     return null;

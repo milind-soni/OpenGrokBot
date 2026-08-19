@@ -55,11 +55,11 @@ export function execCli(
   cli: string,
   args: string[],
   opts: ExecFileOptions,
-  cb: (err: Error | null, stdout: string) => void,
+  cb: (err: Error | null, stdout: string, stderr?: string) => void,
 ): void {
   const resolved = resolveCli(cli, args);
-  execFile(resolved.command, resolved.args, { ...opts, windowsHide: true }, (err, stdout) =>
-    cb(err, typeof stdout === "string" ? stdout : String(stdout)),
+  execFile(resolved.command, resolved.args, { ...opts, windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) =>
+    cb(err, stdout, stderr),
   );
 }
 

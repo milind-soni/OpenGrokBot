@@ -478,8 +478,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
       const authenticated = await new Promise<boolean>((resolve) => {
-        execCli(config.cli, ["login", "status"], { timeout: 8000, env }, (err, stdout) =>
-          resolve(!err && /logged in/i.test(stdout)),
+        execCli(config.cli, ["login", "status"], { timeout: 8000, env }, (err, stdout, stderr) =>
+          resolve(!err && /^logged in\b/im.test(`${stdout}\n${stderr ?? ""}`)),
         );
       });
       // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login

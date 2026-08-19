@@ -5,7 +5,7 @@
 // real app-server, it never exits on its own — the driver kills it.
 //
 //   FAKE_CODEX_MODE   happy (default) | approval | resume | stream |
-//                     logged-out | unauthorized
+//                     logged-in-stdout | logged-out | unauthorized
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -14,7 +14,7 @@ import { writeFileSync } from "node:fs";
 const mode = process.env.FAKE_CODEX_MODE ?? "happy";
 
 if (process.argv[2] === "--version") {
-  process.stdout.write("codex-cli 0.146.0\n");
+  process.stdout.write("codex-cli 0.147.0\n");
   process.exit(0);
 }
 if (process.argv[2] === "login" && process.argv[3] === "status") {
@@ -22,7 +22,10 @@ if (process.argv[2] === "login" && process.argv[3] === "status") {
     process.stderr.write("Not logged in\n");
     process.exit(1);
   }
-  process.stdout.write("Logged in using ChatGPT\n");
+  // Codex 0.147.0 reports a successful login on stderr; retain a mode for
+  // older versions that wrote the same status on stdout.
+  const statusStream = mode === "logged-in-stdout" ? process.stdout : process.stderr;
+  statusStream.write("Logged in using ChatGPT\n");
   process.exit(0);
 }
 const calls: Array<{ method: string; params: unknown }> = [];

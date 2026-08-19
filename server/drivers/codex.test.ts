@@ -283,6 +283,14 @@ describe("CodexDriver turns (fake app-server)", () => {
     });
   });
 
+  it("also accepts login status from older Codex versions that used stdout", async () => {
+    await create({ mode: "logged-in-stdout" });
+    await expect(instance.snapshot()).resolves.toMatchObject({
+      state: "available",
+      authenticated: true,
+    });
+  });
+
   it("marks a Codex 401 as setup so the UI offers sign-in instead of Retry", async () => {
     await create({ mode: "unauthorized" });
     await instance.adapter.sendTurn({ threadId: "t-unauthorized", text: "hi" });

@@ -47,9 +47,11 @@ function liveOauthCredential(): boolean {
       refresh_token?: unknown;
       expiry_date?: unknown;
     };
-    if (typeof creds.access_token !== "string") return false;
-    if (typeof creds.expiry_date === "number") {
-      return Date.now() < creds.expiry_date || typeof creds.refresh_token === "string";
+    if (typeof creds.access_token !== "string" || creds.access_token.length === 0) return false;
+    const hasRefresh = typeof creds.refresh_token === "string" && creds.refresh_token.length > 0;
+    if (creds.expiry_date !== undefined) {
+      if (typeof creds.expiry_date !== "number") return false;
+      return Date.now() < creds.expiry_date || hasRefresh;
     }
     // no recorded expiry — treat possession of the credential as the signal
     return true;

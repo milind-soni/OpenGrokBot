@@ -58,4 +58,13 @@ describe("gemini auth detection (#28)", () => {
     writeCreds({ access_token: "at" });
     expect(geminiIsAuthenticated({})).toBe(true);
   });
+
+  it("rejects empty token strings and a present non-number expiry", () => {
+    writeCreds({ access_token: "", expiry_date: Date.now() + 60_000 });
+    expect(geminiIsAuthenticated({})).toBe(false);
+    writeCreds({ access_token: "at", refresh_token: "", expiry_date: Date.now() - 60_000 });
+    expect(geminiIsAuthenticated({})).toBe(false);
+    writeCreds({ access_token: "at", expiry_date: "soon" });
+    expect(geminiIsAuthenticated({})).toBe(false);
+  });
 });

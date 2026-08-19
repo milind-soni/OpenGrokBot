@@ -221,6 +221,8 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     hermes: { driver: "hermesAgent" },
     fountain: { driver: "fountainAgent" },
   };
+  // Engines added after a user's fleet was first written; fountain is
+  // cloud-rail, not custom-only, but joins an existing fleet the same way.
   const CUSTOM_ONLY = {
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },

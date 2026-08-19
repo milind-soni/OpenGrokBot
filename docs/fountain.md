@@ -16,7 +16,7 @@ other engines; what differs is where the agent lives.
 2. Sign in: `fountain auth login`. Point it at your own instance first with
    `FOUNTAIN_BASE_URL=https://your-fountain.example fountain auth login`.
 3. Restart OpenMausBot (or refresh Settings → Engines). Fountain appears in
-   the picker rail below the divider, like the other custom-only engines.
+   the picker's Cloud rail — the agents run on your instance, not here.
 
 Credentials are the CLI's, never OpenMausBot's: the driver runs `fountain auth
 whoami` to decide whether the engine is signed in, and the child process reads

@@ -120,9 +120,10 @@ export function createFountainAgentDriver(run: FountainCliRunner = runFountainCl
   const support: AcpSupport = {
     driverKind: "fountainAgent",
     displayName: "Fountain",
-    // No first-party cloud catalog: the picker lists YOUR agents on YOUR
-    // instance, which is what "custom" means to the picker rail.
-    access: "custom",
+    // Cloud rail: the agents run on a hosted instance and the catalog is a
+    // real catalog (your agents), not a local-model inject — "custom" would
+    // send the picker to the local-models pane, where nothing would list.
+    access: "subscription",
     models: EMPTY,
     resolveModels: async (env) => {
       const { ok, stdout } = await run(["agent", "list", "--json"], env);

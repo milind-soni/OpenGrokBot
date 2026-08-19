@@ -30,7 +30,7 @@ describe("configuration boundaries", () => {
 });
 
 describe("default fleet", () => {
-  it("ships Qwen, Hermes and Fountain as custom-only engines", () => {
+  it("ships Qwen and Hermes as custom-only engines, and Fountain", () => {
     const map = instanceConfigs({});
     expect(map.qwen).toEqual({ driver: "qwenAgent", environment: {} });
     expect(map.hermes).toEqual({ driver: "hermesAgent", environment: {} });

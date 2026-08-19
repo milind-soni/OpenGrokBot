@@ -103,9 +103,9 @@ describe("Fountain error classification", () => {
 });
 
 describe("Fountain driver", () => {
-  it("is a custom-only ACP engine over the fountain CLI", () => {
+  it("is a cloud-rail ACP engine over the fountain CLI", () => {
     expect(FountainAgentDriver.driverKind).toBe("fountainAgent");
-    expect(FountainAgentDriver.metadata).toMatchObject({ displayName: "Fountain", access: "custom" });
+    expect(FountainAgentDriver.metadata).toMatchObject({ displayName: "Fountain", access: "subscription" });
     expect(FountainAgentDriver.decodeConfig(undefined)).toEqual({ cli: "fountain", fullAuto: false, workspace: undefined });
     expect(FountainAgentDriver.install?.signInCommand).toBe("fountain auth login");
     expect(FountainAgentDriver.install?.command?.darwin).toContain("brew install");

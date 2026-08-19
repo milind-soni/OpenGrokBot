@@ -171,6 +171,7 @@ export class ProviderRegistry {
             agentsMcp: inst.adapter.capabilities.agentsMcp === true,
             composioMcp: inst.adapter.capabilities.composioMcp === true,
             phoneMcp: inst.adapter.capabilities.phoneMcp === true,
+            images: inst.adapter.capabilities.images === true,
             effortLevels: inst.adapter.capabilities.effortLevels,
           },
           access: driver?.metadata.access ?? "subscription",

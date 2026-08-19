@@ -674,6 +674,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             agentsMcp: true,
             computerMcp: true,
             composioMcp: true,
+            images: true,
             effortLevels: support.effortLevels,
           },
           sendTurn,

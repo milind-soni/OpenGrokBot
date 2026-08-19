@@ -250,6 +250,7 @@ export interface InstanceInfo {
     computerMcp?: boolean;
     agentsMcp?: boolean;
     composioMcp?: boolean;
+    images?: boolean;
     effortLevels?: readonly EffortLevel[];
   };
   /** `custom` agents sit below the rail divider — no subscription catalog. */

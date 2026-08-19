@@ -49,6 +49,7 @@ import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 import { useFocusMessage } from "@/lib/focus-message";
 import { webhookMessageView } from "@/lib/webhook-message";
+import { attachmentBasename, splitAttachedImages } from "@/lib/composer-attachments";
 import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import {
   TRANSCRIPT_WINDOW_SIZE,
@@ -287,7 +288,8 @@ function Bubble({
   const [expanded, setExpanded] = useState(false);
   const text = message.text ?? "";
   const webhookView = user ? webhookMessageView(text) : null;
-  const visibleText = webhookView?.task ?? text;
+  const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
+  const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
@@ -350,10 +352,31 @@ function Bubble({
             </div>
           ) : user ? (
             <>
+              {attachedImages && attachedImages.images.length > 0 && (
+                <div className="mb-2 flex flex-wrap justify-end gap-2">
+                  {attachedImages.images.map((path) => (
+                    <a
+                      key={path}
+                      href={`/api/attachments/${encodeURIComponent(attachmentBasename(path))}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block max-w-[260px] overflow-hidden rounded-lg border border-hairline/40"
+                      title={path}
+                    >
+                      <img
+                        src={`/api/attachments/${encodeURIComponent(attachmentBasename(path))}`}
+                        alt="Attached image"
+                        loading="lazy"
+                        className="block max-h-[220px] w-full object-cover"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )}
               <div
                 className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
               >
-                {text}
+                {visibleText}
               </div>
               {collapsible && (
                 <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">

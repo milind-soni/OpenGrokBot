@@ -533,6 +533,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           computerMcp: true,
           composioMcp: true,
           phoneMcp: true,
+          images: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         sendTurn,

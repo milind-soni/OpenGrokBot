@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { approvalKey, autoDecision } from "./auto-approve.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import { extensionForMime, IMAGE_MAX_BYTES, readAttachment, saveImage, type SavedAttachment } from "./attachments.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
@@ -2492,6 +2493,63 @@ const server = createServer(async (req, res) => {
         "cache-control": "private, max-age=31536000, immutable",
       });
       return res.end(bytes);
+    }
+
+    // ── image attachments ────────────────────────────────────────────────
+    // Pasted/dropped images are stored as files and referenced by path in
+    // the prompt (<attached-image path="…"/>); this pair of routes is the
+    // save + serve. The POST takes raw bytes (base64 JSON would double the
+    // payload), so it needs its own reader rather than readBody.
+    if (method === "POST" && path === "/api/attachments") {
+      const rawType = Array.isArray(req.headers["content-type"]) ? req.headers["content-type"][0] : req.headers["content-type"];
+      const mime = rawType?.split(";")[0]?.trim().toLowerCase();
+      if (!mime || !extensionForMime(mime)) {
+        return json(res, 400, { error: "content-type must be an image type" });
+      }
+      const saved = await new Promise<SavedAttachment>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        let settled = false;
+        const fail = (status: number, msg: string) => {
+          if (settled) return;
+          settled = true;
+          req.removeAllListeners("data");
+          req.removeAllListeners("end");
+          req.destroy();
+          reject(Object.assign(new Error(msg), { status }));
+        };
+        req.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          received += chunk.byteLength;
+          if (received > IMAGE_MAX_BYTES) return fail(413, `image exceeds ${IMAGE_MAX_BYTES} bytes`);
+          chunks.push(chunk);
+        });
+        req.on("end", () => {
+          if (settled) return;
+          settled = true;
+          try {
+            resolve(saveImage(Buffer.concat(chunks), mime));
+          } catch (e) {
+            reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { status: 400 }));
+          }
+        });
+        req.on("error", (e) => fail(400, e instanceof Error ? e.message : String(e)));
+      });
+      return json(res, 201, saved);
+    }
+
+    // serving is name-locked to the attachments dir — readAttachment
+    // refuses anything that is not a bare generated filename
+    m = path.match(/^\/api\/attachments\/([\w.-]+)$/);
+    if (m && method === "GET") {
+      const attachment = readAttachment(m[1]!);
+      if (!attachment) return json(res, 404, { error: "no such attachment" });
+      res.writeHead(200, {
+        "content-type": attachment.mime,
+        "content-length": String(attachment.bytes.byteLength),
+        "cache-control": "private, max-age=31536000, immutable",
+      });
+      return res.end(attachment.bytes);
     }
 
     // ── search across every transcript ──────────────────────────────────

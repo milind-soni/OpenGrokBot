@@ -193,6 +193,11 @@ export interface ProviderAdapter {
     composioMcp?: boolean;
     /** True when the driver can mount the first-party physical-phone MCP. */
     phoneMcp?: boolean;
+    /** True when this engine accepts images in the prompt — gates image
+     * paste in the composer. Same rule as computerMcp: never offer an
+     * attachment an engine cannot open (a bot told it has an image it
+     * cannot read burns the turn). */
+    images?: boolean;
     /** Effort levels this driver can pass to its CLI, ascending. Absent =
      * the driver cannot set effort, so the app never offers the control —
      * same rule as computerMcp: never show a knob the driver cannot turn. */

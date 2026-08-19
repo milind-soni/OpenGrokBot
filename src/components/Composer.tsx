@@ -8,6 +8,8 @@ import { MausAvatar } from "./Avatar";
 import { ComposerAttachments } from "./ComposerAttachments";
 import {
   composeMessage,
+  imageAttachmentFromFile,
+  isImageFile,
   isLongPaste,
   pasteAttachment,
   type Attachment,
@@ -82,6 +84,13 @@ export function Composer({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
+
+  // image paste is offered only when the active engine can open one; in a
+  // room the answering bot is whichever member is currently running, so
+  // the gate is the bot's own engine for 1:1 and any member for rooms
+  const engineSupportsImages = group
+    ? Boolean(members?.some((m) => state.instances.find((i) => i.instanceId === m.modelSelection.instanceId)?.capabilities?.images))
+    : Boolean(state.instances.find((i) => i.instanceId === bot?.modelSelection.instanceId)?.capabilities?.images);
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
@@ -295,6 +304,27 @@ export function Composer({
             setDismissedAt(null);
           }}
           onPaste={(e) => {
+            // an image from the clipboard becomes an uploaded attachment —
+            // but only for engines that can open one; a grok bot politely
+            // refuses instead of receiving a path it cannot read
+            const imageFiles = Array.from(e.clipboardData.files).filter(isImageFile);
+            if (imageFiles.length && engineSupportsImages) {
+              e.preventDefault();
+              void (async () => {
+                for (const file of imageFiles) {
+                  try {
+                    const attachment = await imageAttachmentFromFile(file);
+                    if (attachment) setAttachments((prev) => [...prev, attachment]);
+                  } catch (err) {
+                    dispatch({
+                      type: "error",
+                      message: err instanceof Error ? err.message : "image upload failed",
+                    });
+                  }
+                }
+              })();
+              return;
+            }
             // a wall of text becomes a chip instead of burying the input
             const pasted = e.clipboardData.getData("text/plain");
             if (!isLongPaste(pasted)) return;

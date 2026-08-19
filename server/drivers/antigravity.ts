@@ -415,7 +415,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session" },
+        capabilities: { sessionModelSwitch: "in-session", images: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer

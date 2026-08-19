@@ -3,11 +3,13 @@
 // first lines instead of flooding the composer; a file dropped anywhere
 // on the window attaches by path.
 import { useEffect, useRef, useState } from "react";
-import { ClipboardPaste, File as FileIcon, X } from "lucide-react";
+import { ClipboardPaste, File as FileIcon, Image as ImageIcon, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   attachmentsFromDroppedFiles,
   formatSize,
+  imageAttachmentFromFile,
+  isImageFile,
   pasteSummary,
   type Attachment,
 } from "@/lib/composer-attachments";
@@ -57,13 +59,29 @@ export function ComposerAttachments({
       depth.current = 0;
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
-      const { attachments, rejectedNames } = await attachmentsFromDroppedFiles(files, pathForFile);
+      const images = files.filter(isImageFile);
+      const rest = files.filter((f) => !isImageFile(f));
+      const { attachments, rejectedNames } = await attachmentsFromDroppedFiles(rest, pathForFile);
+      const uploaded: Attachment[] = [];
+      const imageErrors: string[] = [];
+      for (const file of images) {
+        try {
+          const attachment = await imageAttachmentFromFile(file);
+          if (attachment) uploaded.push(attachment);
+        } catch (err) {
+          imageErrors.push(`${file.name}: ${err instanceof Error ? err.message : "upload failed"}`);
+        }
+      }
       if (!active) return;
-      if (attachments.length) onAdd(attachments);
+      if (attachments.length || uploaded.length) onAdd([...attachments, ...uploaded]);
       setNotice(
-        rejectedNames.length
-          ? `${rejectedNames.join(", ")} — that drag carried no file on disk. Save it first, then drop it from Finder.`
-          : null,
+        rejectedNames.length && imageErrors.length
+          ? `${rejectedNames.join(", ")} — that drag carried no file on disk. Save it first, then drop it from Finder. (${imageErrors.join("; ")})`
+          : rejectedNames.length
+            ? `${rejectedNames.join(", ")} — that drag carried no file on disk. Save it first, then drop it from Finder.`
+            : imageErrors.length
+              ? imageErrors.join("; ")
+              : null,
       );
     };
 
@@ -121,6 +139,18 @@ export function ComposerAttachments({
                 </div>
                 <div className="mt-1 text-[10.5px] text-ink-secondary/70">{pasteSummary(a)}</div>
               </Chip>
+            ) : a.kind === "image" ? (
+              <Chip key={a.id} label="IMAGE" title={a.path} onRemove={() => onRemove(a.id)}>
+                <div className="flex h-[76px] items-center justify-center overflow-hidden rounded-lg bg-inset">
+                  <img
+                    src={`/api/attachments/${encodeURIComponent(a.path.split("/").pop() ?? "")}`}
+                    alt={a.name}
+                    loading="lazy"
+                    className="max-h-[76px] max-w-full object-contain"
+                  />
+                </div>
+                <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(a.size)}</div>
+              </Chip>
             ) : (
               <Chip key={a.id} label="FILE" title={a.path} onRemove={() => onRemove(a.id)}>
                 <div className="flex h-[76px] items-center gap-2">
@@ -146,11 +176,11 @@ function Chip({
   onRemove,
 }: {
   children: React.ReactNode;
-  label: "PASTED" | "FILE";
+  label: "PASTED" | "FILE" | "IMAGE";
   title: string;
   onRemove: () => void;
 }) {
-  const Icon = label === "PASTED" ? ClipboardPaste : FileIcon;
+  const Icon = label === "PASTED" ? ClipboardPaste : label === "IMAGE" ? ImageIcon : FileIcon;
   return (
     <div
       title={title}

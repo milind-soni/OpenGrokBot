@@ -271,6 +271,11 @@ export interface BotRecord {
   rewound?: boolean;
   pinned?: boolean;
   hidden?: boolean;
+  /** Sidebar section this bot renders under (labeled divider above its
+   * rows). Absent/empty = unsectioned, rendered as today. The section list
+   * is derived from assignments — no separate entity to keep in sync, and
+   * a section whose last bot leaves simply disappears. */
+  section?: string;
   /** The single workspace-wide coordinator. The store enforces that at
    * most one bot owns this role, even if an older/corrupt file says more. */
   chiefOfStaff?: boolean;

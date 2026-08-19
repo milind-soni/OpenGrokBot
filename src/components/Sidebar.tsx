@@ -1,5 +1,5 @@
 import { track } from "@/lib/analytics";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Archive,
@@ -11,6 +11,7 @@ import {
   ClipboardCopy,
   Copy,
   Crown,
+  FolderMinus,
   FolderPlus,
   Library,
   Loader2,
@@ -351,14 +352,145 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Labeled divider between sidebar sections. Same typographic register as
+ * EngineGroupLabel so the sidebar reads as one system. */
+function SectionDivider({ name }: { name: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pb-1 pt-3 first:pt-0" data-section={name}>
+      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
+        {name}
+      </span>
+      <span className="h-px flex-1 bg-hairline/40" />
+    </div>
+  );
+}
+
+/** Move-to-section popover: existing sections as chips (checkmark on the
+ * bot's current one), a create field, and a remove action. Mirrors the
+ * context menu's fixed positioning + dismiss-on-outside-click contract. */
+function SectionPicker({
+  botId,
+  anchor,
+  onClose,
+}: {
+  botId: string;
+  anchor: MenuState;
+  onClose: () => void;
+}) {
+  const { state, dispatch } = useStore();
+  const [name, setName] = useState("");
+  const bot = state.bots.find((b) => b.id === botId);
+  const trimmed = name.trim();
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-section-picker]")) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+
+  if (!bot) return null;
+  // hidden bots can carry a stale assignment; don't offer it as a section
+  const sections = [...new Set(state.bots.filter((b) => !b.hidden && b.section).map((b) => b.section!))];
+
+  const assign = (section: string) => {
+    dispatch({ type: "updateBot", botId, patch: { section } });
+    onClose();
+  };
+
+  const top = Math.max(8, Math.min(anchor.y, window.innerHeight - 300));
+  const left = Math.min(anchor.x, window.innerWidth - 260);
+
+  return (
+    <div
+      data-section-picker
+      style={{ top, left }}
+      className="fixed z-40 w-[236px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-2 shadow-2xl shadow-black/60"
+    >
+      <div className="px-3.5 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
+        Move to section
+      </div>
+      {sections.length > 0 && (
+        <div className="flex flex-col gap-0.5 px-1.5 py-1">
+          {sections.map((section) => (
+            <button
+              key={section}
+              onClick={() => assign(section)}
+              className={cn(
+                "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]",
+                section === bot.section ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
+              )}
+            >
+              <span className="truncate">{section}</span>
+              {section === bot.section && <Check size={14} className="shrink-0 text-accent" />}
+            </button>
+          ))}
+        </div>
+      )}
+      <form
+        className="flex items-center gap-1.5 px-2.5 py-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!trimmed) return;
+          assign(trimmed);
+        }}
+      >
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="New section…"
+          aria-label="New section name"
+          className="w-full rounded-lg bg-raised/70 px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={!trimmed}
+          className={cn(
+            "shrink-0 rounded-lg px-2.5 py-1.5 text-[12px] font-medium",
+            trimmed ? "bg-accent text-panel" : "bg-raised/70 text-ink-secondary",
+          )}
+        >
+          Add
+        </button>
+      </form>
+      {bot.section && (
+        <>
+          <div className="mx-2 my-1 border-t border-hairline/40" />
+          <button
+            onClick={() => {
+              dispatch({ type: "updateBot", botId, patch: { section: "" } });
+              onClose();
+            }}
+            className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-danger hover:bg-raised/70"
+          >
+            <FolderMinus size={15} />
+            Remove from section
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BotContextMenu({
   menu,
   onClose,
   onArchive,
+  onMoveToSection,
 }: {
   menu: MenuState;
   onClose: () => void;
   onArchive: (bot: Bot) => void;
+  onMoveToSection: (botId: string) => void;
 }) {
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
@@ -439,9 +571,9 @@ function BotContextMenu({
             hint: !bot.chiefOfStaff && !canCoordinate ? "Choose a Claude or ACP engine first" : undefined,
           },
         ),
-        item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to new section", undefined, {
-          disabled: true,
-          hint: "Coming soon",
+        item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to section", () => {
+          onClose();
+          onMoveToSection(bot.id);
         }),
         item(<BellDot size={16} className="text-ink-secondary" />, "Mark as Unread", () =>
           dispatch({ type: "markUnread", botId: bot.id }),
@@ -740,6 +872,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const { capabilities } = useDesktopCapabilities();
   const importReturnRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [sectionPicker, setSectionPicker] = useState<MenuState | null>(null);
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
@@ -888,9 +1021,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         preview(b).toLowerCase().includes(q),
     );
   const chiefBot = matchingBots.find((bot) => bot.chiefOfStaff);
-  const visibleBots = matchingBots
-    .filter((bot) => !bot.chiefOfStaff)
+  const sectionedBots = matchingBots
+    .filter((bot) => !bot.chiefOfStaff && bot.section)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  const visibleBots = matchingBots
+    .filter((bot) => !bot.chiefOfStaff && !bot.section)
+    .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  // sections keep first-appearance order within the current list; a section
+  // whose bots all moved away (or fell out of the filter) simply vanishes
+  const sectionNames: string[] = [];
+  for (const bot of sectionedBots) {
+    if (!sectionNames.includes(bot.section!)) sectionNames.push(bot.section!);
+  }
   const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q));
   const activeBotCount = state.bots.filter((bot) => !bot.hidden).length;
   const archivedBots = state.bots.filter((bot) => bot.hidden);
@@ -1022,7 +1164,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {/* Bot list */}
       <div className="flex-1 overflow-y-auto px-2">
         <div className="flex flex-col gap-0.5">
-          {!chiefBot && visibleBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
+          {!chiefBot && visibleBots.length === 0 && sectionedBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">Nothing matches “{query}”</div>
           )}
           {chiefBot && (
@@ -1046,6 +1188,22 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               onArchive={(bot) => void archiveBot(bot)}
               archiveDisabled={activeBotCount <= 1}
             />
+          ))}
+          {sectionNames.map((name) => (
+            <Fragment key={name}>
+              <SectionDivider name={name} />
+              {sectionedBots
+                .filter((b) => b.section === name)
+                .map((b) => (
+                  <BotListItem
+                    key={b.id}
+                    bot={b}
+                    onMenu={setMenu}
+                    onArchive={(bot) => void archiveBot(bot)}
+                    archiveDisabled={activeBotCount <= 1}
+                  />
+                ))}
+            </Fragment>
           ))}
           <SearchResults query={query} onLanded={() => setQuery("")} />
         </div>
@@ -1094,7 +1252,17 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
 
-      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} onArchive={(bot) => void archiveBot(bot)} />}
+      {menu && (
+        <BotContextMenu
+          menu={menu}
+          onClose={() => setMenu(null)}
+          onArchive={(bot) => void archiveBot(bot)}
+          onMoveToSection={(botId) => setSectionPicker({ botId, x: menu.x, y: menu.y })}
+        />
+      )}
+      {sectionPicker && (
+        <SectionPicker botId={sectionPicker.botId} anchor={sectionPicker} onClose={() => setSectionPicker(null)} />
+      )}
       {roomMenu && (
         <RoomContextMenu
           menu={roomMenu}

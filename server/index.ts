@@ -2866,9 +2866,29 @@ const server = createServer(async (req, res) => {
         if (value.length > max) return json(res, 400, { error: `${field} must be at most ${max} characters` });
         if (field === "name" && !value.trim()) return json(res, 400, { error: "name must not be empty" });
       }
+      // Sidebar sections: a display-only label, but it persists as a string,
+      // so bound it like the other persona fields. null or "" clears the
+      // assignment (bot returns to unsectioned).
+      let section: string | undefined | null;
+      if (body.section !== undefined) {
+        if (body.section === null) section = null;
+        else if (typeof body.section !== "string") return json(res, 400, { error: "section must be a string" });
+        else {
+          const trimmed = body.section.trim();
+          if (!trimmed) section = null;
+          else if (trimmed.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
+          else section = trimmed;
+        }
+      }
       const patch: Record<string, unknown> = {};
       for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "cloudBackend", "color", "mascotExpression", "pinned", "hidden", "speakReplies", "voice"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
+      }
+      if (section !== undefined) {
+        // "" normalizes to undefined so the field drops off the record
+        // entirely — "every bot has a section key with an empty string"
+        // would leak into exports and every wire frame forever.
+        patch.section = section ?? undefined;
       }
       // per-bot gate on the workspace's connected apps (Composio)
       if (body.composio !== undefined) {

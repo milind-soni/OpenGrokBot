@@ -167,6 +167,8 @@ export interface Bot {
   voice?: string;
   pinned?: boolean;
   hidden?: boolean;
+  /** Sidebar section this bot renders under; absent = unsectioned. */
+  section?: string;
   /** The workspace's one primary coordinator. */
   chiefOfStaff?: boolean;
   /** When this bot wants to talk to another bot (ask_bot/delegate_bot),
@@ -405,6 +407,7 @@ export type Action =
           | "voice"
           | "pinned"
           | "hidden"
+          | "section"
           | "chiefOfStaff"
           | "approvePeerComms"
           | "composio"

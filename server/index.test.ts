@@ -312,6 +312,21 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: "yes" })).status).toBe(400);
     const gated = await api("PATCH", `/api/bots/${bot.id}`, { composio: false });
     expect(gated.status).toBe(200);
+
+    // sidebar sections: assign, round-trip, trim, clear — and the field
+    // drops off the record entirely once cleared rather than lingering
+    // as an empty string through exports and wire frames
+    const sectioned = await api("PATCH", `/api/bots/${bot.id}`, { section: "  Research  " });
+    expect(sectioned.status).toBe(200);
+    expect(sectioned.body.bot).toMatchObject({ section: "Research" });
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { section: 7 })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { section: "S".repeat(61) })).status).toBe(400);
+    const cleared = await api("PATCH", `/api/bots/${bot.id}`, { section: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.bot).not.toHaveProperty("section");
+    const clearedEmpty = await api("PATCH", `/api/bots/${bot.id}`, { section: "   " });
+    expect(clearedEmpty.status).toBe(200);
+    expect(clearedEmpty.body.bot).not.toHaveProperty("section");
     expect(gated.body.bot.composio).toBe(false);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).body.bot.composio).toBe(true);
 

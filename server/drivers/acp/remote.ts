@@ -178,10 +178,10 @@ export function mergeRemoteAcpCatalog(
 }
 
 /** Substitute the pick into the argv template. With nothing picked (empty
- * catalog, or the picker left blank) the `{model}` argument is dropped, and
- * so is a directly preceding option (`--agent`, `-m`) that would otherwise
- * be left dangling; the bridge then runs on its own default, or reports
- * that it has none — its error, in its words, not ours. */
+ * catalog, or the picker left blank) every argument carrying `{model}` is
+ * dropped, and so is a directly preceding option (`--agent`, `-m`) that
+ * would otherwise be left dangling; the bridge then runs on its own
+ * default, or reports that it has none — its error, in its words, not ours. */
 export function remoteAcpSpawnArgs(template: readonly string[], model: string | undefined): string[] {
   const out: string[] = [];
   for (const arg of template) {
@@ -193,7 +193,7 @@ export function remoteAcpSpawnArgs(template: readonly string[], model: string | 
       out.push(arg.split(MODEL_PLACEHOLDER).join(model));
       continue;
     }
-    if (arg === MODEL_PLACEHOLDER && out.length && /^-/.test(out[out.length - 1]!)) out.pop();
+    if (out.length && /^-/.test(out[out.length - 1]!)) out.pop();
   }
   return out;
 }

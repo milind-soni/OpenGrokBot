@@ -151,6 +151,8 @@ describe("Remote ACP spawn args", () => {
     expect(remoteAcpSpawnArgs(["acp", "--agent", "{model}"], undefined)).toEqual(["acp"]);
     expect(remoteAcpSpawnArgs(["acp", "--agent", "{model}"], "")).toEqual(["acp"]);
     expect(remoteAcpSpawnArgs(["acp", "--agent={model}"], undefined)).toEqual(["acp"]);
+    // an embedded placeholder is still the flag's value
+    expect(remoteAcpSpawnArgs(["acp", "--agent", "profile-{model}"], undefined)).toEqual(["acp"]);
     // a positional before the placeholder is not a flag and stays
     expect(remoteAcpSpawnArgs(["run", "{model}"], undefined)).toEqual(["run"]);
     expect(remoteAcpSpawnArgs(["run", "{model}", "--json"], undefined)).toEqual(["run", "--json"]);
@@ -363,6 +365,7 @@ describe("Remote ACP driver", () => {
       const started = await recorder.until((e) => e.type === "session.started");
       if (started.type !== "session.started") throw new Error("expected session.started");
       expect(started.sessionId).toBeTruthy();
+      await recorder.until((e) => e.type === "turn.completed");
     });
 
     it("skips the wire authenticate step by default", async () => {

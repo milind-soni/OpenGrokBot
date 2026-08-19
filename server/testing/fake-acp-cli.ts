@@ -71,6 +71,7 @@ if (process.env.FAKE_ACP_DUMP) {
       "ANTHROPIC_API_KEY",
       "XAI_API_KEY",
       "UNSLOTH_STUDIO_AUTH_TOKEN",
+      "OMB_TEST_REMOTE_TOKEN",
     ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
   );
   writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));

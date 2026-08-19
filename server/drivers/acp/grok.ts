@@ -226,6 +226,20 @@ const support: AcpSupport = {
     "stdio",
   ],
 
+  // -m on argv is necessary but not sufficient: session/new still starts on
+  // [models].default. Pin the slug over the wire, same as Hermes/Droid.
+  async configureSession({ request, sessionId, turn }) {
+    if (!turn.model) return;
+    try {
+      await request("session/set_model", { sessionId, modelId: turn.model });
+    } catch (e) {
+      throw new Error(
+        `Grok rejected model "${turn.model}" via session/set_model: ${(e as Error).message}. ` +
+          `Check that grok is current (1.0.6+ supports it) and that this slug exists in ~/.grok/config.toml.`,
+      );
+    }
+  },
+
   // The CLI owns its own grok.com login; a leaked API key silently flips
   // billing from the subscription to pay-as-you-go.
   transformEnv: (env) => {

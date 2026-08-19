@@ -590,6 +590,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   config,
                   turn: cliTurn,
                 });
+                // initialize's currentModelId is the CLI default (grok-4.6),
+                // not the model this turn asked for. After a successful pin,
+                // report the slug we set so the UI does not claim otherwise.
+                if (!selectedModel && cliTurn.model) selectedModel = cliTurn.model;
               }
             } catch (error) {
               // session.started is the only place the resume cursor is recorded,

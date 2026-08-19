@@ -272,6 +272,14 @@ describe("ensureGrokInjectSlug", () => {
       expect(modelFlag).toBeGreaterThan(agent);
       expect(argv.indexOf("stdio")).toBeGreaterThan(modelFlag);
       expect(argv[modelFlag + 1]).toBe("omlx-glm-5.2-fp8");
+      const configCalls = JSON.parse(readFileSync(`${dump}.config.json`, "utf8")) as Array<{
+        method: string;
+        params: { modelId?: string };
+      }>;
+      expect(configCalls).toContainEqual({
+        method: "session/set_model",
+        params: { sessionId: "fake-acp-session", modelId: "omlx-glm-5.2-fp8" },
+      });
       expect(readFileSync(join(home, ".grok", "config.toml"), "utf8")).toContain(`model = "GLM-5.2-fp8"`);
     } finally {
       await instance.dispose();

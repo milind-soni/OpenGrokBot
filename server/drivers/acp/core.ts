@@ -48,8 +48,11 @@ export interface AcpConfig {
   workspace?: string;
 }
 
-/** Per-harness specifics — everything that differs between Grok, Gemini, … */
-export interface AcpSupport {
+/** Per-harness specifics — everything that differs between Grok, Gemini, …
+ *  `C` is the decoded instance config: the shared AcpConfig for a CLI that
+ *  takes no extra settings, or a wider record for a support that reads more
+ *  out of the instance's `config` envelope (see `decodeConfig`). */
+export interface AcpSupport<C extends AcpConfig = AcpConfig> {
   driverKind: string;
   displayName: string;
   /** Omit for subscription CLIs (the default). Custom-only CLIs sit below
@@ -63,16 +66,31 @@ export interface AcpSupport {
   effortLevels?: readonly EffortLevel[];
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
-  /** Optional live model catalog. A failed lookup keeps the last usable catalog. */
-  resolveModels?(environment: Record<string, string | undefined>): ModelCatalog | Promise<ModelCatalog>;
+  /** Widen the decoded config: `base` is the shared cli/fullAuto/workspace
+   *  triple already read from `raw`. Throw to reject an instance (it
+   *  becomes a shadow entry carrying the message) rather than run it on a
+   *  guess. Omit when the harness has no settings of its own. */
+  decodeConfig?(raw: Record<string, unknown>, base: AcpConfig): C;
+  /** Optional live model catalog. A failed lookup keeps the last usable
+   *  catalog. Receives the decoded instance config for supports whose
+   *  catalog source is configured per instance. */
+  resolveModels?(environment: Record<string, string | undefined>, config: C): ModelCatalog | Promise<ModelCatalog>;
   /** Native-protocol log label, e.g. "grok.acp". */
   nativeSource: string;
   /** Message shown when the CLI is present but not signed in. */
   loginNote: string;
+  /** Which of the harness's MCP integrations this agent actually mounts.
+   *  Default: all of them — an ACP CLI runs on this machine and takes the
+   *  session's mcpServers. A remote-execution harness (the agent runs in a
+   *  sandbox or on another host and never sees this machine's mcpServers)
+   *  declares false, so a bot is never told it has a computer or peers its
+   *  driver cannot hand it. May be a function of the decoded config for
+   *  supports where that is a per-instance fact. */
+  mcp?: AcpMcpMounts | ((config: C) => AcpMcpMounts);
   /** How a user installs this harness's CLI; surfaced by the setup UI. */
   install?: EngineInstall;
   /** CLI argv AFTER the binary name to enter ACP stdio mode. */
-  spawnArgs(config: AcpConfig, turn: SendTurnInput): string[];
+  spawnArgs(config: C, turn: SendTurnInput): string[];
   /** Provider credential variables this ACP child is allowed to inherit. */
   credentialEnv?: readonly string[];
   /** Select the model through a session config option instead of argv, for
@@ -82,16 +100,17 @@ export interface AcpSupport {
   selectModel?: { configId: string };
   /** Mutate the child env in place: strip a key, inject a policy. Receives the
    *  instance config so a support can vary with fullAuto. */
-  transformEnv?(env: Record<string, string | undefined>, config: AcpConfig): void;
+  transformEnv?(env: Record<string, string | undefined>, config: C): void;
   /** Pick the ACP authenticate methodId from initialize's advertised
-   * authMethods; return null to skip the authenticate step. */
-  pickAuthMethod(authMethods: Array<{ id?: string }>): string | null;
+   * authMethods; return null to skip the authenticate step. Receives the
+   * decoded instance config for supports where the method is configured. */
+  pickAuthMethod(authMethods: Array<{ id?: string }>, config: C): string | null;
   /** "fail": abort the turn if auth is missing/errors (subscription CLIs).
    *  "continue": proceed anyway (CLIs that work off an ambient login). */
   authFailure: "fail" | "continue";
   /** snapshot(): can this harness actually run a turn? (env already carries the
    *  merged config). May be async for harnesses that have to ask the CLI. */
-  isAuthenticated(env: Record<string, string | undefined>, config: AcpConfig): boolean | Promise<boolean>;
+  isAuthenticated(env: Record<string, string | undefined>, config: C): boolean | Promise<boolean>;
   /** Classify provider-native failures without coupling the core to messages. */
   classifyError?(error: unknown): ProviderErrorCode | undefined;
   /** Compose the session/prompt text. Default prepends the persona. */
@@ -110,9 +129,16 @@ export interface AcpSupport {
   configureSession?(ctx: {
     request: (method: string, params: unknown, timeoutMs?: number) => Promise<any>;
     sessionId: string;
-    config: AcpConfig;
+    config: C;
     turn: SendTurnInput;
   }): Promise<void>;
+}
+
+/** Which MCP integrations an ACP support mounts into the session. */
+export interface AcpMcpMounts {
+  agents?: boolean;
+  computer?: boolean;
+  composio?: boolean;
 }
 
 const INIT_TIMEOUT = 20_000;
@@ -131,21 +157,26 @@ const PROVIDER_CREDENTIAL_ENV = [
   "XAI_API_KEY",
 ] as const;
 
-function decodeAcpConfig(defaultCli: string) {
-  return (raw: unknown): AcpConfig => {
+function decodeAcpConfig<C extends AcpConfig>(support: AcpSupport<C>) {
+  return (raw: unknown): C => {
+    // SAFETY: the config envelope is opaque JSON; each key is checked below
+    // (and by a support's own decodeConfig) before use.
     const o = (raw ?? {}) as Record<string, unknown>;
-    return {
-      cli: typeof o.cli === "string" ? o.cli : defaultCli,
+    const base: AcpConfig = {
+      cli: typeof o.cli === "string" ? o.cli : support.defaultCli,
       fullAuto: o.fullAuto === true,
       workspace: typeof o.workspace === "string" ? o.workspace : undefined,
     };
+    // SAFETY: without a widening hook C is AcpConfig itself (the default
+    // type argument), so base already has the right shape.
+    return support.decodeConfig ? support.decodeConfig(o, base) : (base as C);
   };
 }
 
-export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> {
+export function createAcpDriver<C extends AcpConfig = AcpConfig>(support: AcpSupport<C>): ProviderDriver<C> {
   const DRIVER_KIND = support.driverKind;
   const SOURCE = support.nativeSource;
-  const decodeConfig = decodeAcpConfig(support.defaultCli);
+  const decodeConfig = decodeAcpConfig(support);
   const DENY_TIMEOUT_NOTE =
     "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
@@ -161,8 +192,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
     decodeConfig,
     defaultConfig: () => decodeConfig({}),
 
-    async create(input: DriverCreateInput<AcpConfig>): Promise<ProviderInstance> {
+    async create(input: DriverCreateInput<C>): Promise<ProviderInstance> {
       const { instanceId, config } = input;
+      const mounts: AcpMcpMounts = typeof support.mcp === "function" ? support.mcp(config) : support.mcp ?? {};
+      const mountsAgents = mounts.agents ?? true;
+      const mountsComputer = mounts.computer ?? true;
+      const mountsComposio = mounts.composio ?? true;
       const childEnv = () => {
         const env: Record<string, string | undefined> = {
           ...process.env,
@@ -180,7 +215,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const refreshModels = async () => {
         if (!support.resolveModels) return;
         try {
-          const resolved = await support.resolveModels(childEnv());
+          const resolved = await support.resolveModels(childEnv(), config);
           if (resolved.options.length) models = resolved;
         } catch {
           // Keep the last usable catalog when an optional discovery source is down.
@@ -215,11 +250,14 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const servers: Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }> = [];
         const acpEnv = (env: Record<string, string>) =>
           Object.entries(env).map(([name, value]) => ({ name, value: String(value) }));
-        const agents = turn.integrations?.agents;
+        // Gated on the support's declared mounts as well as the caller: a
+        // server that ignores mcpServers must not be handed credentials
+        // (the computer token, peer tokens) it would never use.
+        const agents = mountsAgents ? turn.integrations?.agents : undefined;
         if (agents) {
           servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
         }
-        const composio = turn.integrations?.composio;
+        const composio = mountsComposio ? turn.integrations?.composio : undefined;
         if (composio) {
           servers.push({
             name: "composio",
@@ -231,7 +269,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         // The bot's computer, mounted exactly like the Claude driver does.
         // Cloud boxes use the REST adapter; host and sandbox Cua connections
         // expose Cua Driver's official MCP server directly.
-        const computer = turn.integrations?.computer;
+        const computer = mountsComputer ? turn.integrations?.computer : undefined;
         if (computer) {
           servers.push({
             name: "computer",
@@ -239,7 +277,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             args: [COMPUTER_PROXY_PATH],
             env: acpEnv({ ELECTRON_RUN_AS_NODE: "1", ...computerProxyEnv(computer) }),
           });
-        } else if (turn.integrations?.localComputer) {
+        } else if (mountsComputer && turn.integrations?.localComputer) {
           const local = turn.integrations.localComputer;
           servers.push({
             name: "computer",
@@ -513,7 +551,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               INIT_TIMEOUT,
             );
             const methods: Array<{ id?: string }> = Array.isArray(init?.authMethods) ? init.authMethods : [];
-            const methodId = support.pickAuthMethod(methods);
+            const methodId = support.pickAuthMethod(methods, config);
             if (methodId) {
               try {
                 await request("authenticate", { methodId }, INIT_TIMEOUT);
@@ -671,9 +709,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           provider: DRIVER_KIND,
           capabilities: {
             sessionModelSwitch: "unsupported",
-            agentsMcp: true,
-            computerMcp: true,
-            composioMcp: true,
+            agentsMcp: mountsAgents,
+            computerMcp: mountsComputer,
+            composioMcp: mountsComposio,
             effortLevels: support.effortLevels,
           },
           sendTurn,

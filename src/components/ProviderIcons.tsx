@@ -1,5 +1,5 @@
 // Provider brand marks, keyed by driver kind. Official logos only.
-import { Monitor } from "lucide-react";
+import { Monitor, Radio } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HermesMark } from "./HermesMark";
 
@@ -37,6 +37,11 @@ export function CodexMark({ size = 16, className }: IconProps) {
 
 export function ComputerMark({ size = 16, className }: IconProps) {
   return <Monitor size={size} className={cn("text-ink-secondary", className)} />;
+}
+
+/** Remote ACP: an agent that executes somewhere else, driven over the protocol. */
+export function RemoteAcpMark({ size = 16, className }: IconProps) {
+  return <Radio size={size} className={cn("text-ink-secondary", className)} />;
 }
 
 /** Official Kimi mark (Moonshot). */
@@ -131,6 +136,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <HermesMark size={size} className={className} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
+    case "remoteAcp":
+      return <RemoteAcpMark size={size} className={className} />;
     default:
       return (
         <span className="flex size-full items-center justify-center text-[10px] font-semibold tracking-tight text-ink-secondary">

@@ -201,7 +201,8 @@ pnpm dev:desktop   # Electron shell; keep the two commands above running
 
 Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
 [`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
-in the model picker automatically.
+in the model picker automatically. Agents that run somewhere else — a hosted sandbox service, another machine,
+a container — plug in through the provider-neutral [Remote ACP engine](docs/remote-acp.md).
 
 Package the desktop application:
 

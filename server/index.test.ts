@@ -294,6 +294,18 @@ describe("harness HTTP API", () => {
     expect(unpinned.status).toBe(200);
     expect(unpinned.body.bot).not.toHaveProperty("pinnedMessageId");
 
+    const room = (await api("POST", "/api/groups", { name: "Pins", memberIds: [bot.id] })).body.group;
+    const roomPin = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "msg-room_1" });
+    expect(roomPin.status).toBe(200);
+    expect(roomPin.body.group).toMatchObject({ pinnedMessageId: "msg-room_1" });
+    const roomRepin = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "msg-room_2" });
+    expect(roomRepin.body.group).toMatchObject({ pinnedMessageId: "msg-room_2" });
+    expect((await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "not an id!" })).status).toBe(400);
+    expect((await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: 42 })).status).toBe(400);
+    const roomCleared = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "" });
+    expect(roomCleared.status).toBe(200);
+    expect(roomCleared.body.group).not.toHaveProperty("pinnedMessageId");
+
     // deleted conversations drop out of search rather than 404ing it
     await api("DELETE", `/api/bots/${bot.id}`);
     const after = await api("GET", "/api/search?q=nice%20to%20meet");

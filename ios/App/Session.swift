@@ -10,9 +10,9 @@
 import Foundation
 import OSLog
 import SwiftUI
+import UIKit
 import CompanionCore
 import UserNotifications
-import UIKit
 
 /// Stream lifecycle, in Console.app and the Xcode console. A companion that
 /// is silently not connected looks exactly like one with nothing to say, so
@@ -55,6 +55,9 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    /// Bumped when the paired computer changes so an in-flight upload cannot
+    /// be sent through a later client.
+    private var clientGeneration = 0
     private var reconnectDelay: UInt64 = 0
     /// How many computer panels are open. A count rather than a flag: the
     /// panel can be pushed twice in a navigation stack, and the last one to
@@ -149,11 +152,13 @@ final class Session: ObservableObject {
         try Keychain.save(paired.token, for: stored.id)
         UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: Self.connectionKey)
 
+        clientGeneration += 1
         self.connection = stored
         self.token = paired.token
         self.rotation = CandidateRotation(hosts: stored.orderedHosts)
         self.client = CompanionClient(connection: stored, token: paired.token)
         self.state = CompanionState()
+        forgetAttachmentPreviews()
         // A fresh pairing settles any restore that was still waiting on the
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
@@ -177,6 +182,7 @@ final class Session: ObservableObject {
     }
 
     func signOut() {
+        clientGeneration += 1
         streamTask?.cancel()
         streamTask = nil
         restorePending = false
@@ -187,6 +193,7 @@ final class Session: ObservableObject {
         token = nil
         rotation = CandidateRotation(hosts: [])
         state = CompanionState()
+        forgetAttachmentPreviews()
         NotificationCoordinator.shared.setBadge(0)
         status = .unpaired
     }
@@ -401,12 +408,42 @@ final class Session: ObservableObject {
     // the source of truth, and a phone that draws its own version of events
     // is a phone that disagrees with the laptop.
 
-    func send(_ text: String, to chat: Chat) async {
-        await perform {
+    func send(_ text: String, to chat: Chat) async -> Bool {
+        actionError = nil
+        let generation = clientGeneration
+        guard let client else { return false }
+        do {
             switch chat {
-            case let .bot(bot): try await $0.send(text: text, toBot: bot.id)
-            case let .room(room): try await $0.send(text: text, toRoom: room.id)
+            case let .bot(bot): try await client.send(text: text, toBot: bot.id)
+            case let .room(room): try await client.send(text: text, toRoom: room.id)
             }
+            guard generation == clientGeneration else { return false }
+            return true
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return false
+        } catch {
+            actionError = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Write a phone file onto the computer. Returns the host path to fold
+    /// into the next message; the harness never sees the bytes.
+    func upload(_ data: Data, filename: String) async -> InboxFile? {
+        actionError = nil
+        let generation = clientGeneration
+        guard let client else { return nil }
+        do {
+            let stored = try await client.upload(data: data, filename: filename)
+            guard generation == clientGeneration else { return nil }
+            return stored
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
+        } catch {
+            actionError = error.localizedDescription
+            return nil
         }
     }
 
@@ -492,6 +529,18 @@ final class Session: ObservableObject {
 
     func image(threadId: String, messageId: String) async -> Data? {
         try? await client?.image(threadId: threadId, messageId: messageId)
+    }
+
+    func inboxFile(named name: String) async -> Data? {
+        guard let client else { return nil }
+        do {
+            return try await client.inboxFile(named: name)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return nil
+        } catch {
+            return nil
+        }
     }
 
     func search(_ query: String) async -> [SearchHit] {
@@ -596,6 +645,32 @@ final class Session: ObservableObject {
             actionError = error.localizedDescription
             return nil
         }
+    }
+
+    /// Thumbnails of files this session just sent, keyed by the host path
+    /// in the message. The bubble uses them so a photo appears before the
+    /// sidecar round-trip, and after a restart the GET above fills in.
+    private static let maxAttachmentPreviews = 24
+    private var attachmentPreviews: [String: UIImage] = [:]
+    private var attachmentPreviewOrder: [String] = []
+
+    func rememberPreview(_ image: UIImage, for path: String) {
+        attachmentPreviews[path] = PendingMedia.thumbnail(from: image)
+        attachmentPreviewOrder.removeAll { $0 == path }
+        attachmentPreviewOrder.append(path)
+        while attachmentPreviewOrder.count > Self.maxAttachmentPreviews {
+            let old = attachmentPreviewOrder.removeFirst()
+            attachmentPreviews.removeValue(forKey: old)
+        }
+    }
+
+    func preview(for path: String) -> UIImage? {
+        attachmentPreviews[path]
+    }
+
+    private func forgetAttachmentPreviews() {
+        attachmentPreviews.removeAll()
+        attachmentPreviewOrder.removeAll()
     }
 
     func refreshNotificationAuthorization() async {
@@ -765,11 +840,23 @@ extension CompanionState {
     private static func preview(of last: Message?) -> String {
         guard let last else { return "" }
         switch last.kind {
-        case .text: return last.text ?? ""
+        case .text:
+            return Self.previewText(last.text ?? "")
         case .options: return last.card?.isPending == true ? "Waiting on you" : (last.card?.title ?? "")
         case .activity: return last.tool?.name ?? ""
         case .screen: return "Screenshot"
         case .unknown: return last.text ?? ""
         }
+    }
+
+    /// Hide `<attached-file>` tags in the roster. The path is for the agent.
+    private static func previewText(_ text: String) -> String {
+        let shown = Attachment.display(text)
+        if shown.files.isEmpty { return shown.caption }
+        if shown.caption.isEmpty {
+            if shown.files.count == 1 { return shown.files[0].displayName }
+            return "\(shown.files.count) files"
+        }
+        return shown.caption
     }
 }

@@ -269,6 +269,13 @@ public struct PairResponse: Codable, Sendable {
     public var hosts: [String]?
 }
 
+/// `POST /api/inbox` — the sidecar wrote this file onto the computer.
+public struct InboxFile: Codable, Sendable {
+    public var path: String
+    public var name: String
+    public var size: Int
+}
+
 /// A freshly minted provider viewer. It is deliberately not Codable for
 /// persistence: the URL is a short-lived bearer credential and belongs only
 /// in memory for the browser session that requested it.

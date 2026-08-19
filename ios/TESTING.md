@@ -133,10 +133,10 @@ xcodebuild -project OpenMausCompanion.xcodeproj \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-**Re-run `xcodegen generate` whenever a pull adds a file to `App/`.** The
-generated project lists source files explicitly, so a new one is missing from
-the target until you regenerate, and the build fails with `Cannot find 'X' in
-scope` — which looks like a code error and is not one.
+**Quit Xcode, then re-run `xcodegen generate` once after this pull** (`App/`
+is a synced folder; new Swift files after that do not need a regenerate).
+Pulling while Xcode is open is what produces "Build input files cannot be
+found" for files the old project listed.
 
 ### If the app is letterboxed inside black bars
 
@@ -203,7 +203,22 @@ On the phone, in order:
    then come back. The transcript should catch up *without* a visible reload —
    that is the resumable stream doing its job. Watch the harness log to confirm
    it replayed rather than re-hydrated.
-6. **Revoke.** Remove the device in Settings → Companion on the computer. The
+6. **Dictate.** Open a chat, tap the mic, speak, tap the mic again. The words
+   should land in the field as you talk (not only after you stop), survive
+   an edit, and send like anything you typed. The first tap prompts for
+   Microphone and Speech Recognition; a denial names Settings → OpenMausMobile
+   on that same attempt. Backgrounding the app must stop the mic — lock the
+   phone mid-sentence and confirm it is not still listening when you come
+   back. Opening the computer panel must also release it (ChatView stays
+   mounted under the push).
+7. **Attach.** Open a chat, tap +, pick Attach Image / Take Photo / Choose
+   File. A chip should appear above the field. Send with or without a caption.
+   On the computer, the file lands under the sidecar inbox
+   (`~/.openmausbot-companion/inbox/`) and the bot's prompt contains
+   `<attached-file path="…">` — the same tag a desktop drop produces. The
+   first Take Photo prompts for Camera. A simulator has no camera and should
+   say so rather than crash. Eight files, 8 MB each, is the ceiling.
+8. **Revoke.** Remove the device in Settings → Companion on the computer. The
    phone should land on "This phone was unpaired" rather than silently failing.
 
 ---
@@ -257,7 +272,8 @@ Not built yet, so not bugs:
 - **Nothing arrives after the app is terminated.** Live and replayed notification
   frames now become native alerts and badges, but closed-app push still needs an
   APNs relay with project-owned Apple credentials.
-- **No voice or routine management.** Tasks, SQLite transcript search/export,
+- **No call mode, spoken replies, or routine management.** Composer dictation
+  and photo/file attach are in. Tasks, SQLite transcript search/export,
   reactions, and edit/version switching are available from the conversation UI.
 
 (Two entries that used to sit on this list have since shipped: replies stream

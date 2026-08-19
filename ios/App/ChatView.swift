@@ -14,15 +14,27 @@ import CompanionCore
 // isn't. The App target is iOS; CompanionCore is where the portable half
 // lives.
 import UIKit
+import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
     @State private var showingTasks = false
     @State private var shareFile: ShareFile?
     @FocusState private var composerFocused: Bool
+    @StateObject private var dictation = SpeechDictation()
+    @State private var pending: [PendingAttachment] = []
+    @State private var attachError: String?
+    @State private var pickingPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var pickingCamera = false
+    @State private var pickingFiles = false
+    @State private var sendingAttachments = false
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -181,7 +193,11 @@ struct ChatView: View {
                 // guess. Bots only.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
+                        // Pushing does not disappear ChatView — it stays in
+                        // the stack under the computer panel — so onDisappear
+                        // would leave the mic open behind another screen.
                         ComputerView(bot: bot)
+                            .onAppear { dictation.stop() }
                     } label: {
                         Image(systemName: "display")
                             .font(.system(size: 15, weight: .medium))
@@ -231,6 +247,29 @@ struct ChatView: View {
             // bit here rather than leaving a badge on an open conversation.
             if unread { Task { await session.markRead(current) } }
         }
+        .onDisappear { dictation.stop() }
+        // Backgrounding does not always disappear this view — it stays in
+        // the navigation stack — and a microphone left open through a lock
+        // is a privacy surprise. The stream is already torn down on
+        // inactive; dictation should follow.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { dictation.stop() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
+            let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
+            if value == AVAudioSession.InterruptionType.began.rawValue {
+                dictation.stop()
+            }
+        }
+        // Frozen `dictation.base`, not the live draft: a later partial
+        // replaces an earlier one rather than concatenating onto it.
+        .onChange(of: dictation.transcript) { _, spoken in
+            draft = Dictation.draft(base: dictation.base, transcript: spoken)
+        }
+        .onChange(of: dictation.isListening) { _, listening in
+            if listening { composerFocused = false }
+        }
         .sheet(isPresented: $showingTasks) {
             if case let .bot(bot) = current { TaskManagerView(bot: bot) }
         }
@@ -247,25 +286,215 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        sendingAttachments == false
+            && (
+                !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !pending.isEmpty
+            )
     }
 
     private func submit() {
+        // Always, not only when `isListening`: send during the permission
+        // prompt must cancel the in-flight start, or capture would begin
+        // after the message has already left.
+        dictation.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        Task { await session.send(text, to: current) }
+        let ids = pending.map(\.id)
+        guard !text.isEmpty || !ids.isEmpty, !sendingAttachments else { return }
+        sendingAttachments = true
+        attachError = nil
+        Task {
+            var files: [Attachment.File] = []
+            for id in ids {
+                guard let index = pending.firstIndex(where: { $0.id == id }) else { continue }
+                if let host = pending[index].host {
+                    if let preview = pending[index].preview {
+                        session.rememberPreview(preview, for: host.path)
+                    }
+                    InboxCache.save(pending[index].data, hostPath: host.path)
+                    files.append(host)
+                    continue
+                }
+                let item = pending[index]
+                guard let stored = await session.upload(item.data, filename: item.name) else {
+                    sendingAttachments = false
+                    attachError = session.actionError ?? "Couldn't send that file."
+                    return
+                }
+                guard let latest = pending.firstIndex(where: { $0.id == id }) else { continue }
+                let file = Attachment.File(path: stored.path, name: stored.name, size: stored.size)
+                pending[latest].host = file
+                if let preview = pending[latest].preview {
+                    session.rememberPreview(preview, for: file.path)
+                }
+                InboxCache.save(item.data, hostPath: file.path)
+                files.append(file)
+            }
+            let body = Attachment.draft(text: text, files: files)
+            guard !body.isEmpty else {
+                sendingAttachments = false
+                return
+            }
+            let sent = await session.send(body, to: current)
+            sendingAttachments = false
+            guard sent else {
+                attachError = session.actionError ?? "Couldn't send that."
+                return
+            }
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                draft = ""
+            }
+            pending.removeAll { ids.contains($0.id) }
+        }
+    }
+
+    private func addPhoto(_ image: UIImage, name: String = "photo.jpg") {
+        guard pending.count < PendingMedia.maxCount else {
+            attachError = "You can attach up to \(PendingMedia.maxCount) files."
+            return
+        }
+        guard let item = PendingMedia.jpegAttachment(from: image, name: uniqueName(name)) else {
+            attachError = "That image is too large to send."
+            return
+        }
+        attachError = nil
+        pending.append(item)
+    }
+
+    private func addFile(name: String, data: Data, preview: UIImage? = nil) {
+        guard !data.isEmpty else { return }
+        guard pending.count < PendingMedia.maxCount else {
+            attachError = "You can attach up to \(PendingMedia.maxCount) files."
+            return
+        }
+        guard data.count <= PendingMedia.maxBytes else {
+            attachError = "\(name) is larger than 8 MB."
+            return
+        }
+        attachError = nil
+        pending.append(PendingAttachment(name: uniqueName(name), data: data, preview: preview))
+    }
+
+    /// Chip labels stay distinct when two photos would otherwise both be `photo.jpg`.
+    private func uniqueName(_ name: String) -> String {
+        if !pending.contains(where: { $0.name == name }) { return name }
+        let ns = name as NSString
+        let ext = ns.pathExtension
+        let stem = ext.isEmpty ? name : ns.deletingPathExtension
+        for n in 2...(PendingMedia.maxCount + 1) {
+            let candidate = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
+            if !pending.contains(where: { $0.name == candidate }) { return candidate }
+        }
+        return name
+    }
+
+    private func consumePhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                addPhoto(image, name: "photo.jpg")
+            } else {
+                attachError = "Couldn't read that photo."
+            }
+        }
+        photoItems = []
+    }
+
+    private func consumeFiles(_ urls: [URL]) {
+        for url in urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            guard exists, !isDirectory.boolValue, !url.hasDirectoryPath else {
+                attachError = "\(url.lastPathComponent) is a folder."
+                continue
+            }
+            let listedSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+            if let listedSize, listedSize > PendingMedia.maxBytes {
+                attachError = "\(url.lastPathComponent) is larger than 8 MB."
+                continue
+            }
+            guard let data = readAtMost(PendingMedia.maxBytes, from: url) else {
+                attachError = "Couldn't open \(url.lastPathComponent)."
+                continue
+            }
+            if data.count > PendingMedia.maxBytes {
+                attachError = "\(url.lastPathComponent) is larger than 8 MB."
+                continue
+            }
+            addFile(name: url.lastPathComponent, data: data, preview: PendingMedia.thumbnail(from: data))
+        }
+    }
+
+    /// Read at most `limit + 1` bytes so an oversized file is rejected
+    /// without being fully loaded. `fileSizeKey` is checked first; this
+    /// covers a missing size or a file that grew after that listing.
+    private func readAtMost(_ limit: Int, from url: URL) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: limit + 1)
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Ask \(current.name)", text: $draft, axis: .vertical)
+        VStack(spacing: 6) {
+            if let error = dictation.error {
+                Text(error)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            if attachError != nil || !pending.isEmpty {
+                ComposerAttachBar(items: $pending, error: attachError, enabled: !sendingAttachments)
+            }
+            // Bottom, not centre: a wrapping field used to grow into a
+            // stadium with the mic and send floating at its middle. Other
+            // chat apps pin the actions to the last line.
+            HStack(alignment: .bottom, spacing: 10) {
+                ComposerAttachMenu(
+                    enabled: !dictation.isListening && !sendingAttachments,
+                    onAttachImage: {
+                        dictation.stop()
+                        pickingPhotos = true
+                    },
+                    onTakePhoto: {
+                        dictation.stop()
+                        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                            attachError = "This device has no camera."
+                            return
+                        }
+                        pickingCamera = true
+                    },
+                    onChooseFile: {
+                        dictation.stop()
+                        pickingFiles = true
+                    }
+                )
+                TextField(
+                    dictation.isListening ? "Listening…" : "Ask \(current.name)",
+                    text: $draft,
+                    axis: .vertical
+                )
                 .lineLimit(1...5)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Capsule().fill(Color.secondary.opacity(0.16)))
+                // Capsule's radius is half the height, so a wrapped field
+                // becomes a fat oval. A fixed radius stays a pill on one
+                // line and a rounded rectangle on several — the iMessage
+                // shape, and the one the other chat apps use.
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.secondary.opacity(0.16))
+                )
                 .focused($composerFocused)
                 .submitLabel(.send)
+                // Typing while partials stream in would fight the next
+                // transcript callback, which rewrites the whole field from
+                // the frozen base. `.disabled` would also fade the text,
+                // which makes dictated words look like a placeholder.
+                // Hit-testing off keeps them readable and not editable.
+                .allowsHitTesting(!dictation.isListening && !sendingAttachments)
                 // Return sends, Shift+Return breaks the line — the shape
                 // every chat app has. `.ignored` hands the keypress back to
                 // the text field, which is what inserts the newline; there is
@@ -279,23 +508,82 @@ struct ChatView: View {
                 // key is a send — which is what `.submitLabel(.send)` promises
                 .onSubmit(submit)
 
-            Button {
-                submit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color(uiColor: .systemBackground))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.35))
-                    )
+                // The mic stays put. Hiding it once text arrives is the
+                // desktop pattern, where Escape stops listening and the
+                // toolbar only has room for one action. A phone has
+                // neither: this is how you stop, and how you add another
+                // sentence by voice after the first one.
+                Button {
+                    dictation.toggle(capturing: draft)
+                } label: {
+                    Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle().fill(
+                                dictation.isListening
+                                    ? Color.red.opacity(0.2)
+                                    : Color.secondary.opacity(0.16)
+                            )
+                        )
+                        .symbolEffect(.pulse, isActive: dictation.isListening)
+                }
+                .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                .disabled(sendingAttachments)
+
+                if canSend {
+                    Button {
+                        submit()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(Color.primary))
+                    }
+                    .accessibilityLabel("Send message")
+                    .animation(.easeOut(duration: 0.15), value: canSend)
+                }
             }
-            .disabled(!canSend)
-            .animation(.easeOut(duration: 0.15), value: canSend)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.bar)
+        .photosPicker(
+            isPresented: $pickingPhotos,
+            selection: $photoItems,
+            maxSelectionCount: PendingMedia.maxCount,
+            matching: .images
+        )
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty, !sendingAttachments else { return }
+            Task { await consumePhotos(items) }
+        }
+        .fullScreenCover(isPresented: $pickingCamera) {
+            CameraPicker(
+                onImage: { image in
+                    pickingCamera = false
+                    guard !sendingAttachments else { return }
+                    addPhoto(image)
+                },
+                onCancel: { pickingCamera = false }
+            )
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $pickingFiles,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard !sendingAttachments else { return }
+            switch result {
+            case let .success(urls):
+                consumeFiles(urls)
+            case .failure:
+                attachError = "Couldn't open that file."
+            }
+        }
     }
 }
 
@@ -428,12 +716,14 @@ private struct ActivityShareSheet: UIViewControllerRepresentable {
 
 struct TextBubble: View {
     let message: Message
+    @EnvironmentObject private var session: Session
 
     var body: some View {
         let mine = message.role == .user
+        let shown = mine ? Attachment.display(message.text ?? "") : nil
         HStack {
             if mine { Spacer(minLength: 44) }
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 // rooms attribute each line to the member who said it
                 if let from = message.from {
                     Text(from.name)
@@ -443,12 +733,17 @@ struct TextBubble: View {
                 // Bots get markdown, you do not — the same split the desktop
                 // makes. Markdown you did not intend is worse than markdown
                 // you did: a message about `**` should show the asterisks.
-                if mine {
-                    Text(message.text ?? "")
-                        .font(.system(size: 17))
-                        .foregroundStyle(Color.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                if mine, let shown {
+                    if !shown.caption.isEmpty {
+                        Text(shown.caption)
+                            .font(.system(size: 17))
+                            .foregroundStyle(Color.primary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(shown.files, id: \.path) { file in
+                        InboxAttachmentView(file: file, cached: session.preview(for: file.path))
+                    }
                 } else {
                     MarkdownText(source: message.text ?? "")
                         .foregroundStyle(Color.primary)

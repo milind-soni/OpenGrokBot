@@ -85,6 +85,12 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/threads\/[\w-]+\/export$/ },
   { method: "POST", path: /^\/api\/threads\/[\w-]+\/respond$/ },
   { method: "GET", path: /^\/api\/search$/ },
+
+  // Phone photos and files. Handled by the sidecar itself — the harness
+  // has no upload route. The phone then sends the returned host path as
+  // a normal text message, the same shape the desktop composer already uses.
+  { method: "POST", path: /^\/api\/inbox$/ },
+  { method: "GET", path: /^\/api\/inbox\/[A-Za-z0-9][\w.-]*$/ },
 ];
 
 /** Route families worth naming in the refusal.

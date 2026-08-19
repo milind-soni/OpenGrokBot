@@ -20,9 +20,11 @@ The first version includes:
 - Resumable SSE, streamed reply text, reconnect hydration, and an opt-in live
   computer view.
 - Markdown rendering and Keychain storage for the device token.
+- Composer dictation, and attaching a photo or file (written onto the
+  computer, then sent as the same path tag the desktop composer uses).
 
-It is foreground-only. Push notifications, background delivery, voice, App
-Store release automation, and a hosted relay are not part of this version.
+It is foreground-only. Push notifications, background delivery, call mode,
+App Store release automation, and a hosted relay are not part of this version.
 
 ## Runtime architecture
 
@@ -190,6 +192,7 @@ companion/
   src/routes.ts       device-facing allowlist
   src/devices.ts      pairing and token registry
   src/proxy.ts        HTTP/SSE forwarding and scrubbing
+  src/inbox.ts        phone files written onto this computer
   src/control.ts      loopback-only control plane
   src/mdns.ts         Bonjour advertisement
 

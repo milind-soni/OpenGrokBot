@@ -14,6 +14,7 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { bearerToken } from "./devices.ts";
+import { MAX_INBOX_BYTES, readInboxFile, storeInboxFile } from "./inbox.ts";
 import { denyReason, isCloudDesktopJoin } from "./routes.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -80,6 +81,38 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
       } catch {
         reject(new Error("invalid JSON body"));
       }
+    });
+  });
+
+/** Read a raw body, bounded. Used for the inbox: those bytes are a file,
+ * not JSON, and an unbounded read is a way to be memory-exhausted. Over
+ * the ceiling we reject without `destroy()` — the handler still has a 413
+ * to write, and killing the socket first is how a client sees a dropped
+ * connection instead of that status. */
+const readBytes = (req: IncomingMessage, limit: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    let size = 0;
+    let settled = false;
+    const chunks: Buffer[] = [];
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    req.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > limit) {
+        fail(new Error("body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("error", fail);
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
     });
   });
 
@@ -183,6 +216,59 @@ export function createProxyHandler(options: ProxyOptions) {
         (error: Error) => sendJson(res, 400, { error: error.message }),
       );
       return;
+    }
+
+    // Phone attachments terminate here. Forwarding them would hand the
+    // harness a route it does not have. The sidecar writes the bytes onto
+    // this computer and returns the path; the next request is an ordinary
+    // text message carrying `<attached-file path="…">`.
+    if (method === "POST" && path === "/api/inbox") {
+      readBytes(req, MAX_INBOX_BYTES).then(
+        (bytes) => {
+          try {
+            const header = req.headers["x-openmaus-filename"];
+            const raw = Array.isArray(header) ? header[0] : header;
+            let filename = "file";
+            try {
+              filename = decodeURIComponent(String(raw ?? "file"));
+            } catch {
+              filename = String(raw ?? "file");
+            }
+            return sendJson(res, 201, storeInboxFile(bytes, filename));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "could not store that file";
+            return sendJson(res, message.includes("too large") ? 413 : 400, { error: message });
+          }
+        },
+        (error: Error) => {
+          sendJson(res, error.message === "body too large" ? 413 : 400, { error: error.message });
+          // Drain whatever is still in flight so the 413 is not sitting
+          // behind a half-read body. Destroying the socket here is how a
+          // client sees a dropped connection instead of that status.
+          req.resume();
+        },
+      );
+      return;
+    }
+
+    if (method === "GET") {
+      const match = /^\/api\/inbox\/([^/]+)$/.exec(path);
+      if (match) {
+        let name = match[1];
+        try {
+          name = decodeURIComponent(name);
+        } catch {
+          return sendJson(res, 400, { error: "invalid filename" });
+        }
+        const stored = readInboxFile(name);
+        if (!stored) return sendJson(res, 404, { error: "no such file" });
+        res.writeHead(200, {
+          "content-type": stored.type,
+          "content-length": stored.bytes.length,
+        });
+        res.end(stored.bytes);
+        return;
+      }
     }
 
     const upstream = httpRequest(

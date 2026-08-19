@@ -281,6 +281,19 @@ describe("harness HTTP API", () => {
     expect((await api("GET", `/api/threads/${bot.threadId}/export?format=pdf`)).status).toBe(400);
     expect((await api("GET", "/api/threads/nope/export")).status).toBe(404);
 
+    // one pinned message per thread: pin, round-trip, replace, clear; the
+    // id is stored verbatim — resolution is the UI's job
+    const pin = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "msg-abc_123" });
+    expect(pin.status).toBe(200);
+    expect(pin.body.bot).toMatchObject({ pinnedMessageId: "msg-abc_123" });
+    const repin = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "msg-second" });
+    expect(repin.body.bot).toMatchObject({ pinnedMessageId: "msg-second" });
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "not an id!" })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: 42 })).status).toBe(400);
+    const unpinned = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: null });
+    expect(unpinned.status).toBe(200);
+    expect(unpinned.body.bot).not.toHaveProperty("pinnedMessageId");
+
     // deleted conversations drop out of search rather than 404ing it
     await api("DELETE", `/api/bots/${bot.id}`);
     const after = await api("GET", "/api/search?q=nice%20to%20meet");

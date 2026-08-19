@@ -2729,6 +2729,15 @@ const server = createServer(async (req, res) => {
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.cwd ?? undefined;
       }
+      // one pinned message per room; null/"" clears. The id is not
+      // validated against the transcript here — a pin whose message was
+      // edited away or deleted simply resolves to nothing in the UI.
+      if (body.pinnedMessageId !== undefined) {
+        if (body.pinnedMessageId === null || body.pinnedMessageId === "") patch.pinnedMessageId = undefined;
+        else if (typeof body.pinnedMessageId === "string" && /^[\w-]+$/.test(body.pinnedMessageId)) {
+          patch.pinnedMessageId = body.pinnedMessageId;
+        } else return json(res, 400, { error: "pinnedMessageId must be a message id" });
+      }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group });
@@ -2869,6 +2878,15 @@ const server = createServer(async (req, res) => {
       const patch: Record<string, unknown> = {};
       for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "cloudBackend", "color", "mascotExpression", "pinned", "hidden", "speakReplies", "voice"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
+      }
+      // one pinned message per thread; null/"" clears. The id is not
+      // validated against the transcript here — a pin whose message was
+      // edited to another branch or deleted simply resolves to nothing.
+      if (body.pinnedMessageId !== undefined) {
+        if (body.pinnedMessageId === null || body.pinnedMessageId === "") patch.pinnedMessageId = undefined;
+        else if (typeof body.pinnedMessageId === "string" && /^[\w-]+$/.test(body.pinnedMessageId)) {
+          patch.pinnedMessageId = body.pinnedMessageId;
+        } else return json(res, 400, { error: "pinnedMessageId must be a message id" });
       }
       // per-bot gate on the workspace's connected apps (Composio)
       if (body.composio !== undefined) {

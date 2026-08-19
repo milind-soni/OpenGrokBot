@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { ClipboardPaste, File as FileIcon, Image as ImageIcon, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
+  attachmentBasename,
   attachmentsFromDroppedFiles,
   formatSize,
   imageAttachmentFromFile,
@@ -23,10 +24,12 @@ export function ComposerAttachments({
   items,
   onAdd,
   onRemove,
+  allowImages = true,
 }: {
   items: Attachment[];
   onAdd: (attachments: Attachment[]) => void;
   onRemove: (id: string) => void;
+  allowImages?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -59,7 +62,7 @@ export function ComposerAttachments({
       depth.current = 0;
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
-      const images = files.filter(isImageFile);
+      const images = allowImages ? files.filter(isImageFile) : [];
       const rest = files.filter((f) => !isImageFile(f));
       const { attachments, rejectedNames } = await attachmentsFromDroppedFiles(rest, pathForFile);
       const uploaded: Attachment[] = [];
@@ -96,7 +99,7 @@ export function ComposerAttachments({
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [onAdd]);
+  }, [onAdd, allowImages]);
 
   return (
     <>
@@ -143,7 +146,7 @@ export function ComposerAttachments({
               <Chip key={a.id} label="IMAGE" title={a.path} onRemove={() => onRemove(a.id)}>
                 <div className="flex h-[76px] items-center justify-center overflow-hidden rounded-lg bg-inset">
                   <img
-                    src={`/api/attachments/${encodeURIComponent(a.path.split("/").pop() ?? "")}`}
+                    src={`/api/attachments/${encodeURIComponent(attachmentBasename(a.path))}`}
                     alt={a.name}
                     loading="lazy"
                     className="max-h-[76px] max-w-full object-contain"

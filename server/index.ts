@@ -2513,9 +2513,6 @@ const server = createServer(async (req, res) => {
         const fail = (status: number, msg: string) => {
           if (settled) return;
           settled = true;
-          req.removeAllListeners("data");
-          req.removeAllListeners("end");
-          req.destroy();
           reject(Object.assign(new Error(msg), { status }));
         };
         req.on("data", (chunk: Buffer) => {

@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
+import { IMAGE_MAX_BYTES } from "./attachments.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -357,6 +358,13 @@ describe("harness HTTP API", () => {
     expect(traversal.status).toBe(404);
     const unknown = await fetch(`${BASE}/api/attachments/00000000-0000-0000-0000-000000000000.png`);
     expect(unknown.status).toBe(404);
+
+    const tooBig = await fetch(`${BASE}/api/attachments`, {
+      method: "POST",
+      headers: { "content-type": "image/png" },
+      body: Buffer.alloc(IMAGE_MAX_BYTES + 1),
+    });
+    expect(tooBig.status).toBe(413);
   });
 
   it("exports every visible bot and imports the team without creating a room", async () => {

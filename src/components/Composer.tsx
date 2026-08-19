@@ -15,7 +15,7 @@ import {
   type Attachment,
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
-import { groupComposerHint } from "@/lib/group-routing";
+import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 
@@ -85,12 +85,19 @@ export function Composer({
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
 
-  // image paste is offered only when the active engine can open one; in a
-  // room the answering bot is whichever member is currently running, so
-  // the gate is the bot's own engine for 1:1 and any member for rooms
-  const engineSupportsImages = group
-    ? Boolean(members?.some((m) => state.instances.find((i) => i.instanceId === m.modelSelection.instanceId)?.capabilities?.images))
-    : Boolean(state.instances.find((i) => i.instanceId === bot?.modelSelection.instanceId)?.capabilities?.images);
+  // image paste is offered only when every bot that will actually answer
+  // can open one. sendGroup routes to mentions, else the room default —
+  // `members.some` would let a mixed room send <attached-image> to Grok.
+  const engineSupportsImages = (() => {
+    const supports = (candidate?: Bot) =>
+      Boolean(
+        candidate &&
+          state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images,
+      );
+    if (!group) return supports(bot);
+    const responders = roomRespondersForComposer(text, members ?? [], group);
+    return responders.length > 0 && responders.every(supports);
+  })();
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
@@ -292,6 +299,7 @@ export function Composer({
           items={attachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
+          allowImages={engineSupportsImages}
         />
         <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2">
         <textarea

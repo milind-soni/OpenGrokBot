@@ -69,10 +69,19 @@ export interface AcpSupport {
   nativeSource: string;
   /** Message shown when the CLI is present but not signed in. */
   loginNote: string;
+  /** Which of the harness's MCP integrations this agent actually mounts.
+   *  Default: all of them — an ACP CLI runs on this machine and takes the
+   *  session's mcpServers. A remote-execution harness (fountain acp: the
+   *  agent runs in a sandbox elsewhere and ignores mcpServers) declares
+   *  false, so a bot is never told it has a computer or peers its driver
+   *  cannot hand it. */
+  mcp?: { agents?: boolean; computer?: boolean; composio?: boolean };
   /** How a user installs this harness's CLI; surfaced by the setup UI. */
   install?: EngineInstall;
-  /** CLI argv AFTER the binary name to enter ACP stdio mode. */
-  spawnArgs(config: AcpConfig, turn: SendTurnInput): string[];
+  /** CLI argv AFTER the binary name to enter ACP stdio mode. `env` is the
+   *  child's environment (process env + instance environment, after
+   *  transformEnv), for harnesses whose per-instance knobs become flags. */
+  spawnArgs(config: AcpConfig, turn: SendTurnInput, env: Record<string, string | undefined>): string[];
   /** Provider credential variables this ACP child is allowed to inherit. */
   credentialEnv?: readonly string[];
   /** Select the model through a session config option instead of argv, for
@@ -264,7 +273,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             : turn;
         const mcpServers = acpMcpServers(turn);
 
-        const child = spawnCli(config.cli, support.spawnArgs(config, cliTurn), {
+        const child = spawnCli(config.cli, support.spawnArgs(config, cliTurn, env), {
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -671,9 +680,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           provider: DRIVER_KIND,
           capabilities: {
             sessionModelSwitch: "unsupported",
-            agentsMcp: true,
-            computerMcp: true,
-            composioMcp: true,
+            agentsMcp: support.mcp?.agents ?? true,
+            computerMcp: support.mcp?.computer ?? true,
+            composioMcp: support.mcp?.composio ?? true,
             effortLevels: support.effortLevels,
           },
           sendTurn,

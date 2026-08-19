@@ -2,8 +2,9 @@
 import { Monitor } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HermesMark } from "./HermesMark";
+import { FountainMark } from "./FountainMark";
 
-export { HermesMark };
+export { HermesMark, FountainMark };
 
 export interface IconProps {
   size?: number;
@@ -129,6 +130,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <QwenMark size={size} className={className} />;
     case "hermesAgent":
       return <HermesMark size={size} className={className} />;
+    case "fountainAgent":
+      return <FountainMark size={size} className={className} />;
     case "boxAgent":
       return <ComputerMark size={size} className={className} />;
     default:

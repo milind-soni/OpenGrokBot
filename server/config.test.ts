@@ -30,10 +30,11 @@ describe("configuration boundaries", () => {
 });
 
 describe("default fleet", () => {
-  it("ships Qwen and Hermes as custom-only engines", () => {
+  it("ships Qwen, Hermes and Fountain as custom-only engines", () => {
     const map = instanceConfigs({});
     expect(map.qwen).toEqual({ driver: "qwenAgent", environment: {} });
     expect(map.hermes).toEqual({ driver: "hermesAgent", environment: {} });
+    expect(map.fountain).toEqual({ driver: "fountainAgent", environment: {} });
   });
 
   it("adds missing custom-only engines onto an existing product fleet", () => {
@@ -41,6 +42,7 @@ describe("default fleet", () => {
     expect(map.claude.driver).toBe("claudeAgent");
     expect(map.qwen?.driver).toBe("qwenAgent");
     expect(map.hermes?.driver).toBe("hermesAgent");
+    expect(map.fountain?.driver).toBe("fountainAgent");
   });
 
   it("does not expand a one-off shadow fleet", () => {

@@ -12,6 +12,7 @@ import {
   createCursorAgentDriver,
   CursorAgentDriver,
   decodeCursorAuthStatus,
+  decodeCursorAuthText,
   decodeCursorModelCatalog,
   decodeCursorModelText,
   STATIC_CURSOR_MODELS,
@@ -31,6 +32,14 @@ describe("decodeCursorAuthStatus", () => {
     expect(decodeCursorAuthStatus({ auth: { isAuthenticated: true } })).toBe(true);
     expect(decodeCursorAuthStatus({ email: "user@example.com" })).toBeNull();
     expect(decodeCursorAuthStatus("logged in")).toBeNull();
+  });
+});
+
+describe("decodeCursorAuthText", () => {
+  it("recognizes the documented status output without confusing logged-out text", () => {
+    expect(decodeCursorAuthText("✓ Login successful! Logged in")).toBe(true);
+    expect(decodeCursorAuthText("Not logged in")).toBe(false);
+    expect(decodeCursorAuthText("Cursor Agent CLI")).toBeNull();
   });
 });
 
@@ -110,18 +119,22 @@ describe("CursorAgentDriver", () => {
     for (const dir of scratchDirs.splice(0)) await removeTempDir(dir);
   });
 
-  it("defaults to the agent binary and declares cross-platform setup", () => {
-    expect(CursorAgentDriver.decodeConfig(undefined)).toEqual({ cli: "agent", fullAuto: false, workspace: undefined });
+  it("defaults to the unambiguous cursor-agent binary and declares cross-platform setup", () => {
+    expect(CursorAgentDriver.decodeConfig(undefined)).toEqual({
+      cli: "cursor-agent",
+      fullAuto: false,
+      workspace: undefined,
+    });
     expect(CursorAgentDriver.driverKind).toBe("cursorAgent");
     expect(CursorAgentDriver.install?.command).toMatchObject({
       darwin: expect.stringContaining("cursor.com/install"),
       linux: expect.stringContaining("cursor.com/install"),
       win32: expect.stringContaining("cursor.com/install"),
     });
-    expect(CursorAgentDriver.install?.signInCommand).toBe("agent login");
+    expect(CursorAgentDriver.install?.signInCommand).toBe("cursor-agent login");
   });
 
-  it("refreshes the catalog from `agent models` on the instance CLI", async () => {
+  it("refreshes the catalog from `cursor-agent models` on the instance CLI", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const driver = createCursorAgentDriver();
     const instance = await driver.create({
@@ -155,7 +168,7 @@ describe("CursorAgentDriver", () => {
     }
   });
 
-  it("reads isAuthenticated from `agent status --format json`", async () => {
+  it("reads isAuthenticated from `cursor-agent status --format json`", async () => {
     chmodSync(FAKE_CLI, 0o755);
     process.env.FAKE_ACP_AUTH = "0";
     const loggedOut = await CursorAgentDriver.create({

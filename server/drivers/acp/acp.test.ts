@@ -129,14 +129,18 @@ describe("ACP decodeConfig", () => {
     });
     expect(DroidAgentDriver.install?.signInCommand).toBe("droid");
   });
-  it("cursor defaults to the agent binary and declares cross-platform setup", () => {
-    expect(CursorAgentDriver.decodeConfig(undefined)).toEqual({ cli: "agent", fullAuto: false, workspace: undefined });
+  it("cursor defaults to its unambiguous binary and declares cross-platform setup", () => {
+    expect(CursorAgentDriver.decodeConfig(undefined)).toEqual({
+      cli: "cursor-agent",
+      fullAuto: false,
+      workspace: undefined,
+    });
     expect(CursorAgentDriver.install?.command).toMatchObject({
       darwin: expect.stringContaining("cursor.com/install"),
       linux: expect.stringContaining("cursor.com/install"),
       win32: expect.stringContaining("cursor.com/install"),
     });
-    expect(CursorAgentDriver.install?.signInCommand).toBe("agent login");
+    expect(CursorAgentDriver.install?.signInCommand).toBe("cursor-agent login");
   });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);

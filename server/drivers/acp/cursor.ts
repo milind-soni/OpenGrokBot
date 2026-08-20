@@ -1,10 +1,10 @@
-// Cursor Agent CLI harness support — Anysphere's `agent acp` over ACP stdio,
-// billed on the Cursor subscription (`agent login`, CURSOR_API_KEY, or
-// CURSOR_AUTH_TOKEN). The generic protocol runtime lives in acp/core.ts; this
-// file is only the per-harness quirks.
+// Cursor Agent CLI harness support — Anysphere's `cursor-agent acp` over ACP
+// stdio, billed on the Cursor subscription (`cursor-agent login`,
+// CURSOR_API_KEY, or CURSOR_AUTH_TOKEN). The generic protocol runtime lives in
+// acp/core.ts; this file is only the per-harness quirks.
 //
 // Verified against the public CLI contract (cursor.com/docs/cli/acp,
-// …/reference/parameters): `agent acp` speaks JSON-RPC on stdio, advertises
+// …/reference/parameters): `cursor-agent acp` speaks JSON-RPC on stdio, advertises
 // `cursor_login`, and takes `--force` / `--model` as global flags before the
 // `acp` subcommand. `session/set_model` is attempted when the CLI supports it;
 // a missing method falls back to the argv `--model` pin.
@@ -76,7 +76,7 @@ function pushModel(
   options.push({ id, label: labelFor(id, label), ...(custom ? { custom: true as const } : {}) });
 }
 
-/** Turn `agent models` JSON (or a close cousin) into a picker catalog.
+/** Turn `cursor-agent models` JSON (or a close cousin) into a picker catalog.
  *  Unknown shapes return null so the caller can try text / keep the fallback. */
 export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null {
   const records: unknown[] = Array.isArray(payload)
@@ -144,7 +144,7 @@ function stripModelMarkers(label: string): { label: string; isDefault: boolean; 
   return { label: cleaned, isDefault, isCurrent };
 }
 
-/** Parse plain `agent models` text: one slug per line, optional `id - label`
+/** Parse plain `cursor-agent models` text: one slug per line, optional `id - label`
  *  columns, and `(default)` / `(current)` markers on the label. */
 export function decodeCursorModelText(text: string): ModelCatalog | null {
   const options: ModelCatalog["options"] = [];
@@ -189,7 +189,7 @@ function truthyAuthFlag(value: unknown): boolean | null {
   return null;
 }
 
-/** Read `agent status --format json` / `agent whoami --format json`.
+/** Read `cursor-agent status --format json`.
  *  Returns null when the payload does not actually answer the question. */
 export function decodeCursorAuthStatus(payload: unknown): boolean | null {
   const rec = asRecord(payload);
@@ -209,6 +209,15 @@ export function decodeCursorAuthStatus(payload: unknown): boolean | null {
     const flag = truthyAuthFlag(candidate);
     if (flag !== null) return flag;
   }
+  return null;
+}
+
+/** Parse the documented human-readable `cursor-agent status` fallback. */
+export function decodeCursorAuthText(text: string): boolean | null {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return null;
+  if (/not (?:logged|signed) in|not authenticated|unauthenticated|logged out/.test(normalized)) return false;
+  if (/login successful|logged in|signed in|authenticated/.test(normalized)) return true;
   return null;
 }
 
@@ -232,13 +241,10 @@ export async function probeCursorAuth(
   run: typeof execCli = execCli,
 ): Promise<boolean> {
   if (nonBlank(env.CURSOR_API_KEY) || nonBlank(env.CURSOR_AUTH_TOKEN)) return true;
-  for (const args of [
-    ["status", "--format", "json"],
-    ["whoami", "--format", "json"],
-  ] as const) {
+  for (const args of [["status", "--format", "json"], ["status"]] as const) {
     const stdout = await execText(run, cli, [...args], env);
     if (stdout == null) continue;
-    const decoded = decodeCursorAuthStatus(firstJsonValue(stdout));
+    const decoded = decodeCursorAuthStatus(firstJsonValue(stdout)) ?? decodeCursorAuthText(stdout);
     if (decoded !== null) return decoded;
   }
   return false;
@@ -250,8 +256,9 @@ export async function fetchCursorModels(
   run: typeof execCli = execCli,
 ): Promise<ModelCatalog> {
   // Live CLI prints plain text (`slug - Label`); `--format json` is not supported yet.
-  const stdout = await execText(run, cli, ["models"], env);
-  if (stdout != null) {
+  for (const args of [["models"], ["--list-models"]] as const) {
+    const stdout = await execText(run, cli, [...args], env);
+    if (stdout == null) continue;
     const fromText = decodeCursorModelText(stdout);
     if (fromText) return fromText;
     const fromJson = decodeCursorModelCatalog(firstJsonValue(stdout));
@@ -282,9 +289,11 @@ const support = (run: typeof execCli): AcpSupport => ({
   driverKind: "cursorAgent",
   displayName: "Cursor",
   models: STATIC_CURSOR_MODELS,
-  defaultCli: "agent",
+  // Cursor and other coding agents can both install a generic `agent` shim.
+  // Cursor's compatibility alias is unambiguous and ships with the same CLI.
+  defaultCli: "cursor-agent",
   nativeSource: "cursor.acp",
-  loginNote: "Cursor CLI is not signed in — run `agent login` in a terminal, or set CURSOR_API_KEY",
+  loginNote: "Cursor CLI is not signed in — run `cursor-agent login` in a terminal, or set CURSOR_API_KEY",
 
   install: {
     command: {
@@ -293,7 +302,7 @@ const support = (run: typeof execCli): AcpSupport => ({
       win32: "irm 'https://cursor.com/install?win32=true' | iex",
     },
     docsUrl: "https://cursor.com/docs/cli/installation",
-    signInCommand: "agent login",
+    signInCommand: "cursor-agent login",
   },
 
   // Global flags must precede `acp` (cursor.com/docs/cli/reference/parameters).
@@ -306,14 +315,14 @@ const support = (run: typeof execCli): AcpSupport => ({
   ],
   credentialEnv: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"],
 
-  resolveModels: (environment, config) => fetchCursorModels(config.cli || "agent", environment, run),
+  resolveModels: (environment, config) => fetchCursorModels(config.cli || "cursor-agent", environment, run),
 
   // Prefer the advertised ACP method. An already-signed-in CLI should accept
   // cursor_login without a browser; a missing method rides the ambient login
-  // (CURSOR_API_KEY / `agent login`) instead of failing the turn.
+  // (CURSOR_API_KEY / `cursor-agent login`) instead of failing the turn.
   pickAuthMethod: (methods) => (methods.some((m) => m.id === "cursor_login") ? "cursor_login" : null),
   authFailure: "continue",
-  isAuthenticated: (env, config) => probeCursorAuth(config.cli || "agent", env, run),
+  isAuthenticated: (env, config) => probeCursorAuth(config.cli || "cursor-agent", env, run),
   classifyError: classifyCursorError,
 
   async configureSession({ request, sessionId, turn }) {
@@ -325,7 +334,7 @@ const support = (run: typeof execCli): AcpSupport => ({
       if (err.code === -32601) return;
       throw new Error(
         `Cursor rejected model "${turn.model}" via session/set_model: ${err.message}. ` +
-          `Check that \`agent\` is current and that this account can use that model.`,
+          `Check that \`cursor-agent\` is current and that this account can use that model.`,
       );
     }
   },

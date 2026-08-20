@@ -9,7 +9,8 @@ import { extname, join } from "node:path";
 
 import { z } from "zod";
 
-import { approvalKey, autoDecision } from "./auto-approve.ts";
+import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import * as box from "./box.ts";
@@ -32,6 +33,7 @@ import {
   saveConfig,
   withInstanceCli,
   vpsSshAlias,
+  DATA_DIR,
   EVENTS_DIR,
   NATIVE_DIR,
 } from "./config.ts";
@@ -404,7 +406,14 @@ async function answerRequest(
   requestId: string,
   behavior: "allow" | "deny" | "answer",
   message?: string,
+  decidedFor?: { id: string; name: string },
 ): Promise<RequestOutcome> {
+  // Snapshot the card BEFORE delivering the answer: a delivered answer
+  // resolves the request synchronously through the fold, which consumes
+  // the askMessageByRequest entry — by the time the await returns, nobody
+  // remembers which tool this requestId was about.
+  const cardMessageId = askMessageByRequest.get(`${threadId}:${requestId}`);
+  const card = cardMessageId ? store.messagesFor(threadId).find((m) => m.id === cardMessageId)?.card : undefined;
   const instance = registry.get(instanceId);
   let outcome: RequestOutcome = "unavailable";
   if (instance) {
@@ -413,6 +422,23 @@ async function answerRequest(
     } catch {
       outcome = "unavailable";
     }
+  }
+  // The human's verdict, recorded only when it actually reached the engine:
+  // `unavailable` means the action never ran, and a "user-approved" row
+  // over a request nothing answered would be the audit log lying. A
+  // question's `answer` is conversation, not authorization, so it is not a
+  // decision either.
+  if (outcome !== "unavailable" && behavior !== "answer") {
+    appendDecision(DATA_DIR, {
+      threadId,
+      requestId,
+      botId: decidedFor?.id,
+      botName: decidedFor?.name,
+      tool: card?.tool,
+      summary: card?.subtitle,
+      decision: behavior === "allow" ? "user-approved" : "user-denied",
+      source: "user",
+    });
   }
   if (outcome === "unavailable") {
     // The in-flight map is memory-only. After a restart the card is still on
@@ -668,13 +694,12 @@ bus.subscribe((event: RuntimeEvent) => {
       // whole point of asking is that a person decides — and anything that
       // looks destructive stops even in auto mode.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
-      const settled = permission && asker && event.requestId
-        ? autoDecision(asker, event.tool, event.summary, {
-            unattended: isUnattended(asker.id),
-            scope: event.approvalScope,
-          })
+      const unattended = permission && asker && event.requestId ? isUnattended(asker.id) : false;
+      const verdict = permission && asker && event.requestId
+        ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
         : null;
-      if (settled && asker && event.requestId) {
+      if (verdict?.approve && asker && event.requestId) {
+        const settled = verdict.approve;
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : registry.get(asker.modelSelection.instanceId);
@@ -693,6 +718,20 @@ bus.subscribe((event: RuntimeEvent) => {
               role: "bot",
               kind: "activity",
               tool: { name: `${settled}: ${summary.slice(0, 120)}`, ok: true },
+            });
+            // logged under the same discipline as the chip: only once the
+            // provider has actually taken the answer, so the audit log
+            // never claims an approval nothing received
+            appendDecision(DATA_DIR, {
+              threadId: event.threadId,
+              requestId,
+              botId: asker.id,
+              botName: asker.name,
+              tool,
+              summary,
+              decision: "auto-approved",
+              source: verdict.source,
+              rule: verdict.rule,
             });
           } catch {
             // couldn't answer it for them — hand it back to the human
@@ -717,6 +756,16 @@ bus.subscribe((event: RuntimeEvent) => {
               },
             });
             askMessageByRequest.set(`${event.threadId}:${requestId}`, card.id);
+            appendDecision(DATA_DIR, {
+              threadId: event.threadId,
+              requestId,
+              botId: asker.id,
+              botName: asker.name,
+              tool,
+              summary,
+              decision: "card-shown",
+              source: "auto-fallback",
+            });
           }
         })();
         break;
@@ -752,6 +801,23 @@ bus.subscribe((event: RuntimeEvent) => {
         },
       });
       if (event.requestId) askMessageByRequest.set(`${event.threadId}:${event.requestId}`, message.id);
+      // Every card that reaches a human is a decision too — "a rule sent
+      // this to you, and here is which one". `question` marks the cards no
+      // rule may ever answer; a permission card without a verdict (no known
+      // asker, or no requestId to answer through) can only mean nothing was
+      // granted.
+      appendDecision(DATA_DIR, {
+        threadId: event.threadId,
+        requestId: event.requestId,
+        botId: asker?.id,
+        botName: asker?.name,
+        tool: event.tool,
+        summary: event.summary,
+        decision: "card-shown",
+        source: !permission ? "question" : verdict ? verdict.source : "no-grant",
+        rule: verdict?.rule,
+        unattended: unattended || undefined,
+      });
       // Notify from HERE, not from a separate subscriber on request.opened:
       // this is the branch where a card actually reached a human. Anything
       // auto mode answered took the early return above and never buzzes.
@@ -3162,7 +3228,7 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message);
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
       return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
@@ -3193,7 +3259,7 @@ const server = createServer(async (req, res) => {
           (pending?.from ? store.bot(pending.from.botId) : undefined)
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
-      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message);
+      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined);
       return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
@@ -3331,6 +3397,19 @@ const server = createServer(async (req, res) => {
       }
       const limit = parsedLimit;
       return json(res, 200, readThreadEvents({ eventsDir: EVENTS_DIR, nativeDir: NATIVE_DIR, threadId, limit }));
+    }
+
+    // ── the fleet-wide authorization decision log ──
+    // Read-only like the inspector above: the rows were written at the
+    // request.opened fold and in answerRequest; this only reads them back,
+    // newest last, same order as thread events.
+    if (method === "GET" && path === "/api/decisions") {
+      const rawLimit = url.searchParams.get("limit");
+      const parsedLimit = rawLimit === null ? undefined : Number(rawLimit);
+      if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
+        return json(res, 400, { error: "limit must be a positive whole number" });
+      }
+      return json(res, 200, { decisions: readDecisions(DATA_DIR, parsedLimit ?? 200) });
     }
 
     // ── provider instances (model picker) ──

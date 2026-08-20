@@ -9,118 +9,275 @@ import CompanionCore
 
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
+    @Binding var selectedChat: Chat?
+    var isSidebar: Bool = false
+
     @State private var query = ""
-    /// Driven so that making a bot can open it. Value-based navigation alone
-    /// cannot push without a tap, and a new bot appearing silently at the
-    /// bottom of the roster is a poor answer to pressing +.
+    /// Driven so that making a bot can open it in single-column mode.
     @State private var path = NavigationPath()
     @State private var searchHits: [SearchHit] = []
     @State private var searching = false
+    @FocusState private var searchFieldFocused: Bool
+    @State private var showingSettings = false
+
+    init(selectedChat: Binding<Chat?>? = nil, isSidebar: Bool = false) {
+        self._selectedChat = selectedChat ?? .constant(nil)
+        self.isSidebar = isSidebar
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            // A hand-built header rather than the navigation bar. Two
-            // reasons: `.searchable` anchors its field to the *bottom* of the
-            // screen on iOS 26, which is not where a roster's search belongs,
-            // and an empty-titled nav bar reserves a surprising amount of
-            // room above the first row. Drawing it here makes the top of the
-            // list the top of the screen on every iOS.
-            VStack(spacing: 0) {
-                header
-                StatusBanner()
-
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if query.isEmpty {
-                            ForEach(session.state.pendingApprovals, id: \.message.id) { pending in
-                                if let chat = chat(forThread: pending.threadId) {
-                                    NavigationLink(value: chat) {
-                                        WaitingRow(chat: chat, card: pending.message.card)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        if !query.isEmpty, !searchHits.isEmpty {
-                            HStack {
-                                Text("Messages")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Color.secondary)
-                                Spacer()
-                                if searching { ProgressView().controlSize(.small) }
-                            }
-                            .padding(.top, 10)
-                            .padding(.bottom, 4)
-
-                            ForEach(searchHits) { hit in
-                                Button {
-                                    Task {
-                                        if let chat = await session.open(hit) { path.append(chat) }
-                                    }
-                                } label: {
-                                    SearchHitRow(hit: hit)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        ForEach(chats) { summary in
-                            NavigationLink(value: summary.chat) {
-                                ChatRow(
-                                    chat: summary.chat,
-                                    preview: summary.preview,
-                                    at: summary.lastActivity
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 24)
+        if isSidebar {
+            sidebarContent
+                .task(id: query) { await performSearch() }
+                .sheet(isPresented: $showingSettings) {
+                    NavigationStack { SettingsView() }
                 }
-                .refreshable { await session.refresh() }
-                .overlay {
-                    if chats.isEmpty && searchHits.isEmpty {
-                        ContentUnavailableView(
-                            query.isEmpty ? "No bots yet" : "Nothing matches",
-                            systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
-                            description: Text(
-                                query.isEmpty
-                                    ? "Bots you create on your computer show up here."
-                                    : "No chat matches \u{201C}\(query)\u{201D}."
-                            )
-                        )
-                    }
-                }
-            }
-            // top-aligned: the roster fills downward from the header
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
-            .task(id: query) {
-                let expected = query
-                guard expected.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else {
-                    searchHits = []
-                    searching = false
-                    return
-                }
-                searching = true
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled, query == expected else { return }
-                searchHits = await session.search(expected)
-                searching = false
+        } else {
+            NavigationStack(path: $path) {
+                stackContent
+                    .task(id: query) { await performSearch() }
             }
         }
     }
 
-    /// Who you are, and how to find a chat — both at the top, always.
-    private var header: some View {
-        HStack(spacing: 12) {
-            NavigationLink { SettingsView() } label: {
-                ProfileAvatar(name: session.connection?.name ?? "You")
+    // MARK: - Sidebar Layout (for iPadOS & Mac Catalyst NavigationSplitView)
+    private var sidebarContent: some View {
+        VStack(spacing: 0) {
+            header(isSidebar: true)
+            StatusBanner()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if query.isEmpty {
+                        ForEach(session.state.pendingApprovals, id: \.message.id) { pending in
+                            if let chat = chat(forThread: pending.threadId) {
+                                Button {
+                                    selectedChat = chat
+                                    Haptics.selection()
+                                } label: {
+                                    WaitingRow(
+                                        chat: chat,
+                                        card: pending.message.card,
+                                        isSelected: selectedChat?.id == chat.id
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    if !query.isEmpty, !searchHits.isEmpty {
+                        HStack {
+                            Text("Messages")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.secondary)
+                            Spacer()
+                            if searching { ProgressView().controlSize(.small) }
+                        }
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
+
+                        ForEach(searchHits) { hit in
+                            Button {
+                                Task {
+                                    if let chat = await session.open(hit) {
+                                        selectedChat = chat
+                                        Haptics.selection()
+                                    }
+                                }
+                            } label: {
+                                SearchHitRow(hit: hit)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    ForEach(chats) { summary in
+                        Button {
+                            selectedChat = summary.chat
+                            Haptics.selection()
+                        } label: {
+                            ChatRow(
+                                chat: summary.chat,
+                                preview: summary.preview,
+                                at: summary.lastActivity,
+                                isSelected: selectedChat?.id == summary.chat.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Select", systemImage: "bubble.left.and.bubble.right") {
+                                selectedChat = summary.chat
+                            }
+                            Button("Copy Name", systemImage: "doc.on.doc") {
+                                PlatformBridge.copyToPasteboard(summary.chat.name)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .buttonStyle(.plain)
+            .refreshable { await session.refresh() }
+            .overlay {
+                if chats.isEmpty && searchHits.isEmpty {
+                    ContentUnavailableView(
+                        query.isEmpty ? "No bots yet" : "Nothing matches",
+                        systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+                        description: Text(
+                            query.isEmpty
+                                ? "Bots you create on your computer show up here."
+                                : "No chat matches \u{201C}\(query)\u{201D}."
+                        )
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            Group {
+                Button("") { searchFieldFocused = true }
+                    .keyboardShortcut("k", modifiers: .command)
+                Button("") { searchFieldFocused = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("") { showingSettings = true }
+                    .keyboardShortcut(",", modifiers: .command)
+                Button("") {
+                    Task {
+                        if let bot = await session.createBot() {
+                            selectedChat = Chat.bot(bot)
+                            Haptics.impact(.medium)
+                        }
+                    }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("") {
+                    Task { await session.refresh() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                ForEach(0..<min(9, chats.count), id: \.self) { index in
+                    Button("") {
+                        if chats.indices.contains(index) {
+                            selectedChat = chats[index].chat
+                            Haptics.selection()
+                        }
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                }
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Stack Layout (for iPhone single-column NavigationStack)
+    private var stackContent: some View {
+        VStack(spacing: 0) {
+            header(isSidebar: false)
+            StatusBanner()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if query.isEmpty {
+                        ForEach(session.state.pendingApprovals, id: \.message.id) { pending in
+                            if let chat = chat(forThread: pending.threadId) {
+                                NavigationLink(value: chat) {
+                                    WaitingRow(chat: chat, card: pending.message.card)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    if !query.isEmpty, !searchHits.isEmpty {
+                        HStack {
+                            Text("Messages")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.secondary)
+                            Spacer()
+                            if searching { ProgressView().controlSize(.small) }
+                        }
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
+
+                        ForEach(searchHits) { hit in
+                            Button {
+                                Task {
+                                    if let chat = await session.open(hit) { path.append(chat) }
+                                }
+                            } label: {
+                                SearchHitRow(hit: hit)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    ForEach(chats) { summary in
+                        NavigationLink(value: summary.chat) {
+                            ChatRow(
+                                chat: summary.chat,
+                                preview: summary.preview,
+                                at: summary.lastActivity
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
+            .refreshable { await session.refresh() }
+            .overlay {
+                if chats.isEmpty && searchHits.isEmpty {
+                    ContentUnavailableView(
+                        query.isEmpty ? "No bots yet" : "Nothing matches",
+                        systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+                        description: Text(
+                            query.isEmpty
+                                ? "Bots you create on your computer show up here."
+                                : "No chat matches \u{201C}\(query)\u{201D}."
+                        )
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
+    }
+
+    /// Search debounce and execution helper
+    private func performSearch() async {
+        let expected = query
+        guard expected.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else {
+            searchHits = []
+            searching = false
+            return
+        }
+        searching = true
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled, query == expected else { return }
+        searchHits = await session.search(expected)
+        searching = false
+    }
+
+    /// Who you are, and how to find a chat — both at the top, always.
+    private func header(isSidebar: Bool) -> some View {
+        HStack(spacing: 12) {
+            if isSidebar {
+                Button {
+                    showingSettings = true
+                } label: {
+                    ProfileAvatar(name: session.connection?.name ?? "You")
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink { SettingsView() } label: {
+                    ProfileAvatar(name: session.connection?.name ?? "You")
+                }
+                .buttonStyle(.plain)
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -131,6 +288,7 @@ struct ChatListView: View {
                     .font(.system(size: 16))
                     .submitLabel(.search)
                     .autocorrectionDisabled()
+                    .focused($searchFieldFocused)
 
                 if !query.isEmpty {
                     Button {
@@ -149,7 +307,14 @@ struct ChatListView: View {
             // Same place the desktop puts it, top-right of the roster.
             Button {
                 Task {
-                    if let bot = await session.createBot() { path.append(Chat.bot(bot)) }
+                    if let bot = await session.createBot() {
+                        if isSidebar {
+                            selectedChat = Chat.bot(bot)
+                        } else {
+                            path.append(Chat.bot(bot))
+                        }
+                        Haptics.impact(.medium)
+                    }
                 }
             } label: {
                 Image(systemName: "plus")
@@ -219,6 +384,7 @@ struct ChatRow: View {
     let chat: Chat
     let preview: String
     let at: Double
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -270,7 +436,12 @@ struct ChatRow: View {
                 }
             }
         }
-        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+        )
         .contentShape(Rectangle())
     }
 }
@@ -280,6 +451,7 @@ struct ChatRow: View {
 struct WaitingRow: View {
     let chat: Chat
     let card: OptionCard?
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -301,8 +473,14 @@ struct WaitingRow: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.accentColor.opacity(0.14))
+                .fill(isSelected ? Color.accentColor.opacity(0.25) : Color.accentColor.opacity(0.14))
         )
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
+            }
+        }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }

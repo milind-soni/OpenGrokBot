@@ -22,7 +22,9 @@ const staging = mkdtempSync(join(tmpdir(), "omb-smoke-"));
 const home = mkdtempSync(join(tmpdir(), "omb-smoke-home-"));
 const port = 21000 + Math.floor(Math.random() * 9000);
 
-cpSync(join(root, "dist-server"), join(staging, "server"), { recursive: true });
+// OMB_SMOKE_DIST lets the release workflow aim this at a packaged app's
+// Resources/server tree instead of the repo build.
+cpSync(process.env.OMB_SMOKE_DIST ?? join(root, "dist-server"), join(staging, "server"), { recursive: true });
 
 const child = spawn(process.execPath, [join(staging, "server", "index.js")], {
   cwd: staging,

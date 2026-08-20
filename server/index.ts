@@ -77,7 +77,7 @@ import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
-import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
+import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { memberTurnSelection } from "./member-turn.ts";
@@ -2640,6 +2640,16 @@ const server = createServer(async (req, res) => {
       }
     }
     if (method === "POST" && path === "/api/teams/import") {
+      // Import is additive-only. A manifest is untrusted input (catalog,
+      // GitHub, a shared file), so it must be structurally unable to reach
+      // records the user already has: every member becomes a NEW bot with a
+      // fresh id — a manifest cannot name, update, or merge into an existing
+      // bot or room, and importing the same file twice simply creates a
+      // second, freshly numbered set (an edit the user made to the first set
+      // is theirs and stays). Replace mode does hide the current team, but
+      // that archive is driven by the mode parameter the user chose and
+      // touches only hidden/chiefOfStaff on their own bots — nothing in the
+      // file decides what gets archived or how.
       const importMode = url.searchParams.get("mode") ?? "add";
       if (importMode !== "add" && importMode !== "replace") {
         return json(res, 400, { error: "Team import mode must be add or replace" });
@@ -2661,22 +2671,25 @@ const server = createServer(async (req, res) => {
             .map((bot) => ({ id: bot.id, chiefOfStaff: Boolean(bot.chiefOfStaff) }))
         : [];
       const importedBots: ReturnType<typeof store.createBot>[] = [];
+      // Names already in use, hidden bots included: an archived bot can be
+      // un-archived later, and a revived duplicate would be just as
+      // ambiguous then. In replace mode this means re-importing your own
+      // export numbers the newcomers ("Mira 2") — the old team is only
+      // hidden, not gone, and Undo must never surface two bots wearing the
+      // same name.
+      const takenNames = new Set(store.bots.map((bot) => bot.name.trim().toLowerCase()));
       try {
         const selection = await defaultSelection();
         for (const member of manifest.team.members) {
-          // seedMessages: false — an imported bot must not open by greeting
-          // the user as though it were new. composio: false — a shared
-          // persona never starts with reach into the user's connected apps;
-          // the user can switch it on per bot after reading who they got.
+          // importedMemberProfile is the authority boundary: persona fields
+          // only, colliding names numbered. seedMessages: false — an
+          // imported bot must not open by greeting the user as though it
+          // were new. composio: false — a shared persona never starts with
+          // reach into the user's connected apps (absence would mean
+          // allowed); the user can switch it on per bot after reading who
+          // they got.
           const created = store.createBot(
-            {
-              name: member.name,
-              title: member.title,
-              description: member.description,
-              color: member.appearance.color,
-              mascotExpression: member.appearance.mascotExpression,
-              modelSelection: selection,
-            },
+            { ...importedMemberProfile(member, takenNames), modelSelection: selection },
             { seedMessages: false },
           );
           store.patchBot(created.id, { composio: false });

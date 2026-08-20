@@ -75,11 +75,17 @@ describe("default fleet", () => {
     expect(map.hermes).toEqual({ driver: "hermesAgent", environment: {} });
   });
 
+  it("ships Cursor as a default-fleet subscription engine", () => {
+    const map = instanceConfigs({});
+    expect(map.cursor).toEqual({ driver: "cursorAgent", environment: {} });
+  });
+
   it("adds missing custom-only engines onto an existing product fleet", () => {
     const map = instanceConfigs({ instances: { claude: { driver: "claudeAgent" } } });
     expect(map.claude.driver).toBe("claudeAgent");
     expect(map.qwen?.driver).toBe("qwenAgent");
     expect(map.hermes?.driver).toBe("hermesAgent");
+    expect(map.cursor?.driver).toBe("cursorAgent");
   });
 
   it("does not expand a one-off shadow fleet", () => {

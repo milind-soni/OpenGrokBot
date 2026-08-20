@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRoomTurnTimeoutMinutes, saveRoomTurnTimeoutMinutes } from "./room-turn-timeout";
+import {
+  createExclusiveSaveGate,
+  parseRoomTurnTimeoutMinutes,
+  saveRoomTurnTimeoutMinutes,
+} from "./room-turn-timeout";
 
 describe("room turn timeout input", () => {
   it.each(["", " ", "0", "1.5", "1441", "twenty"])(
@@ -58,5 +62,34 @@ describe("room turn timeout input", () => {
     });
 
     expect(result).toEqual({ ok: false, error: "Could not save the room turn limit." });
+  });
+
+  it("blocks a second save while the first is pending and allows a later save", async () => {
+    let resolveFirstSave = () => {};
+    const firstSaveDeferred = new Promise<void>((resolve) => {
+      resolveFirstSave = resolve;
+    });
+    const gate = createExclusiveSaveGate();
+    let startedOperations = 0;
+
+    const save = async (operation: Promise<void>) => {
+      if (!gate.tryStart()) return false;
+      startedOperations += 1;
+      try {
+        await operation;
+        return true;
+      } finally {
+        gate.finish();
+      }
+    };
+
+    const firstSave = save(firstSaveDeferred);
+    await expect(save(Promise.resolve())).resolves.toBe(false);
+    expect(startedOperations).toBe(1);
+
+    resolveFirstSave();
+    await expect(firstSave).resolves.toBe(true);
+    await expect(save(Promise.resolve())).resolves.toBe(true);
+    expect(startedOperations).toBe(2);
   });
 });

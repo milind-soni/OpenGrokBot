@@ -8,6 +8,26 @@ export type RoomTurnTimeoutInput =
 
 export type RoomTurnTimeoutSaveResult = RoomTurnTimeoutInput;
 
+export interface ExclusiveSaveGate {
+  tryStart: () => boolean;
+  finish: () => void;
+}
+
+export function createExclusiveSaveGate(): ExclusiveSaveGate {
+  let active = false;
+
+  return {
+    tryStart: () => {
+      if (active) return false;
+      active = true;
+      return true;
+    },
+    finish: () => {
+      active = false;
+    },
+  };
+}
+
 export function parseRoomTurnTimeoutMinutes(value: string): RoomTurnTimeoutInput {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return { ok: false, error: ROOM_TURN_TIMEOUT_INPUT_ERROR };

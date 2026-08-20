@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   MAX_ROOM_TURN_TIMEOUT_MINUTES,
   MIN_ROOM_TURN_TIMEOUT_MINUTES,
+  createExclusiveSaveGate,
   saveRoomTurnTimeoutMinutes,
 } from "@/lib/room-turn-timeout";
 import { api, useStore, type ConfigStatus } from "@/state/store";
@@ -13,32 +14,40 @@ export function RoomTurnTimeoutSettings() {
   const [value, setValue] = useState(String(confirmedMinutes));
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const saveGateRef = useRef(createExclusiveSaveGate());
 
   useEffect(() => {
     if (!dirty) setValue(String(confirmedMinutes));
   }, [confirmedMinutes, dirty]);
 
   const save = async () => {
-    if (!dirty) return;
-    let savedConfig: ConfigStatus | undefined;
-    const result = await saveRoomTurnTimeoutMinutes(value, async (minutes) => {
-      const config = await api("/api/config", {
-        method: "PUT",
-        body: JSON.stringify({ rooms: { turnTimeoutMinutes: minutes } }),
+    if (!dirty || !saveGateRef.current.tryStart()) return;
+    setSaving(true);
+    try {
+      let savedConfig: ConfigStatus | undefined;
+      const result = await saveRoomTurnTimeoutMinutes(value, async (minutes) => {
+        const config = await api("/api/config", {
+          method: "PUT",
+          body: JSON.stringify({ rooms: { turnTimeoutMinutes: minutes } }),
+        });
+        savedConfig = config;
+        return config.rooms.turnTimeoutMinutes;
       });
-      savedConfig = config;
-      return config.rooms.turnTimeoutMinutes;
-    });
 
-    if (!result.ok) {
-      setError(result.error);
-      return;
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
+      if (savedConfig) dispatch({ type: "configStatus", config: savedConfig });
+      setValue(String(result.minutes));
+      setDirty(false);
+      setError("");
+    } finally {
+      saveGateRef.current.finish();
+      setSaving(false);
     }
-
-    if (savedConfig) dispatch({ type: "configStatus", config: savedConfig });
-    setValue(String(result.minutes));
-    setDirty(false);
-    setError("");
   };
 
   return (
@@ -59,6 +68,7 @@ export function RoomTurnTimeoutSettings() {
           step={1}
           inputMode="numeric"
           value={value}
+          disabled={saving}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? "room-turn-timeout-error room-turn-timeout-help" : "room-turn-timeout-help"}
           onChange={(event) => {

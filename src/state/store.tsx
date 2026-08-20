@@ -214,6 +214,7 @@ export interface ConfigStatus {
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
+  rooms: { turnTimeoutMinutes: number };
   opencodeGo?: { configured: boolean };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
@@ -1459,6 +1460,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               composio: frame.composio,
               box: frame.box,
               vps: frame.vps,
+              rooms: frame.rooms,
               tts: frame.tts,
               profile: frame.profile,
             },

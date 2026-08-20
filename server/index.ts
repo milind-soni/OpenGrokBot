@@ -3460,15 +3460,21 @@ const server = createServer(async (req, res) => {
         if (!check.ok) return json(res, 400, { error: check.message });
       }
       const externalSecretStorage = url.searchParams.get("secretStorage") === "external";
-      if (externalSecretStorage && patch.composio) {
-        // Electron stores the project key with OS-backed encryption. Persist
-        // only the non-secret Session ids here, while keeping the supplied
-        // key live in this process until the next launch injects it by env.
-        const composioPatch = patch.composio;
-        const { apiKey: _secret, ...metadata } = composioPatch;
-        saveConfig({ composio: { ...metadata, apiKey: "" } });
-        cfg.composio = { ...cfg.composio, ...composioPatch };
-        if (composioPatch.apiKey !== undefined) process.env.COMPOSIO_API_KEY = composioPatch.apiKey;
+      if (externalSecretStorage) {
+        // The packaged Electron caller commits supplied credentials to the
+        // OS-encrypted store before entering this route. Persist every
+        // non-secret sibling in the same request, but replace each supplied
+        // credential with an empty tombstone so an older plaintext value can
+        // never survive the merge in config.json.
+        const persisted = structuredClone(patch);
+        if (persisted.xai?.key !== undefined) persisted.xai.key = "";
+        if (persisted.composio?.apiKey !== undefined) persisted.composio.apiKey = "";
+        if (persisted.box?.token !== undefined) persisted.box.token = "";
+        if (persisted.opencodeGo?.apiKey !== undefined) persisted.opencodeGo.apiKey = "";
+        if (persisted.tts?.key !== undefined) persisted.tts.key = "";
+        saveConfig(persisted);
+        syncCredentialEnv(patch);
+        Object.assign(cfg, loadConfig());
       } else {
         saveConfig(patch);
         // loadConfig prefers env over the file for credentials, so the env

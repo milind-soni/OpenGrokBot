@@ -731,7 +731,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           execCli(
             config.cli,
             ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"],
-            { timeout: 60_000, env: { ...process.env, PATH: augmentedPath() } },
+            { timeout: 60_000, env: claudeEnvironment("claude-haiku-4-5") },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
           );
         }),

@@ -1,6 +1,6 @@
-// Paste-a-key rows for PUT /api/config. The server persists to
-// ~/.openmausbot/config.json and hot-reloads the provider fleet; secrets
-// are write-only — GET /api/config returns configured flags, never values.
+// Paste-a-key rows. Packaged Electron saves secrets in the OS-backed store;
+// browser development falls back to PUT /api/config. Secrets are write-only
+// either way — GET /api/config returns configured flags, never values.
 import { useEffect, useId, useRef, useState } from "react";
 import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
@@ -18,6 +18,12 @@ const SECTIONS: Record<
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
+};
+
+const ELECTRON_CREDENTIAL: Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey"> = {
+  composio: "composioApiKey",
+  box: "boxToken",
+  opencodeGo: "opencodeGoApiKey",
 };
 
 const CREDENTIALS: Record<
@@ -150,8 +156,8 @@ export function ApiKeyRow({
     if (saving || (!value.trim() && !configured)) return;
     setSaving(true);
     setError(null);
-    const request = section === "composio" && window.ogb?.setCredential
-      ? window.ogb.setCredential("composioApiKey", value.trim())
+    const request = window.ogb?.setCredential
+      ? window.ogb.setCredential(ELECTRON_CREDENTIAL[section], value.trim())
       : api("/api/config", {
           method: "PUT",
           body: JSON.stringify(SECTIONS[section].body(value.trim())),

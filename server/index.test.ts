@@ -729,14 +729,23 @@ describe("harness HTTP API", () => {
     expect(rejected.status).toBe(400);
     expect(rejected.body.error).toMatch(/invalid project key/i);
 
-    const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
+    const saved = await api("PUT", "/api/config?secretStorage=external", {
+      composio: { apiKey: "ak_good" },
+      opencodeGo: { apiKey: "opencode-external" },
+      profile: { name: "External Store" },
+    });
     expect(saved.status).toBe(200);
     expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
+    expect(saved.body.opencodeGo).toEqual({ configured: true });
+    expect(saved.body.profile).toEqual({ name: "External Store", email: "" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.composio).toMatchObject({ apiKey: "", sessionId: "trs_config_test" });
+    expect(disk.opencodeGo).toEqual({ apiKey: "" });
+    expect(disk.profile).toEqual({ name: "External Store" });
     expect(JSON.stringify(disk)).not.toContain("ak_good");
+    expect(JSON.stringify(disk)).not.toContain("opencode-external");
 
     // A later ordinary setting save reloads config; the in-process secure-env
     // override must keep Composio configured until the next app launch.

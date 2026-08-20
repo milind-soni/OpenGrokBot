@@ -103,12 +103,10 @@ async function secureComposioConfig() {
 }
 
 // The remaining workspace credentials (xai/box/voice/OpenCode Go keys) get
-// the same at-rest treatment as the Composio key above: on every packaged
-// boot, any plaintext value found in config.json moves into the encrypted
-// credentials.bin and the plaintext field is deleted. The server saves a
-// mid-session key change back into config.json, so this sweep is also how
-// an updated (or cleared — saved as "") key reaches the encrypted store on
-// the following launch. See workspace-credentials.mjs for the exact rules.
+// the same at-rest treatment as the Composio key above. New packaged-app
+// saves go straight through credential:set below; this boot-time sweep also
+// migrates plaintext left by older versions or direct development clients.
+// See workspace-credentials.mjs for the exact rules.
 async function secureWorkspaceConfig() {
   const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
   const configPath = path.join(dataDir, "config.json");
@@ -604,30 +602,54 @@ ipcMain.handle("desktop:capabilities", async () =>
   }),
 );
 
+const CREDENTIAL_PATCH = {
+  composioApiKey: (value) => ({ composio: { apiKey: value } }),
+  xaiApiKey: (value) => ({ xai: { key: value } }),
+  boxToken: (value) => ({ box: { token: value } }),
+  opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
+  ttsKey: (value) => ({ tts: { key: value } }),
+};
+
 ipcMain.handle("credential:set", async (_event, name, value) => {
-  if (name !== "composioApiKey" || typeof value !== "string") {
+  const patchFor = CREDENTIAL_PATCH[name];
+  if (!patchFor || typeof value !== "string") {
     throw new Error("Unsupported credential");
   }
   if (app.isPackaged && !(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error("The operating-system credential store is unavailable");
   }
-  // In development the server is a separately launched process, so it cannot
-  // receive credentials from Electron at boot. Keep its established local
-  // config path there; production always uses the encrypted external store.
-  const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
-  const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ composio: { apiKey: value.trim() } }),
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
+  const secret = value.trim();
+  const previousCredentials = secureCredentials;
   if (app.isPackaged) {
-    if (value.trim()) secureCredentials.composioApiKey = value.trim();
-    else delete secureCredentials.composioApiKey;
-    await saveSecureCredentials(secureCredentials);
+    const nextCredentials = { ...secureCredentials };
+    if (secret) nextCredentials[name] = secret;
+    else delete nextCredentials[name];
+    // Commit the encrypted value before the server makes it live. If
+    // validation or reload fails below, restore the previous store so the
+    // next launch cannot disagree with the response the user saw.
+    await saveSecureCredentials(nextCredentials);
+    secureCredentials = nextCredentials;
   }
-  return body;
+  try {
+    // In development the server is a separately launched process, so it
+    // cannot receive credentials from Electron at boot. Keep its established
+    // local config path there; production always uses the encrypted store.
+    const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
+    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patchFor(secret)),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
+    return body;
+  } catch (error) {
+    if (app.isPackaged) {
+      await saveSecureCredentials(previousCredentials);
+      secureCredentials = previousCredentials;
+    }
+    throw error;
+  }
 });
 
 async function broadcastDesktopCapabilities() {

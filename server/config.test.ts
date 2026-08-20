@@ -251,10 +251,17 @@ describe("credential env preference", () => {
   it("syncCredentialEnv keeps process.env in step with a credential save", () => {
     process.env.XAI_API_KEY = "boot-injected";
     process.env.BOX_TOKEN = "boot-injected";
-    syncCredentialEnv({ xai: { key: "just-saved" }, box: { token: "" }, profile: { name: "Ada" } });
+    process.env.COMPOSIO_API_KEY = "boot-injected";
+    syncCredentialEnv({
+      xai: { key: "just-saved" },
+      composio: { apiKey: "ak_just_saved" },
+      box: { token: "" },
+      profile: { name: "Ada" },
+    });
     // a saved value replaces the boot-time one; a cleared value drops it;
     // untouched sections change nothing
     expect(process.env.XAI_API_KEY).toBe("just-saved");
+    expect(process.env.COMPOSIO_API_KEY).toBe("ak_just_saved");
     expect(process.env.BOX_TOKEN).toBeUndefined();
     expect(process.env.OMB_TTS_KEY).toBeUndefined();
   });

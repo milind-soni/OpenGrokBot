@@ -86,7 +86,10 @@ declare global {
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
       /** Save a provider credential through Electron's OS-backed store. */
-      setCredential?(name: "composioApiKey", value: string): Promise<ConfigStatus>;
+      setCredential?(
+        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey",
+        value: string,
+      ): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). onState
        * fires immediately with the current state, then on transitions. */
       updater?: {

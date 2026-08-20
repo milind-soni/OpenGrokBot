@@ -150,7 +150,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_DUMP;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.XAI_API_KEY;
+    delete process.env.COMPOSIO_API_KEY;
     delete process.env.BOX_TOKEN;
+    delete process.env.OPENCODE_API_KEY;
     delete process.env.OMB_TTS_KEY;
     recorder?.stop();
     await instance?.dispose();
@@ -697,6 +699,19 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv).not.toContain("--effort");
+  });
+
+  it("strips workspace credentials from generateText helper children", async () => {
+    await create();
+    const dump = join(scratch, "generate-text-env.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const names = ["XAI_API_KEY", "COMPOSIO_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "OMB_TTS_KEY"] as const;
+    for (const name of names) process.env[name] = `${name}-must-not-leak`;
+
+    await instance.generateText?.("summarize safely");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    for (const name of names) expect(seen.env[name]).toBeUndefined();
   });
 
   it("declares the effort levels the CLI accepts", async () => {

@@ -30,10 +30,10 @@ missing login shows as unauthenticated rather than crashing the fleet.
 
 ## Models
 
-The picker starts from a small static catalog and refreshes from
-`agent models --format json` when that command succeeds. A failed listing
-keeps the last usable catalog (then the static fallback) rather than emptying
-the rail.
+The picker starts from a small static catalog and refreshes from plain
+`agent models` output (`slug - Label`, with `(default)` / `(current)` markers).
+A failed listing keeps the last usable catalog (then the static fallback)
+rather than emptying the rail.
 
 `--model <id>` is passed as a global CLI flag before `acp`. When the running
 CLI also implements ACP `session/set_model`, OpenMausBot pins the same id over

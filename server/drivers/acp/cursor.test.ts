@@ -37,15 +37,15 @@ describe("decodeCursorAuthStatus", () => {
 describe("decodeCursorModelCatalog", () => {
   it("merges live ids onto the static cloud set", () => {
     const catalog = decodeCursorModelCatalog({
-      default: "composer-2",
+      default: "composer-2.5",
       models: [
-        { id: "composer-2", name: "Composer 2" },
+        { id: "composer-2.5", name: "Composer 2.5" },
         { id: "cursor-live", displayName: "Cursor Live" },
         { id: "bad id" },
-        "gpt-5",
+        "gpt-5.3-codex",
       ],
     });
-    expect(catalog?.default).toBe("composer-2");
+    expect(catalog?.default).toBe("composer-2.5");
     expect(catalog?.options.slice(0, STATIC_CURSOR_MODELS.options.length)).toEqual(STATIC_CURSOR_MODELS.options);
     expect(catalog?.options).toContainEqual({ id: "cursor-live", label: "Cursor Live", custom: true });
     expect(catalog?.options.some((option) => option.id === "bad id")).toBe(false);
@@ -57,7 +57,7 @@ describe("decodeCursorModelCatalog", () => {
       label: "Extra One",
       custom: true,
     });
-    expect(decodeCursorModelCatalog(["composer-2", "brand-new"])?.options).toContainEqual({
+    expect(decodeCursorModelCatalog(["composer-2.5", "brand-new"])?.options).toContainEqual({
       id: "brand-new",
       label: "Brand New",
       custom: true,
@@ -72,14 +72,22 @@ describe("decodeCursorModelCatalog", () => {
 });
 
 describe("decodeCursorModelText", () => {
-  it("parses one slug per line and optional labels", () => {
+  it("parses slug-label lines and (default)/(current) markers", () => {
     const catalog = decodeCursorModelText(`
-Models
-composer-2 — Composer 2
-cursor-text    Cursor Text
+Available models
+
+auto - Auto (default)
+composer-2.5 - Composer 2.5 (current)
+cursor-text - Cursor Text
 `);
+    expect(catalog?.default).toBe("auto");
     expect(catalog?.options).toContainEqual({ id: "cursor-text", label: "Cursor Text", custom: true });
-    expect(catalog?.default).toBe("composer-2");
+    expect(catalog?.options).toContainEqual({ id: "composer-2.5", label: "Composer 2.5" });
+  });
+
+  it("falls back to the first parsed id when static default is absent", () => {
+    const catalog = decodeCursorModelText("cursor-only - Cursor Only");
+    expect(catalog?.default).toBe("cursor-only");
   });
 });
 
@@ -127,7 +135,7 @@ describe("CursorAgentDriver", () => {
     });
     try {
       expect(instance.models.options.some((option) => option.id === "cursor-live" && option.custom)).toBe(true);
-      expect(instance.models.default).toBe("composer-2");
+      expect(instance.models.default).toBe("auto");
     } finally {
       await instance.dispose();
     }
@@ -199,17 +207,17 @@ describe("CursorAgentDriver", () => {
     });
     const recorder = recordEvents(instance.adapter);
     try {
-      await instance.adapter.sendTurn({ threadId: "t-cursor", text: "hi", model: "gpt-5" });
+      await instance.adapter.sendTurn({ threadId: "t-cursor", text: "hi", model: "gpt-5.3-codex" });
       await recorder.until((e) => e.type === "turn.completed");
 
       const seen = JSON.parse(readFileSync(dump, "utf8"));
-      expect(seen.argv).toEqual(["--force", "--model", "gpt-5", "acp"]);
+      expect(seen.argv).toEqual(["--force", "--model", "gpt-5.3-codex", "acp"]);
       expect(seen.env.CURSOR_API_KEY).toBe("cursor-should-keep");
       expect(seen.env.XAI_API_KEY).toBeUndefined();
 
       const applied = JSON.parse(readFileSync(`${dump}.config.json`, "utf8"));
       expect(applied).toEqual([
-        { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "gpt-5" } },
+        { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "gpt-5.3-codex" } },
       ]);
     } finally {
       recorder.stop();
@@ -258,7 +266,7 @@ describe("CursorAgentDriver", () => {
     });
     const recorder = recordEvents(instance.adapter);
     try {
-      await instance.adapter.sendTurn({ threadId: "t-cursor-old", text: "hi", model: "gpt-5" });
+      await instance.adapter.sendTurn({ threadId: "t-cursor-old", text: "hi", model: "gpt-5.3-codex" });
       const done = await recorder.until((e) => e.type === "turn.completed");
       expect(done).toMatchObject({ type: "turn.completed", ok: true });
     } finally {

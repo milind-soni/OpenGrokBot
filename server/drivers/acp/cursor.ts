@@ -13,13 +13,13 @@ import { execCli } from "../../procs.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 export const STATIC_CURSOR_MODELS: ModelCatalog = {
-  default: "composer-2",
+  default: "auto",
   options: [
-    { id: "composer-2", label: "Composer 2" },
-    { id: "gpt-5", label: "GPT-5" },
-    { id: "sonnet-4.5", label: "Claude 4.5 Sonnet" },
-    { id: "opus-4.6", label: "Claude 4.6 Opus" },
-    { id: "grok-4.5", label: "Grok 4.5" },
+    { id: "auto", label: "Auto" },
+    { id: "composer-2.5", label: "Composer 2.5" },
+    { id: "composer-2.5-fast", label: "Composer 2.5 Fast" },
+    { id: "gpt-5.3-codex", label: "Codex 5.3" },
+    { id: "claude-sonnet-5-thinking-high", label: "Claude Sonnet 5 1M Thinking" },
   ],
 };
 
@@ -127,19 +127,41 @@ export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null 
   return { default: defaultId, options: merged };
 }
 
-/** Last-resort parse of `agent models` text: one slug per line, optional
- *  `id — label` / `id: label` columns. */
+function stripModelMarkers(label: string): { label: string; isDefault: boolean; isCurrent: boolean } {
+  let cleaned = label.trim();
+  let isDefault = false;
+  let isCurrent = false;
+  const defaultMatch = cleaned.match(/\s*\(default\)\s*$/i);
+  if (defaultMatch) {
+    isDefault = true;
+    cleaned = cleaned.slice(0, defaultMatch.index).trim();
+  }
+  const currentMatch = cleaned.match(/\s*\(current\)\s*$/i);
+  if (currentMatch) {
+    isCurrent = true;
+    cleaned = cleaned.slice(0, currentMatch.index).trim();
+  }
+  return { label: cleaned, isDefault, isCurrent };
+}
+
+/** Parse plain `agent models` text: one slug per line, optional `id - label`
+ *  columns, and `(default)` / `(current)` markers on the label. */
 export function decodeCursorModelText(text: string): ModelCatalog | null {
   const options: ModelCatalog["options"] = [];
   const seen = new Set<string>();
+  let markedDefault: string | undefined;
+  let markedCurrent: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || line.startsWith("#") || /^models?\b/i.test(line)) continue;
+    if (!line || line.startsWith("#") || /^available\s+models?\b/i.test(line) || /^models?\b/i.test(line)) continue;
     const stripped = line.replace(/^[\s*•\-]+\s*/, "");
     const parts = stripped.split(/\s+[—–|:]\s+|\s+-\s+|\s{2,}/);
     const id = (parts[0] ?? "").trim();
-    const label = parts.slice(1).join(" ").trim();
+    const rawLabel = parts.slice(1).join(" ").trim();
+    const { label, isDefault, isCurrent } = stripModelMarkers(rawLabel);
     pushModel(options, seen, id, label || undefined, true);
+    if (isDefault) markedDefault = id;
+    if (isCurrent) markedCurrent = id;
   }
   if (!options.length) return null;
   const merged: ModelCatalog["options"] = STATIC_CURSOR_MODELS.options.map((option) => ({ ...option }));
@@ -149,7 +171,10 @@ export function decodeCursorModelText(text: string): ModelCatalog | null {
     mergedSeen.add(option.id);
     merged.push(option);
   }
-  const defaultId = seen.has(STATIC_CURSOR_MODELS.default) ? STATIC_CURSOR_MODELS.default : merged[0]!.id;
+  const defaultId =
+    (markedDefault && seen.has(markedDefault) ? markedDefault : undefined) ??
+    (markedCurrent && seen.has(markedCurrent) ? markedCurrent : undefined) ??
+    (seen.has(STATIC_CURSOR_MODELS.default) ? STATIC_CURSOR_MODELS.default : options[0]!.id);
   return { default: defaultId, options: merged };
 }
 
@@ -224,12 +249,13 @@ export async function fetchCursorModels(
   env: Record<string, string | undefined>,
   run: typeof execCli = execCli,
 ): Promise<ModelCatalog> {
-  const stdout = await execText(run, cli, ["models", "--format", "json"], env);
+  // Live CLI prints plain text (`slug - Label`); `--format json` is not supported yet.
+  const stdout = await execText(run, cli, ["models"], env);
   if (stdout != null) {
-    const fromJson = decodeCursorModelCatalog(firstJsonValue(stdout));
-    if (fromJson) return fromJson;
     const fromText = decodeCursorModelText(stdout);
     if (fromText) return fromText;
+    const fromJson = decodeCursorModelCatalog(firstJsonValue(stdout));
+    if (fromJson) return fromJson;
   }
   return STATIC_CURSOR_MODELS;
 }

@@ -94,14 +94,14 @@ if (argv[0] === "status" || argv[0] === "whoami") {
 }
 if (argv[0] === "models" || argv.includes("--list-models")) {
   console.log(
-    JSON.stringify({
-      default: "composer-2",
-      models: [
-        { id: "composer-2", name: "Composer 2" },
-        { id: "gpt-5", name: "GPT-5" },
-        { id: "cursor-live", name: "Cursor Live" },
-      ],
-    }),
+    [
+      "Available models",
+      "",
+      "auto - Auto (default)",
+      "composer-2.5 - Composer 2.5 (current)",
+      "gpt-5.3-codex - Codex 5.3",
+      "cursor-live - Cursor Live",
+    ].join("\n"),
   );
   process.exit(0);
 }

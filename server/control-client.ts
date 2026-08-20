@@ -28,8 +28,11 @@ export interface ControlClient {
    * the wait loop in request-help polls with it so a hand-back is seen
    * within one poll interval, not one poll interval plus the cache. */
   state(fresh?: boolean): Promise<ControlState>;
-  /** Surface the bot's plea in the app. False when it could not be told. */
-  requestHelp(reason: string): Promise<boolean>;
+  /** Surface the bot's plea in the app. Returns its expiry id, or null when
+   * the harness could not be told. */
+  requestHelp(reason: string): Promise<string | null>;
+  /** Close only the unanswered plea opened by this client. */
+  expireHelp(requestId: string): Promise<void>;
   readonly configured: boolean;
 }
 
@@ -72,8 +75,8 @@ export function createControlClient(options?: {
       cachedAt = Date.now();
       return cached;
     },
-    async requestHelp(reason: string): Promise<boolean> {
-      if (!configured) return false;
+    async requestHelp(reason: string): Promise<string | null> {
+      if (!configured) return null;
       try {
         const res = await fetchImpl(url, {
           method: "POST",
@@ -81,9 +84,25 @@ export function createControlClient(options?: {
           body: JSON.stringify({ reason }),
           signal: AbortSignal.timeout(2_000),
         });
-        return res.ok;
+        if (!res.ok) return null;
+        const body: any = await res.json().catch(() => null);
+        return typeof body?.requestId === "string" && body.requestId ? body.requestId : null;
       } catch {
-        return false;
+        return null;
+      }
+    },
+    async expireHelp(requestId: string): Promise<void> {
+      if (!configured || !requestId) return;
+      try {
+        await fetchImpl(url, {
+          method: "DELETE",
+          headers,
+          body: JSON.stringify({ requestId }),
+          signal: AbortSignal.timeout(2_000),
+        });
+      } catch {
+        // Best effort: the harness also clears the in-memory request on
+        // release/restart, and an unavailable harness cannot show the card.
       }
     },
   };

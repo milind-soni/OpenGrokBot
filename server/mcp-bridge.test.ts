@@ -138,6 +138,17 @@ describe("createLineSplitter", () => {
     splitter.flush();
     expect(lines).toEqual(['{"a":1}', '{"b":2}', '{"c"']);
   });
+
+  it("does not corrupt a UTF-8 character split between buffers", () => {
+    const lines: string[] = [];
+    const splitter = createLineSplitter((line) => lines.push(line));
+    const bytes = Buffer.from('{"text":"mouse 🐭"}\n');
+    const splitAt = bytes.indexOf(Buffer.from("🐭")) + 2;
+    splitter.push(bytes.subarray(0, splitAt));
+    splitter.push(bytes.subarray(splitAt));
+    splitter.flush();
+    expect(lines).toEqual(['{"text":"mouse 🐭"}']);
+  });
 });
 
 describe("createGateInterceptor", () => {
@@ -183,16 +194,26 @@ describe("createGateInterceptor", () => {
   it("preserves protocol order even though the held-check is async", async () => {
     const order: string[] = [];
     let calls = 0;
+    let releaseFirst!: (held: boolean) => void;
+    const first = new Promise<boolean>((resolve) => (releaseFirst = resolve));
+    let drained!: () => void;
+    const allForwarded = new Promise<void>((resolve) => (drained = resolve));
     const intercept = createGateInterceptor({
-      // the FIRST check dawdles; a naive gate would answer frame 2 first
-      isHeld: () => new Promise((resolve) => setTimeout(() => resolve(false), calls++ === 0 ? 30 : 0)),
-      forward: (line) => order.push(`fwd:${JSON.parse(line).id}`),
+      isHeld: () => (calls++ === 0 ? first : Promise.resolve(false)),
+      forward: (line) => {
+        const parsed = JSON.parse(line);
+        order.push(`fwd:${parsed.id ?? parsed.marker}`);
+        if (parsed.marker === "drained") drained();
+      },
       refuse: (line) => order.push(`ref:${JSON.parse(line).id}`),
     });
     intercept(frame("tools/call", 1));
     intercept(frame("tools/call", 2));
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(order).toEqual(["fwd:1", "fwd:2"]);
+    intercept(JSON.stringify({ marker: "drained" }));
+    expect(order).toEqual([]);
+    releaseFirst(false);
+    await allForwarded;
+    expect(order).toEqual(["fwd:1", "fwd:2", "fwd:drained"]);
   });
 
   it("fails open: a broken held-check forwards rather than wedging the computer", async () => {

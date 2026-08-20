@@ -318,7 +318,12 @@ export interface AppState {
 type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
 export type Action =
-  | { type: "hydrate"; bots: Bot[]; groups: Group[] }
+  | {
+      type: "hydrate";
+      bots: Bot[];
+      groups: Group[];
+      computerControl: Record<string, { held: boolean; helpReason: string | null }>;
+    }
   | { type: "showRoutines" }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
@@ -454,7 +459,13 @@ export function reducer(state: AppState, action: Action): AppState {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
         state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
-      return { ...state, bots: action.bots, groups: action.groups, selectedId };
+      return {
+        ...state,
+        bots: action.bots,
+        groups: action.groups,
+        computerControl: action.computerControl,
+        selectedId,
+      };
     }
     case "showRoutines":
       return {
@@ -1243,7 +1254,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const loadAll = () =>
       Promise.all([
         api("/api/bots")
-          .then(({ bots, groups }) => alive && rawDispatch({ type: "hydrate", bots, groups: groups ?? [] }))
+          .then(({ bots, groups, computerControl }) =>
+            alive && rawDispatch({
+              type: "hydrate",
+              bots,
+              groups: groups ?? [],
+              computerControl: computerControl ?? {},
+            }))
           .catch(() => {}),
         api("/api/instances")
           .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))

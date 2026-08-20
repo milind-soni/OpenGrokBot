@@ -21,6 +21,7 @@
 //      VPS dropping mid-turn leaves the exec silently wedged until the OS
 //      gives up — the harness sees a hung tool call, not an error.
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 import { CONTROL_REFUSAL_PLAIN, createControlClient } from "./control-client.ts";
 import { augmentedPath } from "./env-path.ts";
@@ -142,9 +143,10 @@ export function createLineSplitter(onLine: (line: string) => void): {
   flush: () => void;
 } {
   let pending = "";
+  const decoder = new StringDecoder("utf8");
   return {
     push(chunk) {
-      pending += chunk.toString();
+      pending += typeof chunk === "string" ? chunk : decoder.write(chunk);
       let newline: number;
       while ((newline = pending.indexOf("\n")) !== -1) {
         const line = pending.slice(0, newline);
@@ -153,6 +155,7 @@ export function createLineSplitter(onLine: (line: string) => void): {
       }
     },
     flush() {
+      pending += decoder.end();
       if (pending) onLine(pending);
       pending = "";
     },
@@ -218,7 +221,7 @@ export function runMcpBridge(options: BridgeOptions): void {
     const client = createControlClient({ url: options.gate.url, token: options.gate.token });
     const inbound = createLineSplitter(
       createGateInterceptor({
-        isHeld: async () => (await client.state()).held,
+        isHeld: async () => (await client.state(true)).held,
         forward: (line) => child.stdin.write(line + "\n"),
         refuse: (line) => process.stdout.write(line + "\n"),
       }),

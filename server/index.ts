@@ -2341,12 +2341,17 @@ const server = createServer(async (req, res) => {
         }
         if (method === "POST") {
           const body = await readBody(req);
-          const snapshot = computerControl.requestHelp(botId, body.reason);
+          const { snapshot, requestId } = computerControl.requestHelpLease(botId, body.reason);
           // worth a buzz: the bot is blocked on the person's hands, which
           // is exactly the "blocked on you" rule notify.ts encodes
           notify(
             buildNotification("takeover", bot, bot.threadId, snapshot.helpReason ?? "asked you to take over"),
           );
+          return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null, requestId });
+        }
+        if (method === "DELETE") {
+          const body = await readBody(req);
+          const snapshot = computerControl.expireHelp(botId, body.requestId);
           return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
         }
         return json(res, 405, { error: "method not allowed" });
@@ -2533,6 +2538,12 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBot(bot), ...messagePage(bot.threadId, limit) })),
         groups: store.groups.map((g) => ({ ...g, ...messagePage(g.threadId, limit) })),
+        computerControl: Object.fromEntries(
+          store.bots.map((bot) => {
+            const snapshot = computerControl.snapshot(bot.id);
+            return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
+          }),
+        ),
       });
     }
 

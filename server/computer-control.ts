@@ -32,12 +32,14 @@ const MAX_REASON_CHARS = 280;
 interface Entry {
   heldSinceMs: number | null;
   helpReason: string | null;
+  helpRequestId: string | null;
 }
 
 export class ComputerControl {
   private entries = new Map<string, Entry>();
   private onChange: (botId: string, snapshot: ControlSnapshot) => void;
   private now: () => number;
+  private requestSequence = 0;
 
   constructor(
     onChange: (botId: string, snapshot: ControlSnapshot) => void = () => {},
@@ -62,7 +64,11 @@ export class ComputerControl {
   take(botId: string): ControlSnapshot {
     const entry = this.entries.get(botId);
     if (entry?.heldSinceMs != null) return this.snapshot(botId);
-    this.entries.set(botId, { heldSinceMs: this.now(), helpReason: entry?.helpReason ?? null });
+    this.entries.set(botId, {
+      heldSinceMs: this.now(),
+      helpReason: entry?.helpReason ?? null,
+      helpRequestId: entry?.helpRequestId ?? null,
+    });
     return this.changed(botId);
   }
 
@@ -79,11 +85,20 @@ export class ComputerControl {
    * is already driving is kept, but must not clobber an earlier one they
    * may still be reading. */
   requestHelp(botId: string, reason: unknown): ControlSnapshot {
+    return this.requestHelpLease(botId, reason).snapshot;
+  }
+
+  /** Open a help request and return the lease that owns it. A proxy uses
+   * this id to expire only its own unanswered plea when its wait ends. */
+  requestHelpLease(botId: string, reason: unknown): { snapshot: ControlSnapshot; requestId: string } {
     const text = typeof reason === "string" ? reason.trim().slice(0, MAX_REASON_CHARS) : "";
-    const entry = this.entries.get(botId) ?? { heldSinceMs: null, helpReason: null };
-    entry.helpReason = entry.helpReason ?? (text || "the bot asked you to take over");
+    const entry = this.entries.get(botId) ?? { heldSinceMs: null, helpReason: null, helpRequestId: null };
+    if (entry.helpReason === null) {
+      entry.helpReason = text || "the bot asked you to take over";
+      entry.helpRequestId = `${botId}-${++this.requestSequence}`;
+    }
     this.entries.set(botId, entry);
-    return this.changed(botId);
+    return { snapshot: this.changed(botId), requestId: entry.helpRequestId! };
   }
 
   /** The person declines without taking over; the waiting bot is told. */
@@ -91,6 +106,18 @@ export class ComputerControl {
     const entry = this.entries.get(botId);
     if (!entry || entry.helpReason === null) return this.snapshot(botId);
     entry.helpReason = null;
+    entry.helpRequestId = null;
+    if (entry.heldSinceMs === null) this.entries.delete(botId);
+    return this.changed(botId);
+  }
+
+  /** Expire an unanswered plea. The id comparison prevents an old proxy's
+   * timeout from dismissing a newer request for the same bot. */
+  expireHelp(botId: string, requestId: unknown): ControlSnapshot {
+    const entry = this.entries.get(botId);
+    if (!entry || entry.helpRequestId !== requestId) return this.snapshot(botId);
+    entry.helpReason = null;
+    entry.helpRequestId = null;
     if (entry.heldSinceMs === null) this.entries.delete(botId);
     return this.changed(botId);
   }

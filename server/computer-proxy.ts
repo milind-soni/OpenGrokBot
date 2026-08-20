@@ -803,7 +803,7 @@ async function semanticActAndObserve(
 const OPEN_WHILE_DRIVEN = new Set(["computer_request_help", "computer_status", "observation_metrics"]);
 
 async function call(id: unknown, name: string, args: any) {
-  if (!OPEN_WHILE_DRIVEN.has(name) && (await control.state()).held) {
+  if (!OPEN_WHILE_DRIVEN.has(name) && (await control.state(true)).held) {
     return text(id, CONTROL_REFUSAL, true);
   }
   if (name === "computer_request_help") {
@@ -813,7 +813,10 @@ async function call(id: unknown, name: string, args: any) {
     const initial = await control.state(true);
     // If the person is already driving, don't clobber whatever plea they
     // are reading — just wait for the hand-back.
-    if (!initial.held) await control.requestHelp(String(args?.reason ?? ""));
+    const requestId = initial.held ? null : await control.requestHelp(String(args?.reason ?? ""));
+    if (!initial.held && requestId === null) {
+      return text(id, "The person could not be paged for this computer right now. Carry on carefully or tell them in chat.", true);
+    }
     let sawHold = initial.held;
     const deadline = Date.now() + CONTROL_WAIT_MS;
     while (Date.now() < deadline) {
@@ -829,6 +832,7 @@ async function call(id: unknown, name: string, args: any) {
         );
       }
     }
+    if (requestId) await control.expireHelp(requestId);
     return text(
       id,
       "Nobody took control within the wait window. Carry on carefully, or ask again if you are truly stuck.",

@@ -478,6 +478,8 @@ describe("computer proxy control gate (fake box + fake control)", () => {
   const commands: string[] = [];
   let held = false;
   let helpOpen = false;
+  let failHelpPost = false;
+  const expiredHelpIds: string[] = [];
   const authHeaders: Array<string | undefined> = [];
 
   const rpc = (msg: unknown) => proxy.stdin!.write(JSON.stringify(msg) + "\n");
@@ -519,9 +521,26 @@ describe("computer proxy control gate (fake box + fake control)", () => {
     controlServer = createServer((req, res) => {
       authHeaders.push(Array.isArray(req.headers.authorization) ? undefined : req.headers.authorization);
       if (req.method === "POST") {
+        if (failHelpPost) {
+          req.resume();
+          res.writeHead(503, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "offline" }));
+          return;
+        }
         helpOpen = true;
         req.resume();
         req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ held, helpOpen, requestId: "help-1" }));
+        });
+        return;
+      }
+      if (req.method === "DELETE") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          expiredHelpIds.push(JSON.parse(body || "{}").requestId);
+          helpOpen = false;
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ held, helpOpen }));
         });
@@ -584,7 +603,6 @@ describe("computer proxy control gate (fake box + fake control)", () => {
 
   it("refuses every action while the person is driving — nothing reaches the box", async () => {
     held = true;
-    await new Promise((r) => setTimeout(r, 40)); // let the state cache lapse
     const before = commands.length;
     rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "click", arguments: { x: 10, y: 10 } } });
     const click = await waitFor(3);
@@ -631,5 +649,18 @@ describe("computer proxy control gate (fake box + fake control)", () => {
     const result = await waitFor(7, 4000);
     expect(result.result.isError).toBe(true);
     expect(result.result.content[0].text).toMatch(/nobody took control/i);
+    expect(helpOpen).toBe(false);
+    expect(expiredHelpIds).toContain("help-1");
+  });
+
+  it("returns immediately when the person cannot be paged", async () => {
+    held = false;
+    helpOpen = false;
+    failHelpPost = true;
+    rpc({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "computer_request_help", arguments: {} } });
+    const result = await waitFor(8, 500);
+    failHelpPost = false;
+    expect(result.result.isError).toBe(true);
+    expect(result.result.content[0].text).toMatch(/could not be paged/i);
   });
 });

@@ -1317,6 +1317,8 @@ describe("computer control API (who is driving)", () => {
         (f) => f.kind === "computer-control" && f.botId === botId && f.held === true,
       );
       expect(frame.helpReason).toBeNull();
+      const hydrated = await api("GET", "/api/bots");
+      expect(hydrated.body.computerControl[botId]).toEqual({ held: true, helpReason: null });
       const released = await api("POST", `/api/bots/${botId}/computer/control`, { action: "release" });
       expect(released.body.held).toBe(false);
     } finally {

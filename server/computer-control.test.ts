@@ -53,6 +53,24 @@ describe("computer control", () => {
     expect(control.requestHelp("b1", "second").helpReason).toBe("first");
   });
 
+  it("expires only the help request that owns the timeout", () => {
+    const { control, changes } = tracked();
+    const first = control.requestHelpLease("b1", "first");
+    expect(control.expireHelp("b1", "some-older-request").helpReason).toBe("first");
+    expect(changes).toHaveLength(1);
+    expect(control.expireHelp("b1", first.requestId).helpReason).toBeNull();
+    expect(changes).toHaveLength(2);
+  });
+
+  it("an old timeout cannot dismiss a newer plea", () => {
+    const { control } = tracked();
+    const first = control.requestHelpLease("b1", "first");
+    control.dismissHelp("b1");
+    const second = control.requestHelpLease("b1", "second");
+    expect(second.requestId).not.toBe(first.requestId);
+    expect(control.expireHelp("b1", first.requestId).helpReason).toBe("second");
+  });
+
   it("a novel-length reason is cut to card size", () => {
     const { control } = tracked();
     const reason = "x".repeat(2000);

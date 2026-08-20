@@ -443,13 +443,17 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       if (joinTab) joinTab.opener = null;
     }
     api(`/api/bots/${bot.id}/computer/${kind}`, { method: "POST" })
-      .then((result) => {
+      .then(async (result) => {
         // the join URL's stream token rotates — always freshly minted, never cached
         if (kind === "join") {
-          if (!result.joinUrl) joinTab?.close();
-          else if (joinTab) joinTab.location.replace(result.joinUrl);
-          else if (window.ogb?.openExternal) void window.ogb.openExternal(result.joinUrl);
-          else window.open(result.joinUrl, "_blank", "noopener");
+          if (!result.joinUrl) throw new Error("The computer did not return a join link");
+          if (joinTab) joinTab.location.replace(result.joinUrl);
+          else if (window.ogb?.openExternal) {
+            const opened = await window.ogb.openExternal(result.joinUrl);
+            if (!opened) throw new Error("OpenMausBot could not open the computer join link");
+          } else if (!window.open(result.joinUrl, "_blank", "noopener")) {
+            throw new Error("Your browser blocked the computer join tab");
+          }
         }
         if (kind === "provision") {
           setBoxState(result.container ?? null);

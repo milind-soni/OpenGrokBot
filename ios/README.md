@@ -61,6 +61,7 @@ ios/
     ChatView.swift               transcript, approval cards, composer
     ComputerView.swift           opt-in live view of a bot's computer
     MarkdownText.swift           the supported Markdown presentation layer
+    PlatformBridge.swift         pasteboard, haptics, sound effects, and color helpers
     SettingsView.swift           status, and unpair
 ```
 
@@ -171,6 +172,15 @@ the host computer remain unreachable through the companion.
   drawn. Search covers the SQLite transcript store and opens the exact task,
   branch, and message; the roster's "+" creates the same basic bot the desktop
   endpoint creates, then opens it.
+- **Universal Multiplatform (iOS, iPadOS, Mac Catalyst).** Uses `NavigationSplitView`
+  with responsive sidebar roster and detail transcript pane on iPad and Mac Catalyst,
+  while maintaining the streamlined single-column `NavigationStack` on iPhone.
+- **Desktop & Hardware Keyboard Shortcuts.** Full keyboard navigation on Mac and
+  iPad Magic Keyboards: `Cmd+1`...`Cmd+9` (quick chat switching), `Cmd+K`/`Cmd+F` (search),
+  `Cmd+N` (new bot), `Cmd+,` (settings), `Cmd+Shift+T` (tasks), `Cmd+Shift+C` (live computer),
+  `Cmd+R` (refresh), `Cmd++`/`Cmd+-`/`Cmd+0` (UI zoom with floating HUD pill indicator).
+- **Haptic and Audio Feedback.** Subtle tactile and sound cues for sent messages,
+  streaming token arrival, and answered approvals (`SoundEffects`, `Haptics`).
 
 ## Not in this version
 

@@ -132,6 +132,33 @@ describe("ACP decodeConfig", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
     expect(GrokAgentDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
   });
+
+  it("does not advertise or accept local CUA in full-auto mode", async () => {
+    const fullAuto = await GrokAgentDriver.create({
+      instanceId: "grok-full-auto",
+      displayName: "Grok Full Auto",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: true },
+    });
+    expect(fullAuto.adapter.capabilities.localComputerMcp).toBe(false);
+    await expect(
+      fullAuto.adapter.sendTurn({
+        threadId: "t-full-auto-local",
+        text: "click",
+        integrations: {
+          localComputer: {
+            command: "/cua-driver",
+            args: ["mcp"],
+            env: {},
+            platform: "linux",
+            scope: "local-computer",
+          },
+        },
+      }),
+    ).rejects.toThrow(/interactive provider approvals/);
+    await fullAuto.dispose();
+  });
 });
 
 describe("ACP turns (fake CLI)", () => {
@@ -162,6 +189,8 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_DUMP;
     delete process.env.XAI_API_KEY;
     delete process.env.OPENCODE_API_KEY;
+    delete process.env.BOX_TOKEN;
+    delete process.env.OMB_TTS_KEY;
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
@@ -212,6 +241,10 @@ describe("ACP turns (fake CLI)", () => {
     process.env.FAKE_ACP_DUMP = dump;
     process.env.XAI_API_KEY = "xai-should-not-leak";
     process.env.OPENCODE_API_KEY = "opencode-should-not-leak";
+    // workspace credentials with no CLI consumer at all — held by the
+    // harness (env-injected at boot by the desktop shell), used in-process
+    process.env.BOX_TOKEN = "box-should-not-leak";
+    process.env.OMB_TTS_KEY = "tts-should-not-leak";
 
     await instance.adapter.sendTurn({ threadId: "t-hygiene", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -222,6 +255,8 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
     expect(seen.env.OPENCODE_API_KEY).toBeUndefined();
+    expect(seen.env.BOX_TOKEN).toBeUndefined();
+    expect(seen.env.OMB_TTS_KEY).toBeUndefined();
   });
 
   // ACP session/new accepts stdio MCP entries, so connected apps use the
@@ -330,15 +365,64 @@ describe("ACP turns (fake CLI)", () => {
     expect(recorder.events.some((e) => e.type === "session.started")).toBe(true);
   });
 
+  it("mounts local CUA only on an approval-capable ACP instance", async () => {
+    await create();
+    const dump = join(scratch, "local-dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-local",
+      text: "inspect",
+      integrations: {
+        localComputer: {
+          command: "/opt/cua driver/cua-driver",
+          args: ["mcp", "--embedded", "--socket", "/run/user/1000/driver.sock"],
+          env: { CUA_DRIVER_EMBEDDED: "1" },
+          platform: "linux",
+          generation: "generation-1",
+          scope: "local-computer",
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpServers).toContainEqual({
+      name: "computer",
+      command: "/opt/cua driver/cua-driver",
+      args: ["mcp", "--embedded", "--socket", "/run/user/1000/driver.sock"],
+      env: [{ name: "CUA_DRIVER_EMBEDDED", value: "1" }],
+    });
+    expect(instance.adapter.capabilities.localComputerMcp).toBe(true);
+  });
+
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
     await create(GrokAgentDriver, "permission");
-    await instance.adapter.sendTurn({ threadId: "t-perm", text: "go" });
+    await instance.adapter.sendTurn({
+      threadId: "t-perm",
+      text: "go",
+      integrations: {
+        localComputer: {
+          command: "/cua-driver",
+          args: ["mcp"],
+          env: {},
+          platform: "linux",
+          scope: "local-computer",
+        },
+      },
+    });
     const opened = await recorder.until((e) => e.type === "request.opened");
-    expect(opened).toMatchObject({ requestType: "permission", tool: "shell" });
+    expect(opened).toMatchObject({
+      requestType: "permission",
+      tool: "shell",
+      approvalScope: "local-computer",
+    });
 
     await instance.adapter.respondToRequest("t-perm", (opened as any).requestId, { behavior: "allow" });
     const resolved = await recorder.until((e) => e.type === "request.resolved");
-    expect(resolved).toMatchObject({ behavior: "allow", source: "user" });
+    expect(resolved).toMatchObject({
+      behavior: "allow",
+      source: "user",
+      approvalScope: "local-computer",
+    });
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: true });
   });
@@ -538,6 +622,25 @@ describe("ACP turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     expect(JSON.parse(readFileSync(without, "utf8")).argv).not.toContain("--reasoning-effort");
+  });
+
+  it("puts Grok -m after agent so ACP stdio binds the local slug", async () => {
+    const dump = join(scratch, "grok-argv-order.json");
+    await create(GrokAgentDriver);
+    process.env.FAKE_ACP_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-argv", text: "hi", model: "grok-4.5", effort: "high" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
+    const agent = argv.indexOf("agent");
+    const modelFlag = argv.indexOf("-m");
+    const stdio = argv.indexOf("stdio");
+    expect(agent).toBeGreaterThan(-1);
+    expect(modelFlag).toBeGreaterThan(agent);
+    expect(stdio).toBeGreaterThan(modelFlag);
+    expect(argv[modelFlag + 1]).toBe("grok-4.5");
+    expect(argv.indexOf("--reasoning-effort")).toBeGreaterThan(agent);
+    expect(argv.indexOf("--permission-mode")).toBeLessThan(agent);
   });
 });
 

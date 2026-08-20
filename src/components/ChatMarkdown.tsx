@@ -109,6 +109,48 @@ function CodeBlock({ code, lang, streaming }: { code: string; lang: string; stre
   );
 }
 
+// Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content
+// is usually a spoiler (answers, plot points, surprises), not a deletion —
+// hide it behind a tap-to-reveal chip instead of striking it through.
+// Display only: the stored markdown, exports, and the model's own context
+// all keep the raw ~~text~~.
+function Spoiler({ children }: { children?: ReactNode }) {
+  const [revealed, setRevealed] = useState(false);
+  if (!revealed) {
+    return (
+      <span className="relative mx-px inline-block rounded px-1 py-px">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none select-none bg-raised text-transparent [&_*]:!text-transparent [&_a]:!no-underline"
+        >
+          {children}
+        </span>
+        <button
+          type="button"
+          aria-label="Reveal spoiler"
+          title="Reveal spoiler"
+          onClick={() => setRevealed(true)}
+          className="absolute inset-0 rounded bg-raised/90"
+        />
+      </span>
+    );
+  }
+  return (
+    <span className="mx-px inline rounded px-1 py-px text-[13px] leading-relaxed text-ink underline decoration-dotted decoration-hairline underline-offset-2">
+      {children}
+      <button
+        type="button"
+        aria-label="Hide spoiler"
+        title="Hide spoiler"
+        onClick={() => setRevealed(false)}
+        className="ml-1 rounded px-0.5 text-[11px] text-ink-secondary hover:text-ink"
+      >
+        Hide
+      </button>
+    </span>
+  );
+}
+
 function ChatMarkdownComponent({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
@@ -197,6 +239,9 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
             return (
               <blockquote className="border-l-2 border-hairline pl-3 text-ink-secondary">{children}</blockquote>
             );
+          },
+          del({ children }: { children?: ReactNode }) {
+            return <Spoiler>{children}</Spoiler>;
           },
           hr() {
             return <hr className="border-hairline/40" />;

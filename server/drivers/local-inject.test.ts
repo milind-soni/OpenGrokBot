@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyDroidLocalAuthEnv, DroidAgentDriver, ensureDroidInjectModel } from "./acp/droid.ts";
-import { ensureGrokInjectSlug } from "./acp/grok.ts";
+import { ensureGrokInjectSlug, GrokAgentDriver } from "./acp/grok.ts";
 import { applyKimiLocalModelEnv, ensureKimiInjectAlias, KimiAgentDriver } from "./acp/kimi.ts";
 import { ensureOpenCodeInjectModel } from "./acp/opencode-go.ts";
 import { AntigravityDriver } from "./antigravity.ts";
@@ -243,6 +243,47 @@ describe("ensureGrokInjectSlug", () => {
     });
     const text = readFileSync(join(home, ".grok", "config.toml"), "utf8");
     expect(text).toContain(`api_key = "unsloth-secret"`);
+  });
+
+  it("puts the resolved oMLX slug after agent on the Grok child argv", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-grok-argv-"));
+    scratchDirs.push(home);
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    const dump = join(home, "dump.json");
+    const instance = await GrokAgentDriver.create({
+      instanceId: "grok-omlx-argv",
+      displayName: "Grok",
+      environment: { HOME: home, FAKE_ACP_DUMP: dump },
+      enabled: true,
+      config: { cli: FAKE_ACP, fullAuto: false },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({
+        threadId: "t-omlx",
+        text: "hi",
+        model: "omlx::GLM-5.2-fp8",
+      });
+      await recorder.until((e) => e.type === "turn.completed");
+      const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
+      const agent = argv.indexOf("agent");
+      const modelFlag = argv.indexOf("-m");
+      expect(agent).toBeGreaterThan(-1);
+      expect(modelFlag).toBeGreaterThan(agent);
+      expect(argv.indexOf("stdio")).toBeGreaterThan(modelFlag);
+      expect(argv[modelFlag + 1]).toBe("omlx-glm-5.2-fp8");
+      const configCalls = JSON.parse(readFileSync(`${dump}.config.json`, "utf8")) as Array<{
+        method: string;
+        params: { modelId?: string };
+      }>;
+      expect(configCalls).toContainEqual({
+        method: "session/set_model",
+        params: { sessionId: "fake-acp-session", modelId: "omlx-glm-5.2-fp8" },
+      });
+      expect(readFileSync(join(home, ".grok", "config.toml"), "utf8")).toContain(`model = "GLM-5.2-fp8"`);
+    } finally {
+      await instance.dispose();
+    }
   });
 });
 

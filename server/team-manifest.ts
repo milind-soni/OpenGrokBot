@@ -194,6 +194,69 @@ export function parseTeamManifest(value: TeamManifestInput): ParsedTeamManifest 
   return result;
 }
 
+/** What one imported member is allowed to become: persona only. */
+export interface ImportedMemberProfile {
+  name: string;
+  title: string;
+  description: string;
+  color: MausColor;
+  mascotExpression?: string;
+}
+
+const MAX_MEMBER_NAME = 100;
+
+/** Everything an untrusted manifest may seed into a brand-new bot — and
+ * nothing else.
+ *
+ * A team file can come from the remote catalog, a GitHub repo, or a file
+ * someone shared, so import is additive-only: a manifest is a persona
+ * description, never a grant, and never a handle on records the user
+ * already has. Two rules are enforced here, at the single point where a
+ * member becomes bot fields:
+ *
+ * 1. Allowlist, not blocklist. The returned object is built field by field
+ *    from the parsed member, so every privilege-bearing BotRecord field —
+ *    autoApprove, alwaysAllow, chiefOfStaff, approvePeerComms, composio,
+ *    computer, cloudBackend, cwd — is structurally absent, whatever the
+ *    file claimed. parseTeamManifest already drops unknown member keys;
+ *    this keeps the guarantee even if the schema grows a field later,
+ *    because nothing new can reach a bot record without someone
+ *    consciously widening this return type. The caller must still force
+ *    composio: false on the created record — that is the one privilege
+ *    where *absence* means allowed, so leaving it unset is not safe.
+ *
+ * 2. No name captures. Display names are identity wherever bots address
+ *    each other — @mention resolution in rooms, the Chief of Staff roster,
+ *    peer-approval prompts — so an imported member wearing an existing
+ *    bot's name could be mentioned, granted, or listed as if it were that
+ *    bot. A colliding name is therefore visibly numbered ("Scout" →
+ *    "Scout 2"), the same convention the name generator uses when its pool
+ *    runs out. Matching is case-insensitive because @mention matching is.
+ *    `takenNames` (lowercased) is mutated as names are claimed, so one
+ *    import batch also stays unique against itself; a suffixed name never
+ *    exceeds the member-name cap.
+ */
+export function importedMemberProfile(
+  member: TeamManifestMember,
+  takenNames: Set<string>,
+): ImportedMemberProfile {
+  const base = member.name.trim();
+  let name = base;
+  for (let n = 2; takenNames.has(name.toLowerCase()); n++) {
+    const tag = ` ${n}`;
+    name = `${base.slice(0, MAX_MEMBER_NAME - tag.length).trimEnd()}${tag}`;
+  }
+  takenNames.add(name.toLowerCase());
+  const profile: ImportedMemberProfile = {
+    name,
+    title: member.title,
+    description: member.description,
+    color: member.appearance.color,
+  };
+  if (member.appearance.mascotExpression) profile.mascotExpression = member.appearance.mascotExpression;
+  return profile;
+}
+
 function memberKey(name: string, index: number, used: Set<string>): string {
   const stem =
     name

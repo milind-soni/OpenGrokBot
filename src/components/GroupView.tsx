@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ChevronDown, Folder, FolderOpen, Pin } from "lucide-react";
+import { ArrowDown, ChevronDown, Folder, FolderOpen, Pin, PinOff, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -64,6 +64,28 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: st
   );
 }
 
+/** Pin toggle for one room message — one pin per room, patchGroup path. */
+function PinToggle({ group, message }: { group: Group; message: Message }) {
+  const { dispatch } = useStore();
+  const pinned = group.pinnedMessageId === message.id;
+  return (
+    <button
+      onClick={() =>
+        dispatch({
+          type: "patchGroup",
+          groupId: group.id,
+          patch: { pinnedMessageId: pinned ? "" : message.id },
+        })
+      }
+      aria-label={pinned ? "Unpin message" : "Pin message"}
+      className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+      title={pinned ? "Unpin this message" : "Pin this message to the top of the room"}
+    >
+      {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+    </button>
+  );
+}
+
 const Transcript = memo(function Transcript({
   group,
   members,
@@ -110,6 +132,7 @@ const Transcript = memo(function Transcript({
             <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
               <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
                 {user && <ReactionBar threadId={group.threadId} message={m} />}
+                <PinToggle group={group} message={m} />
                 <div
                   className={cn(
                     "max-w-[70%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
@@ -529,6 +552,37 @@ export function GroupView({ group }: { group: Group }) {
           </div>
         </div>
       )}
+
+      {/* Pinned message banner — resolves against the room's full transcript */}
+      {(() => {
+        const pinned = group.messages.find((m) => m.id === group.pinnedMessageId && m.kind === "text");
+        const text = pinned ? (pinned.text ?? "").replace(/\s+/g, " ").trim() : "";
+        if (!pinned || !text) return null;
+        const sender = pinned.role === "user" ? "You" : (pinned.from?.name ?? "A bot");
+        return (
+          <div className="mx-auto w-full max-w-[900px] px-5">
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
+              <Pin size={12} className="shrink-0 text-accent" />
+              <button
+                onClick={() => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: pinned.id })}
+                className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+                title="Jump to the pinned message"
+              >
+                <span className="shrink-0 text-[11.5px] font-medium text-accent">{sender}</span>
+                <span className="truncate text-[12.5px] text-ink-secondary">{text}</span>
+              </button>
+              <button
+                onClick={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
+                aria-label="Unpin message"
+                title="Unpin"
+                className="shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Transcript */}
       <div

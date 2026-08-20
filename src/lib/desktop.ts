@@ -20,11 +20,14 @@ const browserCapabilities: DesktopCapabilities = {
   localComputer: {
     available: false,
     support: "unsupported",
+    enabled: false,
+    status: "unavailable",
     reasonCode: "desktop-app-required",
   },
 };
 
 let cached: DesktopCapabilities | null = null;
+let cacheRevision = 0;
 
 export function browserDesktopCapabilities(): DesktopCapabilities {
   return browserCapabilities;
@@ -55,10 +58,22 @@ export function initialDesktopCapabilities(): DesktopCapabilities {
 export async function loadDesktopCapabilities(): Promise<DesktopCapabilities> {
   if (cached) return cached;
   if (!window.ogb?.getCapabilities) return browserCapabilities;
+  const revisionAtStart = cacheRevision;
+  let loaded: DesktopCapabilities;
   try {
-    cached = await window.ogb.getCapabilities();
+    loaded = await window.ogb.getCapabilities();
   } catch {
-    cached = browserCapabilities;
+    loaded = browserCapabilities;
   }
+  // An IPC push may deliver newer runtime readiness while the initial query is
+  // still pending. Never let that older response replace the pushed state.
+  if (cacheRevision !== revisionAtStart && cached) return cached;
+  cached = loaded;
   return cached;
+}
+
+export function cacheDesktopCapabilities(capabilities: DesktopCapabilities): DesktopCapabilities {
+  cacheRevision += 1;
+  cached = capabilities;
+  return capabilities;
 }

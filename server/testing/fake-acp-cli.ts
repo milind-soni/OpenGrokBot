@@ -55,31 +55,34 @@ const configOptions = () =>
       ]
     : null;
 const argv = process.argv.slice(2);
+const dumpEnv = Object.fromEntries(
+  [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SystemRoot",
+    "FAKE_ACP_MODE",
+    "FAKE_ACP_RPC_DUMP",
+    "TEST_POLICY",
+    "OPENCODE_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "XAI_API_KEY",
+    "BOX_TOKEN",
+    "OMB_TTS_KEY",
+    "FACTORY_API_KEY",
+    "UNSLOTH_STUDIO_AUTH_TOKEN",
+    "KIMI_MODEL_NAME",
+    "KIMI_MODEL_API_KEY",
+    "KIMI_MODEL_BASE_URL",
+    "KIMI_MODEL_PROVIDER_TYPE",
+    "KIMI_MODEL_DISPLAY_NAME",
+    "TEST_TURN_MODEL",
+  ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
+);
+const dumpState: Record<string, unknown> = { argv, env: dumpEnv };
 if (process.env.FAKE_ACP_DUMP) {
-  const dumpEnv = Object.fromEntries(
-    [
-      "PATH",
-      "HOME",
-      "USERPROFILE",
-      "SystemRoot",
-      "FAKE_ACP_MODE",
-      "FAKE_ACP_RPC_DUMP",
-      "TEST_POLICY",
-      "OPENCODE_API_KEY",
-      "OPENAI_API_KEY",
-      "OPENROUTER_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "XAI_API_KEY",
-      "FACTORY_API_KEY",
-      "UNSLOTH_STUDIO_AUTH_TOKEN",
-      "KIMI_MODEL_NAME",
-      "KIMI_MODEL_API_KEY",
-      "KIMI_MODEL_BASE_URL",
-      "KIMI_MODEL_PROVIDER_TYPE",
-      "KIMI_MODEL_DISPLAY_NAME",
-      "TEST_TURN_MODEL",
-    ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
-  );
   writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));
 }
 if (argv.includes("--version")) {
@@ -213,6 +216,10 @@ function handle(msg: any) {
         break;
       }
       const servers: McpEntry[] = Array.isArray(msg.params?.mcpServers) ? msg.params.mcpServers : [];
+      if (process.env.FAKE_ACP_DUMP) {
+        dumpState.mcpServers = servers;
+        writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+      }
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
       if (process.env.FAKE_ACP_DUMP) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));

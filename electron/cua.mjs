@@ -24,6 +24,11 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { createCuaConnectionStore } = require("./cua-connection.cjs");
+const {
+  createLinuxCuaRuntime,
+  createUnavailableLinuxRuntime,
+} = require("./cua-linux-runtime.cjs");
+const { cleanupAppImageCuaBundle, stageAppImageCuaBundle } = require("./cua-linux-bundle.cjs");
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -35,9 +40,48 @@ const CUA_ENV = { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" };
 process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED ??= "0";
 
 let embeddedHost = null; // EmbeddedCuaDriverHost | null
+let linuxRuntime = null;
+let linuxBundleStage = null;
+let stateListener = () => {};
 const connectionStore = createCuaConnectionStore({
   getUserData: () => app.getPath("userData"),
 });
+
+function ensureLinuxRuntime() {
+  if (!linuxRuntime) {
+    try {
+      let bundledDriverPath;
+      if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
+        bundledDriverPath = path.join(process.resourcesPath, "cua-linux-x64", "cua-driver");
+        // AppImage builders may normalize the read-only resource tree to 0755
+        // or 0775. Always copy only the pinned binaries to a fresh 0700
+        // process-owned directory and verify their hashes after the copy, so
+        // every AppImage follows the same execution invariant.
+        if (process.env.APPIMAGE) {
+          linuxBundleStage ??= stageAppImageCuaBundle({ resourcesPath: process.resourcesPath });
+          bundledDriverPath = linuxBundleStage.driverPath;
+        }
+      }
+      linuxRuntime = createLinuxCuaRuntime({
+        getUserData: () => app.getPath("userData"),
+        connectionStore,
+        bundledDriverPath,
+        onChange: (connection) => stateListener(connection),
+      });
+    } catch (error) {
+      console.error("[cua] Bundled Linux driver failed integrity validation:", error);
+      linuxRuntime = createUnavailableLinuxRuntime({
+        connectionStore,
+        onChange: (connection) => stateListener(connection),
+      });
+    }
+  }
+  return linuxRuntime;
+}
+
+export function setCuaStateListener(listener) {
+  stateListener = typeof listener === "function" ? listener : () => {};
+}
 
 export function resolveDriverBinary() {
   if (process.env.CUA_DRIVER_PATH) return process.env.CUA_DRIVER_PATH;
@@ -107,6 +151,7 @@ async function startEmbedded(binary) {
 }
 
 export async function startCua() {
+  if (process.platform === "linux") return ensureLinuxRuntime().initialize();
   const binary = resolveDriverBinary();
   if (!binary) {
     return connectionStore.persist({
@@ -164,6 +209,14 @@ export function cuaPermissionsStatus() {
 }
 
 export async function stopCua() {
+  if (linuxRuntime) {
+    await linuxRuntime.shutdown();
+    if (linuxBundleStage) {
+      cleanupAppImageCuaBundle(linuxBundleStage);
+      linuxBundleStage = null;
+    }
+    return;
+  }
   if (embeddedHost) {
     try {
       await embeddedHost.stop();
@@ -181,4 +234,42 @@ export async function stopCua() {
 export function registerCuaIpc() {
   ipcMain.handle("cua:connection", () => connectionStore.get());
   ipcMain.handle("cua:permissions", () => cuaPermissionsStatus());
+  ipcMain.handle("cua:linux-status", () =>
+    process.platform === "linux"
+      ? ensureLinuxRuntime().getStatus()
+      : { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" },
+  );
+  ipcMain.handle("cua:linux-enable", async () => {
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().enable();
+    } catch (error) {
+      console.error("[cua] Linux enable failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
+  ipcMain.handle("cua:linux-disable", async () => {
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().disable();
+    } catch (error) {
+      console.error("[cua] Linux disable failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
+  ipcMain.handle("cua:linux-retry", async () => {
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().retry();
+    } catch (error) {
+      console.error("[cua] Linux retry failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
 }

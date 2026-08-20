@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld("ogb", {
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
   platform: process.platform,
   getCapabilities: () => ipcRenderer.invoke("desktop:capabilities"),
+  onCapabilitiesChanged: (cb) => {
+    const handler = (_event, capabilities) => cb(capabilities);
+    ipcRenderer.on("desktop:capabilities-changed", handler);
+    return () => ipcRenderer.removeListener("desktop:capabilities-changed", handler);
+  },
   /** The companion sidecar: the one part of this app that listens off the
    * machine, so it runs as its own process and is off until switched on.
    * Every call answers with the whole state, so the panel never has to
@@ -18,6 +23,14 @@ contextBridge.exposeInMainWorld("ogb", {
     cloudDesktop: (deviceId, allowed) => ipcRenderer.invoke("companion:cloud-desktop", deviceId, allowed),
     revoke: (deviceId) => ipcRenderer.invoke("companion:revoke", deviceId),
   },
+  localControl: {
+    status: () => ipcRenderer.invoke("cua:linux-status"),
+    enable: () => ipcRenderer.invoke("cua:linux-enable"),
+    disable: () => ipcRenderer.invoke("cua:linux-disable"),
+    retry: () => ipcRenderer.invoke("cua:linux-retry"),
+  },
+  /** Arms exactly one display-media request from the current renderer frame. */
+  beginScreenPreviewIntent: () => ipcRenderer.sendSync("screen:preview-intent"),
   /** One frame of this computer's screen as a data: URL when supported. */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
   /** Physical USB Android devices. Network ADB is deliberately excluded. */

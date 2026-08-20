@@ -32,16 +32,24 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
 
     /// The representation `URLComponents.host` accepts for a literal IPv6
     /// address. It adds brackets exactly once and leaves DNS/IPv4 names alone.
-    /// A scope zone on a link-local address is intentionally retained;
+    /// A scope zone on a link-local IPv6 address is intentionally retained;
     /// URLComponents percent-encodes it when it builds the URL.
+    ///
+    /// An interface zone on anything *else* is dropped. `NWEndpoint.Host`
+    /// describes a resolved IPv4 address with the interface it arrived on
+    /// ("192.168.1.3%en0"); the zone carries no meaning there and
+    /// URLComponents refuses it as a host, which made a Bonjour-discovered
+    /// computer fail with "that address doesn't look right".
     public static func urlHost(_ host: String) -> String {
-        let bare: String
+        var bare: String
         if host.hasPrefix("["), host.hasSuffix("]") {
             bare = String(host.dropFirst().dropLast())
         } else {
             bare = host
         }
-        return bare.contains(":") ? "[\(bare)]" : bare
+        if bare.contains(":") { return "[\(bare)]" }
+        if let zone = bare.firstIndex(of: "%") { bare = String(bare[..<zone]) }
+        return bare
     }
 
     /// Parse a manually entered companion address. A bare IPv6 literal uses
@@ -402,6 +410,14 @@ public struct CompanionClient: Sendable {
     /// from one created on the desktop.
     public func createBot() async throws -> Bot {
         try await send(try makeRequest("POST", "/api/bots"), as: CreatedBot.self).bot
+    }
+
+    /// Make a room. The harness names it after the first member when `name`
+    /// is empty, exactly as the desktop's dialog does.
+    public func createRoom(name: String?, memberIds: [String]) async throws -> Room {
+        var body: [String: Any] = ["memberIds": memberIds]
+        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { body["name"] = name }
+        return try await send(try makeRequest("POST", "/api/groups", body: body), as: CreatedRoom.self).group
     }
 
     public func send(text: String, toBot botId: String) async throws {

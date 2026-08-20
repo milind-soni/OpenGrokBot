@@ -11,6 +11,7 @@
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
 
+import { stripWorkspaceCredentialEnv } from "../config.ts";
 import { computerProxyEnv } from "../container-computer.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
@@ -100,6 +101,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // The CLI owns its own ChatGPT login; a leaked API key silently flips
       // billing to pay-as-you-go (agentcal).
       delete env.OPENAI_API_KEY;
+      // The harness process may hold workspace credentials (xai/box/voice
+      // keys, env-injected at boot); none of them are this CLI's to see.
+      stripWorkspaceCredentialEnv(env);
       return env;
     };
     const catalogEnv = childEnv();
@@ -142,6 +146,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       if (turn.integrations?.composio) {
         mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
       }
+      if (turn.integrations?.agents) {
+        mountMcpServer(appServerArgs, env, "agents", turn.integrations.agents);
+      }
       if (turn.integrations?.computer) {
         const proxyEnv = computerProxyEnv(turn.integrations.computer);
         mountMcpServer(appServerArgs, env, "computer", {
@@ -151,6 +158,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ELECTRON_RUN_AS_NODE: "1",
             OGB_BOX_ID: proxyEnv.OGB_BOX_ID ?? "",
             OGB_BOX_TOKEN: proxyEnv.OGB_BOX_TOKEN ?? "",
+            // who-is-driving endpoint, so a person taking the wheel in the
+            // panel pauses this bot's hands mid-turn
+            OMB_CONTROL_URL: proxyEnv.OMB_CONTROL_URL ?? "",
+            OMB_CONTROL_TOKEN: proxyEnv.OMB_CONTROL_TOKEN ?? "",
           },
         });
       } else if (turn.integrations?.localComputer) {
@@ -532,6 +543,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           sessionModelSwitch: "unsupported",
           computerMcp: true,
           composioMcp: true,
+          agentsMcp: true,
           phoneMcp: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
         },

@@ -199,6 +199,8 @@ final class Session: ObservableObject {
         // purpose. Coming to the front is the moment worth retrying on: the
         // app is on screen, so the phone is in someone's hand and unlocked.
         if client == nil, restorePending { restore() }
+        // back before the grace period ran out: keep the stream, drop the task
+        endLinger()
         guard client != nil, streamTask == nil else { return }
         reconnectDelay = 0
         streamGeneration += 1
@@ -264,6 +266,33 @@ final class Session: ObservableObject {
     func disconnect() {
         streamTask?.cancel()
         streamTask = nil
+        endLinger()
+    }
+
+    private var lingerTask: UIBackgroundTaskIdentifier = .invalid
+
+    /// Leaving the screen: keep the stream alive for the grace period iOS
+    /// allows (~30 s) rather than cutting it at once, so an approval that
+    /// lands right after you swipe home still reaches the Live Activity and
+    /// the island. After that, iOS suspends us anyway; disconnect cleanly so
+    /// the cursor is written down at a known point.
+    func linger() {
+        guard streamTask != nil, lingerTask == .invalid else { disconnect(); return }
+        lingerTask = UIApplication.shared.beginBackgroundTask(withName: "companion.linger") { [weak self] in
+            // time is up before our own timer — the system wants us gone now
+            self?.disconnect()
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(25))
+            guard let self, self.lingerTask != .invalid else { return }
+            self.disconnect()
+        }
+    }
+
+    private func endLinger() {
+        guard lingerTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(lingerTask)
+        lingerTask = .invalid
     }
 
     private func run() async {
@@ -412,10 +441,16 @@ final class Session: ObservableObject {
 
     func answer(threadId: String, card: OptionCard, choice: String) async {
         guard let requestId = card.requestId else { return }
+        await answer(threadId: threadId, requestId: requestId, choice: choice, isPermission: card.isPermission)
+    }
+
+    /// The same answer, from something that only has the ids — the Live
+    /// Activity's buttons.
+    func answer(threadId: String, requestId: String, choice: String, isPermission: Bool) async {
         await perform {
             // Permission cards answer allow/deny; a question answers with
             // the chosen text. The harness tells them apart by `behavior`.
-            if card.isPermission {
+            if isPermission {
                 try await $0.respond(
                     threadId: threadId,
                     requestId: requestId,
@@ -449,6 +484,21 @@ final class Session: ObservableObject {
             let bot = try await client.createBot()
             state.apply(.bot(bot))
             return bot
+        } catch {
+            actionError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Make a room from the phone. Same shape as `createBot`: fold it in
+    /// rather than wait for a broadcast, and hand it back so it can be opened.
+    @discardableResult
+    func createRoom(name: String?, memberIds: [String]) async -> Room? {
+        guard let client else { return nil }
+        do {
+            let room = try await client.createRoom(name: name, memberIds: memberIds)
+            state.apply(.room(room))
+            return room
         } catch {
             actionError = error.localizedDescription
             return nil
@@ -766,7 +816,11 @@ extension CompanionState {
         guard let last else { return "" }
         switch last.kind {
         case .text: return last.text ?? ""
-        case .options: return last.card?.isPending == true ? "Waiting on you" : (last.card?.title ?? "")
+        // a pending card's question is the preview; the roster row already
+        // says "waiting on you" beside it
+        case .options:
+            guard let card = last.card else { return "" }
+            return card.isPending && !card.subtitle.isEmpty ? card.subtitle : card.title
         case .activity: return last.tool?.name ?? ""
         case .screen: return "Screenshot"
         case .unknown: return last.text ?? ""

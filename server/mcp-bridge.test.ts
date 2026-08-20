@@ -4,7 +4,12 @@
 // silence PLUS a failed liveness probe does, and traffic always vetoes.
 import { describe, expect, it, vi } from "vitest";
 
-import { createInactivityWatchdog, runLivenessProbe } from "./mcp-bridge.ts";
+import {
+  createGateInterceptor,
+  createInactivityWatchdog,
+  createLineSplitter,
+  runLivenessProbe,
+} from "./mcp-bridge.ts";
 
 /** a probe whose answers the test scripts one call at a time */
 function scriptedProbe(answers: boolean[]) {
@@ -120,5 +125,104 @@ describe("runLivenessProbe", () => {
     await expect(
       runLivenessProbe({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, 300),
     ).resolves.toBe(false);
+  });
+});
+
+describe("createLineSplitter", () => {
+  it("reassembles lines across arbitrary chunk boundaries", () => {
+    const lines: string[] = [];
+    const splitter = createLineSplitter((line) => lines.push(line));
+    splitter.push('{"a"');
+    splitter.push(':1}\n{"b":2}\n{"c"');
+    expect(lines).toEqual(['{"a":1}', '{"b":2}']);
+    splitter.flush();
+    expect(lines).toEqual(['{"a":1}', '{"b":2}', '{"c"']);
+  });
+
+  it("does not corrupt a UTF-8 character split between buffers", () => {
+    const lines: string[] = [];
+    const splitter = createLineSplitter((line) => lines.push(line));
+    const bytes = Buffer.from('{"text":"mouse 🐭"}\n');
+    const splitAt = bytes.indexOf(Buffer.from("🐭")) + 2;
+    splitter.push(bytes.subarray(0, splitAt));
+    splitter.push(bytes.subarray(splitAt));
+    splitter.flush();
+    expect(lines).toEqual(['{"text":"mouse 🐭"}']);
+  });
+});
+
+describe("createGateInterceptor", () => {
+  const frame = (method: string, id?: number) => JSON.stringify({ jsonrpc: "2.0", id, method, params: {} });
+  const drain = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function harness(isHeld: () => Promise<boolean>) {
+    const forwarded: string[] = [];
+    const refused: string[] = [];
+    const intercept = createGateInterceptor({
+      isHeld,
+      forward: (line) => forwarded.push(line),
+      refuse: (line) => refused.push(line),
+    });
+    return { forwarded, refused, intercept };
+  }
+
+  it("forwards everything untouched while nobody is driving", async () => {
+    const { forwarded, refused, intercept } = harness(async () => false);
+    for (const line of [frame("initialize", 1), frame("tools/list", 2), frame("tools/call", 3), "not json at all"]) {
+      intercept(line);
+    }
+    await drain();
+    expect(refused).toEqual([]);
+    expect(forwarded).toHaveLength(4);
+    // byte-for-byte: the transparent path must not re-serialize a frame
+    expect(forwarded[3]).toBe("not json at all");
+  });
+
+  it("refuses only tools/call while the person is driving", async () => {
+    const { forwarded, refused, intercept } = harness(async () => true);
+    intercept(frame("tools/list", 1));
+    intercept(frame("tools/call", 2));
+    await drain();
+    expect(forwarded).toEqual([frame("tools/list", 1)]);
+    expect(refused).toHaveLength(1);
+    const answer = JSON.parse(refused[0]!);
+    expect(answer.id).toBe(2);
+    expect(answer.result.isError).toBe(true);
+    expect(answer.result.content[0].text).toMatch(/taken control/i);
+  });
+
+  it("preserves protocol order even though the held-check is async", async () => {
+    const order: string[] = [];
+    let calls = 0;
+    let releaseFirst!: (held: boolean) => void;
+    const first = new Promise<boolean>((resolve) => (releaseFirst = resolve));
+    let drained!: () => void;
+    const allForwarded = new Promise<void>((resolve) => (drained = resolve));
+    const intercept = createGateInterceptor({
+      isHeld: () => (calls++ === 0 ? first : Promise.resolve(false)),
+      forward: (line) => {
+        const parsed = JSON.parse(line);
+        order.push(`fwd:${parsed.id ?? parsed.marker}`);
+        if (parsed.marker === "drained") drained();
+      },
+      refuse: (line) => order.push(`ref:${JSON.parse(line).id}`),
+    });
+    intercept(frame("tools/call", 1));
+    intercept(frame("tools/call", 2));
+    intercept(JSON.stringify({ marker: "drained" }));
+    expect(order).toEqual([]);
+    releaseFirst(false);
+    await allForwarded;
+    expect(order).toEqual(["fwd:1", "fwd:2", "fwd:drained"]);
+  });
+
+  it("fails open: a broken held-check forwards rather than wedging the computer", async () => {
+    const { forwarded, refused, intercept } = harness(async () => {
+      throw new Error("harness went away");
+    });
+    intercept(frame("tools/call", 1));
+    await drain();
+    expect(refused).toEqual([]);
+    expect(forwarded).toHaveLength(1);
   });
 });

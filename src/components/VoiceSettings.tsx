@@ -46,7 +46,10 @@ export function VoiceSettings() {
   const save = (patch: Record<string, unknown>) => {
     setSaving(true);
     setError(null);
-    return api("/api/config", { method: "PUT", body: JSON.stringify({ tts: patch }) })
+    const request = typeof patch.key === "string" && window.ogb?.setCredential
+      ? window.ogb.setCredential("ttsKey", patch.key)
+      : api("/api/config", { method: "PUT", body: JSON.stringify({ tts: patch }) });
+    return request
       .then((status: ConfigStatus) => {
         dispatch({ type: "configStatus", config: status });
         setKey("");

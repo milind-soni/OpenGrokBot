@@ -835,11 +835,19 @@ type ContainerMcpLaunch = {
   env: Record<string, string>;
 };
 
-export function containerComputerMcp(runtime: Runtime): ContainerMcpLaunch {
+export function containerComputerMcp(
+  runtime: Runtime,
+  control?: { url: string; token: string },
+): ContainerMcpLaunch {
   return {
     command: process.execPath,
     args: [containerMcpPath, runtime, CONTAINER, CUA_SOCKET],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    // The control pair rides in env, not argv — argv is world-readable
+    // through `ps` for the life of the bridge.
+    env: {
+      ELECTRON_RUN_AS_NODE: "1",
+      ...(control ? { OMB_CONTROL_URL: control.url, OMB_CONTROL_TOKEN: control.token } : {}),
+    },
   };
 }
 
@@ -897,7 +905,13 @@ export function setupCommands(
  * bypass it and mount Cua Driver's official MCP server through
  * containerComputerMcp(). */
 export function computerProxyEnv(
-  computer: { boxId?: string; token?: string },
+  computer: { boxId?: string; token?: string; control?: { url: string; token: string } },
 ): NodeJS.ProcessEnv {
-  return { OGB_BOX_ID: computer.boxId ?? "", OGB_BOX_TOKEN: computer.token ?? "" };
+  return {
+    OGB_BOX_ID: computer.boxId ?? "",
+    OGB_BOX_TOKEN: computer.token ?? "",
+    ...(computer.control
+      ? { OMB_CONTROL_URL: computer.control.url, OMB_CONTROL_TOKEN: computer.control.token }
+      : {}),
+  };
 }

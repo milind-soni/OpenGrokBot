@@ -57,8 +57,13 @@ ios/
     MausAvatar.swift             the mascot face, in the desktop's palette
     PairingView.swift            QR handoff, discovery, address and code fallback
     PairingScanner.swift         native QR camera, permission and recovery UI
-    ChatListView.swift           roster, with "waiting on you" pulled to the top
-    ChatView.swift               transcript, approval cards, composer
+    Glass.swift                  the one material the chrome is made of (Liquid Glass on 26+)
+    SpeechBubble.swift           the bubble shape; the tail is the reference vector, scaled
+    ChatListView.swift           roster: glass header, groups strip, bots, the Updates bar
+    Updates.swift                what the Updates pill shows — only bots doing something
+    UpdatesSheet.swift           the pill opened: needs you / working / to review
+    NewGroupSheet.swift          make a room from the phone
+    ChatView.swift               transcript, tailed bubbles, approval cards, composer
     ComputerView.swift           opt-in live view of a bot's computer
     MarkdownText.swift           the supported Markdown presentation layer
     SettingsView.swift           status, and unpair
@@ -115,7 +120,7 @@ here by simply not having the methods:
 | Allowed | Refused |
 |---|---|
 | Read bots, rooms and transcripts | Write API keys (`PUT /api/config`) |
-| Send messages | Manage pairing or revoke devices |
+| Send messages, make a bot or a room | Manage pairing or revoke devices |
 | **Answer approvals and questions** | Drive the Local VM or this computer |
 | Interrupt a bot, mark chats read | Reach `/api/internal/*` |
 | Fetch screen images on demand | Load the packaged desktop UI |

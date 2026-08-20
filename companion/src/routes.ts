@@ -74,7 +74,8 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // second, per-device capability check before it reaches the harness.
   CLOUD_DESKTOP_JOIN_ROUTE,
 
-  // rooms
+  // rooms — making one, and talking in one
+  { method: "POST", path: /^\/api\/groups$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/read$/ },
 

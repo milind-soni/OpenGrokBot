@@ -5,7 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,7 @@ import { openSse } from "./testing/sse.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
+const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const WEBHOOK_PORT = 39000 + Math.floor(Math.random() * 10_000);
@@ -27,6 +28,7 @@ let boxStub: Server;
 let boxStubPort = 0;
 let home: string;
 let staticDir: string;
+let fakeClaudeDump: string;
 let stderr = "";
 
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
@@ -51,6 +53,7 @@ const statusWithHeaders = (headers: Record<string, string>): Promise<number> =>
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
   staticDir = join(home, "static");
+  fakeClaudeDump = join(home, "fake-claude-dump.json");
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
   mkdirSync(join(staticDir, "assets"), { recursive: true });
@@ -58,7 +61,12 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body { color: white; }");
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
-    JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
+    JSON.stringify({
+      instances: {
+        ghost: { driver: "not-a-real-driver", displayName: "Ghost" },
+        claude: { driver: "claudeAgent", displayName: "Fixture Claude", config: { cli: FAKE_CLAUDE_CLI } },
+      },
+    }),
   );
   writeFileSync(
     join(home, ".openmausbot", "groups.json"),
@@ -75,6 +83,26 @@ beforeAll(async () => {
         dm: true,
       },
       {
+        id: "test-stranded-room",
+        threadId: "test-stranded-room-thread",
+        name: "Stranded room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 3,
+      },
+      {
+        id: "test-cancel-room",
+        threadId: "test-cancel-room-thread",
+        name: "Cancel room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 4,
+      },
+      {
         id: "test-pinned-room",
         threadId: "test-pinned-room-thread",
         name: "Pinned room",
@@ -86,6 +114,60 @@ beforeAll(async () => {
         pinnedCwd: null,
       },
     ]),
+  );
+
+  // A room transcript carrying an approval that outlived its turn: the card
+  // is durable, but busyBotId is in-memory only and never survives a restart.
+  writeFileSync(
+    join(home, ".openmausbot", "messages-test-stranded-room-thread.json"),
+    JSON.stringify({
+      activeLeafId: "stranded-card",
+      messages: [
+        {
+          id: "stranded-card",
+          at: 3,
+          parentId: null,
+          role: "bot",
+          kind: "options",
+          card: {
+            title: "Approval needed",
+            subtitle: "rm -rf /tmp/scratch",
+            options: ["Allow", "Deny"],
+            requestId: "stranded-request",
+            tool: "Bash",
+            allowKey: "Bash:rm",
+          },
+          from: { botId: "test-bot-a", name: "Test bot A", color: "purple" },
+        },
+      ],
+    }),
+  );
+
+  // A room holding an approval nobody has answered yet, so "Cancel turn"
+  // has something open to close.
+  writeFileSync(
+    join(home, ".openmausbot", "messages-test-cancel-room-thread.json"),
+    JSON.stringify({
+      activeLeafId: "cancel-card",
+      messages: [
+        {
+          id: "cancel-card",
+          at: 4,
+          parentId: null,
+          role: "bot",
+          kind: "options",
+          card: {
+            title: "Approval needed",
+            subtitle: "rm -rf /tmp/scratch",
+            options: ["Allow", "Deny"],
+            requestId: "cancel-request",
+            tool: "Bash",
+            allowKey: "Bash:rm",
+          },
+          from: { botId: "test-bot-a", name: "Test bot A", color: "purple" },
+        },
+      ],
+    }),
   );
 
   boxStub = createServer(async (req, res) => {
@@ -126,6 +208,8 @@ beforeAll(async () => {
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
+      FAKE_CLAUDE_MODE: "hang",
+      FAKE_CLAUDE_DUMP: fakeClaudeDump,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -240,14 +324,19 @@ describe("harness HTTP API", () => {
   it("describes the configured fleet, shadows included", async () => {
     const { status, body } = await api("GET", "/api/instances");
     expect(status).toBe(200);
-    expect(body.instances).toHaveLength(1);
-    expect(body.instances[0]).toMatchObject({
+    const ghost = body.instances.find((instance: { instanceId: string }) => instance.instanceId === "ghost");
+    expect(ghost).toMatchObject({
       instanceId: "ghost",
       driverKind: "not-a-real-driver",
       displayName: "Ghost",
       snapshot: { state: "unavailable" },
     });
-    expect(body.instances[0].snapshot.reason).toContain("not-a-real-driver");
+    expect(ghost.snapshot.reason).toContain("not-a-real-driver");
+    expect(body.instances).toContainEqual(expect.objectContaining({
+      instanceId: "claude",
+      driverKind: "claudeAgent",
+      displayName: "Fixture Claude",
+    }));
   });
 
   it("searches transcripts and exports a conversation", async () => {
@@ -280,6 +369,31 @@ describe("harness HTTP API", () => {
     expect(JSON.stringify(asJson.body)).not.toContain('"png"');
     expect((await api("GET", `/api/threads/${bot.threadId}/export?format=pdf`)).status).toBe(400);
     expect((await api("GET", "/api/threads/nope/export")).status).toBe(404);
+
+    // one pinned message per thread: pin, round-trip, replace, clear; the
+    // id is stored verbatim — resolution is the UI's job
+    const pin = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "msg-abc_123" });
+    expect(pin.status).toBe(200);
+    expect(pin.body.bot).toMatchObject({ pinnedMessageId: "msg-abc_123" });
+    const repin = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "msg-second" });
+    expect(repin.body.bot).toMatchObject({ pinnedMessageId: "msg-second" });
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: "not an id!" })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: 42 })).status).toBe(400);
+    const unpinned = await api("PATCH", `/api/bots/${bot.id}`, { pinnedMessageId: null });
+    expect(unpinned.status).toBe(200);
+    expect(unpinned.body.bot).not.toHaveProperty("pinnedMessageId");
+
+    const room = (await api("POST", "/api/groups", { name: "Pins", memberIds: [bot.id] })).body.group;
+    const roomPin = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "msg-room_1" });
+    expect(roomPin.status).toBe(200);
+    expect(roomPin.body.group).toMatchObject({ pinnedMessageId: "msg-room_1" });
+    const roomRepin = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "msg-room_2" });
+    expect(roomRepin.body.group).toMatchObject({ pinnedMessageId: "msg-room_2" });
+    expect((await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "not an id!" })).status).toBe(400);
+    expect((await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: 42 })).status).toBe(400);
+    const roomCleared = await api("PATCH", `/api/groups/${room.id}`, { pinnedMessageId: "" });
+    expect(roomCleared.status).toBe(200);
+    expect(roomCleared.body.group).not.toHaveProperty("pinnedMessageId");
 
     // deleted conversations drop out of search rather than 404ing it
     await api("DELETE", `/api/bots/${bot.id}`);
@@ -365,7 +479,11 @@ describe("harness HTTP API", () => {
       await stream.until((frame) => frame.kind === "hello");
       const imported = await api("POST", "/api/teams/import", exported.body);
       expect(imported.status).toBe(201);
-      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(visibleNames);
+      // the originals still exist, so every member arrives visibly numbered
+      // rather than wearing a name that already resolves to another bot
+      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(
+        visibleNames.map((name: string) => `${name} 2`),
+      );
       expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
       expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
       // imported bots arrive quiet and without reach: no seeded greeting
@@ -421,6 +539,134 @@ describe("harness HTTP API", () => {
       }
     } finally {
       stream.close();
+    }
+  });
+
+  it("team import is additive-only: smuggled grants, claimed ids, and re-imports never touch existing records", async () => {
+    // an armed bot: every privilege a malicious manifest could try to
+    // capture is switched ON here, so any write-through shows up as a diff
+    const trusted = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${trusted.id}`, {
+      name: "Mira",
+      title: "Project Lead",
+      autoApprove: true,
+      alwaysAllow: ["Bash:git"],
+      approvePeerComms: true,
+      chiefOfStaff: true,
+      composio: true,
+      computer: "off",
+    });
+    const groupsBefore = (await api("GET", "/api/bots")).body.groups.length;
+    const room = (await api("POST", "/api/groups", { memberIds: [trusted.id], name: "War Room" })).body.group;
+
+    const smuggled = {
+      format: "openmaus.team",
+      version: 2,
+      team: {
+        name: "Trap Team",
+        members: [
+          {
+            key: "mira",
+            name: "Mira",
+            title: "Impostor",
+            description: "claims to be the lead",
+            appearance: { color: "red" },
+            // none of these exist in the manifest format, but a hand-edited
+            // file can still claim them — and they must go nowhere
+            id: trusted.id,
+            threadId: trusted.threadId,
+            autoApprove: true,
+            alwaysAllow: ["Bash"],
+            chiefOfStaff: true,
+            approvePeerComms: false,
+            composio: true,
+            computer: "local",
+            cloudBackend: "vps",
+            cwd: "/",
+            hidden: false,
+          },
+        ],
+      },
+    };
+    const first = await api("POST", "/api/teams/import", smuggled);
+    expect(first.status).toBe(201);
+    expect(first.body.bots).toHaveLength(1);
+    const impostor = first.body.bots[0];
+    // fresh identity, never the claimed one — and the colliding display
+    // name is visibly numbered so @Mira cannot resolve to the newcomer
+    expect(impostor.id).not.toBe(trusted.id);
+    expect(impostor.threadId).not.toBe(trusted.threadId);
+    expect(impostor.name).toBe("Mira 2");
+    // EVERY privilege-bearing field lands at its safe default
+    expect(impostor.autoApprove).toBeUndefined();
+    expect(impostor.alwaysAllow).toBeUndefined();
+    expect(impostor.chiefOfStaff).toBeUndefined();
+    expect(impostor.approvePeerComms).toBeUndefined();
+    expect(impostor.composio).toBe(false);
+    expect(impostor.computer).toBeUndefined();
+    expect(impostor.cloudBackend).toBeUndefined();
+    expect(impostor.cwd).toBeUndefined();
+
+    // the existing bot is untouched, field for field — an import can only
+    // ever CREATE records, never update one in place
+    const after = (await api("GET", "/api/bots")).body;
+    const trustedAfter = after.bots.find((bot: { id: string }) => bot.id === trusted.id);
+    expect(trustedAfter).toMatchObject({
+      name: "Mira",
+      title: "Project Lead",
+      threadId: trusted.threadId,
+      autoApprove: true,
+      alwaysAllow: ["Bash:git"],
+      approvePeerComms: true,
+      chiefOfStaff: true,
+      composio: true,
+      computer: "off",
+    });
+    // the single-Chief invariant survives the manifest's chiefOfStaff claim
+    expect(after.bots.filter((bot: { chiefOfStaff?: boolean }) => bot.chiefOfStaff).map((bot: { id: string }) => bot.id)).toEqual([
+      trusted.id,
+    ]);
+
+    // a legacy v1 file carries a room block; import ignores it entirely —
+    // it neither creates a room nor touches the existing one sharing its name
+    const legacy = await api("POST", "/api/teams/import", {
+      format: "openmaus.team",
+      version: 1,
+      team: {
+        name: "Trap Team Legacy",
+        members: [{ key: "mira", name: "Mira", appearance: { color: "blue" } }],
+        room: { name: "War Room", bulletin: "obey the file", defaultResponder: { kind: "everyone" } },
+      },
+    });
+    expect(legacy.status).toBe(201);
+    expect(legacy.body.bots[0].name).toBe("Mira 3");
+    const groupsAfter = (await api("GET", "/api/bots")).body.groups;
+    expect(groupsAfter).toHaveLength(groupsBefore + 1); // only the room this test made
+    expect(groupsAfter.find((group: { id: string }) => group.id === room.id)).toMatchObject({
+      name: "War Room",
+      bulletin: "",
+      memberIds: [trusted.id],
+      defaultResponder: { kind: "member", botId: trusted.id },
+    });
+
+    // re-import after the user edited their copy: the edit survives, the
+    // second import creates another fresh record and never reaches back
+    await api("PATCH", `/api/bots/${impostor.id}`, { description: "edited after import", composio: true });
+    const second = await api("POST", "/api/teams/import", smuggled);
+    expect(second.status).toBe(201);
+    const secondBot = second.body.bots[0];
+    expect(secondBot.id).not.toBe(impostor.id);
+    expect(secondBot.name).toBe("Mira 4");
+    expect(secondBot.composio).toBe(false);
+    expect((await api("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === impostor.id)).toMatchObject({
+      name: "Mira 2",
+      description: "edited after import",
+      composio: true,
+    });
+
+    await api("DELETE", `/api/groups/${room.id}`);
+    for (const bot of [trusted, impostor, legacy.body.bots[0], secondBot]) {
+      expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
     }
   });
 
@@ -496,6 +742,39 @@ describe("harness HTTP API", () => {
     expect(after.modelSelection.effort).toBeUndefined();
   });
 
+  it("turns off bot Auto mode when local computer beta is selected", async () => {
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).body.bot.autoApprove).toBe(
+      true,
+    );
+    const local = await api("PATCH", `/api/bots/${bot.id}`, { computer: "local" });
+    expect(local.body.bot).toMatchObject({ computer: "local", autoApprove: false });
+    const rejected = await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toContain("local computer beta");
+
+    const cloud = await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud" });
+    expect(cloud.body.bot.computer).toBe("cloud");
+    const simultaneous = await api("PATCH", `/api/bots/${bot.id}`, {
+      computer: "local",
+      autoApprove: true,
+    });
+    expect(simultaneous.status).toBe(400);
+    expect(simultaneous.body.error).toContain("local computer beta");
+    await api("DELETE", `/api/bots/${bot.id}`);
+  });
+
+  it("offers an idempotent stop boundary for active local turns", async () => {
+    const unsupported = await api("POST", "/api/local-computer/interrupt");
+    expect(unsupported).toEqual({
+      status: 415,
+      body: { error: "content-type must be application/json" },
+    });
+    const stopped = await api("POST", "/api/local-computer/interrupt", {});
+    expect(stopped).toEqual({ status: 200, body: { ok: true } });
+  });
+
   it("persists an answered onboarding card", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
@@ -525,6 +804,47 @@ describe("harness HTTP API", () => {
     const reread = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
     expect(reread.messages.at(-1).tool).toMatchObject({ ok: false });
     expect(reread.messages.at(-1).tool.name).toContain("request is no longer open");
+  });
+
+  it("answers a room approval whose turn is already over instead of stranding the room", async () => {
+    // busyBotId lives in memory only, so a card that outlives its turn (or the
+    // process) has no speaker. The room must still be answerable: a pending
+    // approval takes over the composer, so a dead end locks the room for good.
+    const answered = await api("POST", "/api/threads/test-stranded-room-thread/respond", {
+      requestId: "stranded-request",
+      behavior: "allow",
+    });
+    expect(answered.status).toBe(200);
+    expect(answered.body).toEqual({ ok: true, outcome: "unavailable" });
+
+    const room = (await api("GET", "/api/bots")).body.groups.find(
+      (group: { id: string }) => group.id === "test-stranded-room",
+    );
+    const card = room.messages.find((message: { id: string }) => message.id === "stranded-card").card;
+    expect(card.dismissed).toBe(true);
+    expect(card.answered).toBe("unavailable");
+
+    // a room with nothing pending still reports that plainly
+    const nothing = await api("POST", "/api/threads/test-pinned-room-thread/respond", {
+      requestId: "never-existed",
+      behavior: "allow",
+    });
+    expect(nothing.status).toBe(404);
+  });
+
+  it("closes the approvals a cancelled turn can no longer answer", async () => {
+    // "Cancel turn" is a button ON the approval card, and a pending approval
+    // owns the composer. Stopping the turn without closing its card leaves the
+    // room blocked by a question whose asker is already gone.
+    const stopped = await api("POST", "/api/groups/test-cancel-room/interrupt");
+    expect(stopped.status).toBe(200);
+
+    const room = (await api("GET", "/api/bots")).body.groups.find(
+      (group: { id: string }) => group.id === "test-cancel-room",
+    );
+    const card = room.messages.find((message: { id: string }) => message.id === "cancel-card").card;
+    expect(card.dismissed).toBe(true);
+    expect(card.answered).toBe("unavailable");
   });
 
   it("rejects an empty message and explains an unavailable provider", async () => {
@@ -604,6 +924,77 @@ describe("harness HTTP API", () => {
     expect(nothing.status).toBe(400);
   });
 
+  it("validates and persists the global room turn timeout", async () => {
+    const before = await api("GET", "/api/config");
+    expect(before.status).toBe(200);
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 5 });
+
+    for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
+      const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.error).toContain("rooms.turnTimeoutMinutes");
+    }
+
+    const saved = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 20 } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    const after = await api("GET", "/api/config");
+    expect(after.body.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+  });
+
+  it("keeps an active turn alive when only the room timeout changes", async () => {
+    const created = await api("POST", "/api/bots", {});
+    const botId = created.body.bot.id;
+    const room = (await api("POST", "/api/groups", {
+      name: "Room timeout capture",
+      memberIds: [botId],
+    })).body.group;
+    try {
+      const selected = await api("PATCH", `/api/bots/${botId}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      });
+      expect(selected.status).toBe(200);
+
+      rmSync(fakeClaudeDump, { force: true });
+      const sent = await api("POST", `/api/groups/${room.id}/messages`, { text: "stay active" });
+      expect(sent.status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
+      const before = (await api("GET", "/api/bots")).body;
+      expect(before.bots.find((bot: { id: string }) => bot.id === botId)?.busy).toBe(true);
+      expect(before.groups.find((group: { id: string }) => group.id === room.id)?.busyBotId).toBe(botId);
+
+      const saved = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 20 } });
+      expect(saved.status).toBe(200);
+
+      const after = (await api("GET", "/api/bots")).body;
+      expect(after.bots.find((bot: { id: string }) => bot.id === botId)?.busy).toBe(true);
+      const activeRoom = after.groups.find((group: { id: string }) => group.id === room.id);
+      expect(activeRoom?.busyBotId).toBe(botId);
+      expect(activeRoom.messages.some((message: { tool?: { name?: string } }) =>
+        message.tool?.name?.includes("provider settings changed"),
+      )).toBe(false);
+    } finally {
+      await api("POST", `/api/groups/${room.id}/interrupt`);
+      await expect.poll(async () => {
+        const state = (await api("GET", "/api/bots")).body;
+        return {
+          botBusy: state.bots.find((bot: { id: string }) => bot.id === botId)?.busy,
+          roomBusyBotId: state.groups.find((group: { id: string }) => group.id === room.id)?.busyBotId,
+        };
+      }, { timeout: 5_000 }).toEqual({ botBusy: false, roomBusyBotId: null });
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${botId}`);
+      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+    }
+  });
+
   it("validates the non-secret VPS alias and keeps old bots on Box by default", async () => {
     const before = await api("GET", "/api/bots");
     const bot = before.body.bots[0];
@@ -633,14 +1024,23 @@ describe("harness HTTP API", () => {
     expect(rejected.status).toBe(400);
     expect(rejected.body.error).toMatch(/invalid project key/i);
 
-    const saved = await api("PUT", "/api/config?secretStorage=external", { composio: { apiKey: "ak_good" } });
+    const saved = await api("PUT", "/api/config?secretStorage=external", {
+      composio: { apiKey: "ak_good" },
+      opencodeGo: { apiKey: "opencode-external" },
+      profile: { name: "External Store" },
+    });
     expect(saved.status).toBe(200);
     expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
+    expect(saved.body.opencodeGo).toEqual({ configured: true });
+    expect(saved.body.profile).toEqual({ name: "External Store", email: "" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.composio).toMatchObject({ apiKey: "", sessionId: "trs_config_test" });
+    expect(disk.opencodeGo).toEqual({ apiKey: "" });
+    expect(disk.profile).toEqual({ name: "External Store" });
     expect(JSON.stringify(disk)).not.toContain("ak_good");
+    expect(JSON.stringify(disk)).not.toContain("opencode-external");
 
     // A later ordinary setting save reloads config; the in-process secure-env
     // override must keep Composio configured until the next app launch.
@@ -1194,5 +1594,60 @@ describe("instance CLI override API", () => {
     const overlapping = await api("PATCH", "/api/instances/ghost", { cli: "/tmp/ghost-overlap" });
     expect(overlapping.status).toBe(409);
     expect((await slowConfigWrite).status).toBe(200);
+  });
+});
+
+describe("computer control API (who is driving)", () => {
+  let botId = "";
+
+  beforeAll(async () => {
+    const created = await api("POST", "/api/bots", {});
+    botId = created.body.bot.id;
+  });
+
+  it("starts disengaged", async () => {
+    const res = await api("GET", `/api/bots/${botId}/computer/control`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ held: false, helpReason: null, heldSinceMs: null });
+  });
+
+  it("take → held, broadcast on the wire, release → disengaged", async () => {
+    const sse = await openSse(`${BASE}/api/events`);
+    try {
+      const took = await api("POST", `/api/bots/${botId}/computer/control`, { action: "take" });
+      expect(took.status).toBe(200);
+      expect(took.body.held).toBe(true);
+      const frame = await sse.until(
+        (f) => f.kind === "computer-control" && f.botId === botId && f.held === true,
+      );
+      expect(frame.helpReason).toBeNull();
+      const hydrated = await api("GET", "/api/bots");
+      expect(hydrated.body.computerControl[botId]).toEqual({ held: true, helpReason: null });
+      const released = await api("POST", `/api/bots/${botId}/computer/control`, { action: "release" });
+      expect(released.body.held).toBe(false);
+    } finally {
+      sse.close();
+    }
+  });
+
+  it("refuses an unknown action and an unknown bot", async () => {
+    const bad = await api("POST", `/api/bots/${botId}/computer/control`, { action: "hijack" });
+    expect(bad.status).toBe(400);
+    const ghost = await api("GET", "/api/bots/nope/computer/control");
+    expect(ghost.status).toBe(404);
+  });
+
+  it("refuses a form-shaped POST — control mutations are JSON-only", async () => {
+    const res = await fetch(`${BASE}/api/bots/${botId}/computer/control`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "action=take",
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("keeps the internal who-is-driving endpoint behind the boot token", async () => {
+    const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
+    expect(res.status).toBe(401);
   });
 });

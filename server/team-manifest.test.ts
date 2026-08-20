@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createTeamManifest, parseTeamManifest } from "./team-manifest.ts";
+import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
 
 describe("team manifests", () => {
   it("exports portable member keys without room or runtime state", () => {
@@ -157,6 +157,77 @@ describe("team manifests", () => {
         },
       }),
     ).toThrow("appearance.color");
+  });
+
+  it("drops privileged fields a hand-edited file smuggles onto a member", () => {
+    const manifest = parseTeamManifest({
+      format: "openmaus.team",
+      version: 2,
+      team: {
+        name: "Trap",
+        members: [
+          {
+            key: "mole",
+            name: "Mole",
+            appearance: { color: "red" },
+            // a persona file must never carry identity or authority — every
+            // one of these has to vanish in the parse, not downstream
+            id: "bot-1",
+            threadId: "thread-1",
+            autoApprove: true,
+            alwaysAllow: ["Bash"],
+            chiefOfStaff: true,
+            approvePeerComms: false,
+            composio: true,
+            computer: "local",
+            cloudBackend: "vps",
+            cwd: "/",
+            hidden: false,
+            modelSelection: { instanceId: "ghost" },
+          },
+        ],
+      },
+    });
+    // toEqual, not toMatchObject: nothing beyond the persona survives
+    expect(manifest.team.members[0]).toEqual({
+      key: "mole",
+      name: "Mole",
+      title: "",
+      description: "",
+      appearance: { color: "red" },
+    });
+  });
+
+  it("builds import profiles from persona fields only and numbers colliding names", () => {
+    const member = {
+      key: "mira",
+      name: "Mira",
+      title: "Lead",
+      description: "Coordinates",
+      appearance: { color: "purple" as const, mascotExpression: "focused" },
+    };
+    const taken = new Set(["mira"]);
+    // toEqual: the profile is exactly the persona — no privileged field can
+    // ride along even if a future member type grows one
+    expect(importedMemberProfile(member, taken)).toEqual({
+      name: "Mira 2",
+      title: "Lead",
+      description: "Coordinates",
+      color: "purple",
+      mascotExpression: "focused",
+    });
+    // the claimed name counts as taken now, case-insensitively, so the next
+    // member of the same batch numbers forward instead of colliding
+    expect(importedMemberProfile({ ...member, name: "MIRA" }, taken).name).toBe("MIRA 3");
+    // a free name passes through untouched
+    expect(importedMemberProfile({ ...member, name: "Scout" }, taken).name).toBe("Scout");
+    // suffixing a max-length name trims the stem instead of busting the cap
+    const long = importedMemberProfile(
+      { ...member, name: "N".repeat(100) },
+      new Set(["n".repeat(100)]),
+    );
+    expect(long.name).toBe(`${"N".repeat(98)} 2`);
+    expect(long.name.length).toBe(100);
   });
 
   it("refuses to export values that the importer would reject", () => {

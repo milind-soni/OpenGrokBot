@@ -1,7 +1,8 @@
 // Stall watchdog for dispatched turns.
 //
-// ask_bot has a 4-minute ceiling and room turns a 5-minute one, but the
-// main 1:1 path had none: a wedged CLI (hung network call, dead MCP child,
+// ask_bot has a 4-minute ceiling, while room turns have a separately
+// configurable absolute ceiling. The main 1:1 path had none: a wedged CLI
+// (hung network call, dead MCP child,
 // a provider that stops streaming without exiting) left its bot busy
 // forever — composer locked, screen poller running — until an interrupt or
 // an app restart. This watchdog watches ACTIVITY, not duration: a turn may

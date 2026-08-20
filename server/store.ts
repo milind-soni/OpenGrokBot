@@ -48,6 +48,8 @@ export interface OptionCardData {
   held?: string;
   /** the narrow grant "always allow" remembers, e.g. "Bash:git" */
   allowKey?: string;
+  /** Local actions never share remembered grants with cloud/tool approvals. */
+  approvalScope?: "local-computer";
 }
 
 export interface ConnectorCardData {
@@ -129,6 +131,9 @@ export interface GroupRecord {
    * turn that dispatches. null = each member's own default; absent = not
    * pinned yet. See pinGroupCwd for why it never moves. */
   pinnedCwd?: string | null;
+  /** the one message pinned to the top of this room's transcript. A pin id
+   * that no longer resolves (edited away, deleted) simply renders nothing. */
+  pinnedMessageId?: string;
 }
 
 /** One task = one conversation with its own context.
@@ -271,6 +276,9 @@ export interface BotRecord {
   rewound?: boolean;
   pinned?: boolean;
   hidden?: boolean;
+  /** the one message pinned to the top of this bot's active thread; a pin
+   * that no longer resolves (branch switched away, deleted) renders nothing */
+  pinnedMessageId?: string;
   /** The single workspace-wide coordinator. The store enforces that at
    * most one bot owns this role, even if an older/corrupt file says more. */
   chiefOfStaff?: boolean;

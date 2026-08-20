@@ -52,6 +52,19 @@ if (argv[0] === "auth" && argv[1] === "status") {
   );
 }
 
+// One-shot helper mode used by generateText. It does not use stdin or emit
+// the stream-json turn protocol.
+if (argAfter("--output-format") === "text") {
+  if (process.env.FAKE_CLAUDE_DUMP) {
+    writeFileSync(
+      process.env.FAKE_CLAUDE_DUMP,
+      JSON.stringify({ argv, env: process.env, prompt: argAfter("-p"), mcpConfig: null }, null, 2),
+    );
+  }
+  process.stdout.write("fake generated text\n");
+  process.exit(0);
+}
+
 let stdin = "";
 process.stdin.on("data", (c) => (stdin += c));
 process.stdin.on("end", () => {

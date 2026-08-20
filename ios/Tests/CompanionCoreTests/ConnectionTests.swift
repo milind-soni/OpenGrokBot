@@ -30,6 +30,18 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(connection?.baseURL?.absoluteString, "http://[fe80::1%25en0]:8810")
     }
 
+    func testDropsTheInterfaceScopeFromAResolvedIPv4Address() {
+        // NWEndpoint.Host prints a resolved IPv4 with the interface it came
+        // in on ("192.168.1.3%en0"). A zone means nothing for IPv4 and
+        // URLComponents refuses it as a host — which turned Bonjour discovery
+        // in the Simulator into "That address doesn't look right".
+        let discovered = Connection(name: "Mac", host: "192.168.1.3%en0", port: 8810)
+        XCTAssertEqual(discovered.host, "192.168.1.3")
+        XCTAssertEqual(discovered.baseURL?.absoluteString, "http://192.168.1.3:8810")
+        // an IPv6 zone is still kept — link-local needs it
+        XCTAssertEqual(Connection(name: "Mac", host: "fe80::1%en0", port: 8810).host, "[fe80::1%en0]")
+    }
+
     func testAnOlderSavedIPv6ConnectionIsNormalizedWhenUsed() throws {
         let data = Data(#"{"id":"saved","name":"Mac","host":"::1","port":8810}"#.utf8)
         let saved = try JSONDecoder().decode(Connection.self, from: data)

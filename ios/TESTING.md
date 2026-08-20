@@ -133,6 +133,23 @@ xcodebuild -project OpenMausCompanion.xcodeproj \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
+That command is a compile gate only. **To actually pair in the Simulator**,
+build with a team and local signing instead — without an
+`application-identifier` entitlement the Simulator's keychain refuses the
+device token with "A required entitlement isn't present", right after the
+code is accepted:
+
+```sh
+xcodebuild -project OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+  -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  DEVELOPMENT_TEAM=<your team id> CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual build
+```
+
+No provisioning profile is involved for the Simulator; the team id only
+makes Xcode emit the entitlement. Bonjour works from the Simulator (it
+shares the Mac's network), so **On this network** lists the Mac — tap it and
+type the code; there is no camera for the QR path.
+
 **Re-run `xcodegen generate` whenever a pull adds a file to `App/`.** The
 generated project lists source files explicitly, so a new one is missing from
 the target until you regenerate, and the build fails with `Cannot find 'X' in

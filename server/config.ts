@@ -13,6 +13,10 @@ import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schem
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
+export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 5;
+export const MIN_ROOM_TURN_TIMEOUT_MINUTES = 1;
+export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
+
 export function isValidSshAlias(value: unknown): value is string {
   return typeof value === "string" && SSH_ALIAS.test(value);
 }
@@ -36,6 +40,13 @@ const vpsConfigSchema = z.object({
     message: "must be a simple SSH config alias",
   }).optional(),
 });
+const roomConfigSchema = z.object({
+  turnTimeoutMinutes: z
+    .number()
+    .int()
+    .min(MIN_ROOM_TURN_TIMEOUT_MINUTES)
+    .max(MAX_ROOM_TURN_TIMEOUT_MINUTES),
+});
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
   displayName: optionalText,
@@ -58,6 +69,7 @@ const appConfigSchema = z.object({
   tts: z.object({ key: optionalText, voice: optionalText }).optional(),
   /** Non-secret profile details shown in the sidebar. */
   profile: z.object({ name: optionalText, email: optionalText }).optional(),
+  rooms: roomConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
@@ -72,6 +84,7 @@ export interface AppConfig {
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; voice?: string };
   profile?: { name?: string; email?: string };
+  rooms?: { turnTimeoutMinutes: number };
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
@@ -92,6 +105,10 @@ export function parseConfigPatch(value: JsonValue): ConfigPatch {
 
 export function vpsSshAlias(cfg: AppConfig): string | null {
   return isValidSshAlias(cfg.vps?.sshAlias) ? cfg.vps.sshAlias : null;
+}
+
+export function roomTurnTimeoutMinutes(cfg: AppConfig): number {
+  return cfg.rooms?.turnTimeoutMinutes ?? DEFAULT_ROOM_TURN_TIMEOUT_MINUTES;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -120,13 +137,65 @@ export function loadConfig(): AppConfig {
   } catch {
     /* first run — env fallbacks below */
   }
-  cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
+  // Env wins over the file for every credential. The desktop shell keeps
+  // these secrets OS-encrypted and hands them to this process as env at
+  // spawn, leaving config.json without the plaintext field — so the file
+  // value is the dev-mode (no desktop shell) fallback, not the primary.
+  // Anything that saves a credential mid-session must keep process.env in
+  // step (syncCredentialEnv below), or the value injected at boot would
+  // shadow the save until the next launch.
+  cfg.xai = { ...cfg.xai };
+  if (process.env.XAI_API_KEY !== undefined) cfg.xai.key = process.env.XAI_API_KEY;
   cfg.composio = { ...cfg.composio };
   if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
-  cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-  cfg.opencodeGo = { apiKey: process.env.OPENCODE_API_KEY, ...cfg.opencodeGo };
-  cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
+  cfg.box = { ...cfg.box };
+  if (process.env.BOX_TOKEN !== undefined) cfg.box.token = process.env.BOX_TOKEN;
+  cfg.opencodeGo = { ...cfg.opencodeGo };
+  if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
+  cfg.tts = { ...cfg.tts };
+  if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
   return cfg;
+}
+
+/** After saveConfig() writes a credential, the running process's env must
+ * follow the newest value — loadConfig() prefers env, so the secret injected
+ * at boot would otherwise shadow the save until relaunch: the UI would show
+ * "saved" while every turn still used the old key. An empty string means the
+ * user cleared the credential, so the var is dropped and the (now empty)
+ * file value is authoritative again. Fields absent from the patch are
+ * untouched. */
+export function syncCredentialEnv(patch: Partial<AppConfig>): void {
+  const secrets: Array<[value: string | undefined, name: string]> = [
+    [patch.xai?.key, "XAI_API_KEY"],
+    [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
+    [patch.box?.token, "BOX_TOKEN"],
+    [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
+    [patch.tts?.key, "OMB_TTS_KEY"],
+  ];
+  for (const [value, name] of secrets) {
+    if (value === undefined) continue;
+    if (value) process.env[name] = value;
+    else delete process.env[name];
+  }
+}
+
+/** Env names of every workspace credential this process may be holding —
+ * injected at boot by the desktop shell or exported by a developer. Spawned
+ * engine CLIs must never inherit them: the one driver that consumes a given
+ * secret receives it through instanceConfigs() narrowing, and to every other
+ * child these are someone else's keys riding along in `...process.env`. */
+export const WORKSPACE_CREDENTIAL_ENV = [
+  "XAI_API_KEY",
+  "BOX_TOKEN",
+  "OPENCODE_API_KEY",
+  "OMB_TTS_KEY",
+  "COMPOSIO_API_KEY",
+  "OMB_COMPOSIO_BROKER_TOKEN",
+] as const;
+
+/** Drop every workspace credential from a child-process env (in place). */
+export function stripWorkspaceCredentialEnv(env: Record<string, string | undefined>): void {
+  for (const key of WORKSPACE_CREDENTIAL_ENV) delete env[key];
 }
 
 /** Merge a partial config into ~/.openmausbot/config.json (secrets never
@@ -141,7 +210,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile", "rooms"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
@@ -169,17 +238,17 @@ export function saveConfig(patch: Partial<AppConfig>): void {
  * driver default). Creating the instance entry is fine — a config-less
  * entry rides driver.defaultConfig(). Returns false for unknown instances
  * when the fleet is explicitly configured. The returned map must stay
- * PERSISTABLE: instanceConfigs() injects credential env into every entry
- * for the live fleet, so those injected keys are stripped back out before
- * the map is returned — otherwise saving an override would copy xai/box/
- * opencodeGo secrets into the instances section of config.json. */
+ * PERSISTABLE: instanceConfigs() injects credential env into consuming
+ * drivers' entries for the live fleet, so those injected keys are stripped
+ * back out before the map is returned — otherwise saving an override would
+ * copy xai/box/opencodeGo secrets into the instances section of
+ * config.json. */
 export function withInstanceCli(
   cfg: AppConfig,
   instanceId: string,
   cli: string,
 ): InstanceCliUpdate {
   const next: AppConfig = structuredClone(cfg);
-  const injected = injectedEnvironment(next);
   const map = instanceConfigs(next);
   // hasOwn, not truthiness: map is a plain object literal, so
   // map["__proto__"] resolves to Object.prototype — truthy — and the
@@ -200,6 +269,7 @@ export function withInstanceCli(
   }
   for (const e of Object.values(map)) {
     if (!e.environment) continue;
+    const injected = injectedEnvironment(next, e.driver);
     for (const [k, v] of Object.entries(e.environment)) {
       if (injected.get(k) === v) delete e.environment[k];
     }
@@ -214,19 +284,26 @@ interface InstanceCliUpdate {
   config: AppConfig;
 }
 
-/** The credential env instanceConfigs() injects — same keys, same rule. */
-function injectedEnvironment(cfg: AppConfig): Map<string, string> {
+/** The credential env instanceConfigs() injects for one driver — shared with
+ * withInstanceCli() so the inject rule and the strip rule cannot drift apart.
+ * Each secret goes only to the driver that actually reads it: the API-key
+ * Grok driver reads XAI_API_KEY, the Computer driver reads BOX_TOKEN, and
+ * OpenCode Go reads OPENCODE_API_KEY. Every other engine brings its own
+ * login, so handing it a key it never uses would only put that key in the
+ * environment of an unrelated child process. */
+function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string> {
   const environment = new Map<string, string>();
-  if (cfg.xai?.key) environment.set("XAI_API_KEY", cfg.xai.key);
-  if (cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
-  if (cfg.opencodeGo?.apiKey) environment.set("OPENCODE_API_KEY", cfg.opencodeGo.apiKey);
+  if (driver === "grok" && cfg.xai?.key) environment.set("XAI_API_KEY", cfg.xai.key);
+  if (driver === "boxAgent" && cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
+  if (driver === "opencodeGo" && cfg.opencodeGo?.apiKey) environment.set("OPENCODE_API_KEY", cfg.opencodeGo.apiKey);
   return environment;
 }
 
 // Default fleet: one instance per built-in driver (upstream
 // defaultInstanceIdForDriver — instanceId defaults to the driver kind).
 // Config-file keys are injected as per-instance environment so drivers
-// see them without needing real process env vars.
+// see them without needing real process env vars — but only into the
+// driver that consumes each key (injectedEnvironment above).
 export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The default `grok` instance rides the `grokAgent` driver, not the API-key
   // one: like claude and codex it needs no credential from us, just the CLI
@@ -271,11 +348,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   }
   for (const entry of Object.values(map)) {
     const environment = { ...entry.environment };
-    if (cfg.xai?.key) environment.XAI_API_KEY = cfg.xai.key;
-    if (cfg.box?.token) environment.BOX_TOKEN = cfg.box.token;
-    if (entry.driver === "opencodeGo" && cfg.opencodeGo?.apiKey) {
-      environment.OPENCODE_API_KEY = cfg.opencodeGo.apiKey;
-    }
+    for (const [key, value] of injectedEnvironment(cfg, entry.driver)) environment[key] = value;
     entry.environment = environment;
   }
   return map;

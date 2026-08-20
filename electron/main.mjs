@@ -1,15 +1,23 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, safeStorage, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
+import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
 import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
+import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
-const { desktopCapabilities } = capabilitiesModule;
+const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
+const nativeActions = nativeDesktopActions(process.platform);
+const require = createRequire(import.meta.url);
+const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource } = require(
+  "./screen-preview.cjs",
+);
+const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -88,6 +96,31 @@ async function secureComposioConfig() {
     if (!changed) return;
     const temporary = `${configPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, configPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") slog(`credential migration failed: ${error?.message ?? error}`);
+  }
+}
+
+// The remaining workspace credentials (xai/box/voice/OpenCode Go keys) get
+// the same at-rest treatment as the Composio key above. New packaged-app
+// saves go straight through credential:set below; this boot-time sweep also
+// migrates plaintext left by older versions or direct development clients.
+// See workspace-credentials.mjs for the exact rules.
+async function secureWorkspaceConfig() {
+  const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  const configPath = path.join(dataDir, "config.json");
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const migrated = migrateWorkspaceCredentials(config, secureCredentials);
+    // credentials.bin first: if the OS store cannot take the secrets, the
+    // plaintext stays put and the next boot retries — losing the only copy
+    // is the one unacceptable outcome
+    if (migrated.credentialsChanged) await saveSecureCredentials(migrated.credentials);
+    secureCredentials = migrated.credentials;
+    if (!migrated.configChanged) return;
+    const temporary = `${configPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(migrated.config, null, 2), { mode: 0o600 });
     fs.renameSync(temporary, configPath);
   } catch (error) {
     if (error?.code !== "ENOENT") slog(`credential migration failed: ${error?.message ?? error}`);
@@ -186,6 +219,10 @@ async function startServerOn(port) {
       ...(secureCredentials.composioApiKey
         ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
         : {}),
+      // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
+      // the server prefers these over config.json, whose plaintext fields
+      // the boot migration has deleted
+      ...workspaceCredentialEnv(secureCredentials),
       ...(composioBrokerUrl() && secureCredentials.composioBrokerToken
         ? {
             OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
@@ -252,6 +289,26 @@ const ERROR_PAGE =
 
 let cuaReady = Promise.resolve({ mode: "unavailable", reason: "not-started" });
 const androidDevice = createAndroidDeviceController({ resourcesPath: process.resourcesPath });
+const displayMediaGuard = createDisplayMediaGuard();
+let displayMediaRequestCount = 0;
+
+function rendererOrigin() {
+  return new URL(app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : DEV_URL).origin;
+}
+
+function respondToDisplayMediaRequest(callback, response) {
+  const error = invokeDisplayMediaCallback(callback, response);
+  // An empty response intentionally rejects the renderer request, and Electron
+  // can surface that rejection by throwing from the callback. A selected
+  // source should never fail delivery, so keep that path visible in logs.
+  if (error && response.video) {
+    console.error("[screen-preview] failed to deliver selected source:", error);
+  }
+}
+
+ipcMain.on("screen:preview-intent", (event) => {
+  event.returnValue = displayMediaGuard.begin(event.senderFrame);
+});
 
 function createWindow() {
   const isMac = process.platform === "darwin";
@@ -297,7 +354,22 @@ function createWindow() {
         const result = await win.webContents.executeJavaScript(`
           (async () => {
             if (!window.ogb?.getCapabilities) throw new Error("desktop preload bridge is unavailable");
-            const [capabilities, healthResponse] = await Promise.all([
+            let crashPromise = null;
+            if (${JSON.stringify(process.env.OMB_SMOKE_CUA === "1")}) {
+              crashPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  unsubscribe?.();
+                  reject(new Error("timed out waiting for CUA crash invalidation"));
+                }, 10000);
+                const unsubscribe = window.ogb.onCapabilitiesChanged((next) => {
+                  if (next.localComputer.reasonCode !== "daemon-exited") return;
+                  clearTimeout(timeout);
+                  unsubscribe();
+                  resolve(next.localComputer.reasonCode);
+                });
+              });
+            }
+            const [initialCapabilities, healthResponse] = await Promise.all([
               window.ogb.getCapabilities(),
               fetch("/api/health"),
             ]);
@@ -305,7 +377,26 @@ function createWindow() {
               throw new Error(\`health request failed: \${healthResponse.status} \${healthResponse.statusText}\`);
             }
             const health = await healthResponse.json();
-            return { capabilities, health, location: window.location.href, title: document.title };
+            let capabilities = initialCapabilities;
+            let cuaCrashReason = null;
+            let cuaRetryStatus = null;
+            if (crashPromise) {
+              if (!initialCapabilities.localComputer.available) {
+                throw new Error("CUA was not ready before the simulated crash");
+              }
+              cuaCrashReason = await crashPromise;
+              cuaRetryStatus = await window.ogb.localControl.retry();
+              capabilities = await window.ogb.getCapabilities();
+            }
+            return {
+              initialCapabilities,
+              capabilities,
+              cuaCrashReason,
+              cuaRetryStatus,
+              health,
+              location: window.location.href,
+              title: document.title,
+            };
           })()
         `);
         const expectedLocation = `http://127.0.0.1:${SERVER_PORT}/`;
@@ -314,11 +405,44 @@ function createWindow() {
             `unexpected packaged renderer URL: ${result.location} (expected ${expectedLocation})`,
           );
         }
+        if (process.env.OMB_SMOKE_BUNDLED_CUA === "1") {
+          const connection = await cuaReady;
+          const expectedDriver = path.join(
+            process.resourcesPath,
+            "cua-linux-x64",
+            "cua-driver",
+          );
+          let exactBundledPath = false;
+          try {
+            exactBundledPath =
+              Boolean(connection?.driver?.path) &&
+              fs.realpathSync(connection.driver.path) === fs.realpathSync(expectedDriver);
+          } catch {}
+          result.cuaRuntime = {
+            driverSource: connection?.driver?.source,
+            exactBundledPath,
+            appImagePrivateStage:
+              Boolean(process.env.APPIMAGE) &&
+              connection?.driver?.path !== expectedDriver &&
+              path.basename(path.dirname(connection?.driver?.path ?? "")).startsWith(
+                APPIMAGE_CUA_STAGE_PREFIX,
+              ),
+            driverPath: connection?.driver?.path,
+            driverVersion: connection?.driver?.version,
+            daemonPid: connection?.daemon?.pid,
+            socketPath: connection?.daemon?.socketPath,
+            pidFile: connection?.daemon?.socketPath
+              ? path.join(path.dirname(connection.daemon.socketPath), "driver.pid")
+              : undefined,
+            mcpEnv: connection?.mcp?.env,
+          };
+        }
+        result.displayMediaRequests = displayMediaRequestCount;
         console.log(`[smoke] renderer-ready ${JSON.stringify(result)}`);
       } catch (error) {
         console.error(`[smoke] renderer-failed ${error?.stack ?? error}`);
       } finally {
-        win.close();
+        if (process.env.OMB_SMOKE_KEEP_OPEN !== "1") win.close();
       }
     });
   }
@@ -331,7 +455,7 @@ function createWindow() {
   return win;
 }
 
-// "This Mac" screen preview — served from the main process so the Screen
+// Local-control screen preview — served from the main process so the Screen
 // Recording permission prompt attributes to the app, never the server
 ipcMain.handle("screen:frame", async () => {
   if (process.platform !== "darwin") return null;
@@ -398,12 +522,12 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
 
 ipcMain.handle("perm:status", () => ({
   mic:
-    process.platform === "darwin"
+    nativeActions.appleMediaPermissions
       ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown"
       : "unsupported",
 }));
 ipcMain.handle("perm:request-mic", async () => {
-  if (process.platform !== "darwin") return false;
+  if (!nativeActions.appleMediaPermissions) return false;
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch {
@@ -414,7 +538,7 @@ ipcMain.handle("perm:request-mic", async () => {
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  if (process.platform !== "darwin") return false;
+  if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
     screen: "Privacy_ScreenCapture",
@@ -429,17 +553,17 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
 ipcMain.handle("speech:start", (event, options) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return;
-  if (process.platform !== "darwin") {
+  if (!nativeActions.appleSpeech) {
     win.webContents.send("speech:end", { code: 2, reason: "unsupported-platform" });
     return;
   }
   startSpeech(win, options);
 });
 ipcMain.handle("speech:stop", () => {
-  if (process.platform === "darwin") stopSpeech();
+  if (nativeActions.appleSpeech) stopSpeech();
 });
 ipcMain.handle("speech:finish", () => {
-  if (process.platform === "darwin") finishSpeech();
+  if (nativeActions.appleSpeech) finishSpeech();
 });
 
 // ── companion sidecar ──────────────────────────────────────────────────
@@ -478,30 +602,73 @@ ipcMain.handle("desktop:capabilities", async () =>
   }),
 );
 
+const CREDENTIAL_PATCH = {
+  composioApiKey: (value) => ({ composio: { apiKey: value } }),
+  xaiApiKey: (value) => ({ xai: { key: value } }),
+  boxToken: (value) => ({ box: { token: value } }),
+  opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
+  ttsKey: (value) => ({ tts: { key: value } }),
+};
+
 ipcMain.handle("credential:set", async (_event, name, value) => {
-  if (name !== "composioApiKey" || typeof value !== "string") {
+  const patchFor = CREDENTIAL_PATCH[name];
+  if (!patchFor || typeof value !== "string") {
     throw new Error("Unsupported credential");
   }
   if (app.isPackaged && !(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error("The operating-system credential store is unavailable");
   }
-  // In development the server is a separately launched process, so it cannot
-  // receive credentials from Electron at boot. Keep its established local
-  // config path there; production always uses the encrypted external store.
-  const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
-  const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ composio: { apiKey: value.trim() } }),
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
+  const secret = value.trim();
+  const previousCredentials = secureCredentials;
   if (app.isPackaged) {
-    if (value.trim()) secureCredentials.composioApiKey = value.trim();
-    else delete secureCredentials.composioApiKey;
-    await saveSecureCredentials(secureCredentials);
+    const nextCredentials = { ...secureCredentials };
+    if (secret) nextCredentials[name] = secret;
+    else delete nextCredentials[name];
+    // Commit the encrypted value before the server makes it live. If
+    // validation or reload fails below, restore the previous store so the
+    // next launch cannot disagree with the response the user saw.
+    await saveSecureCredentials(nextCredentials);
+    secureCredentials = nextCredentials;
   }
-  return body;
+  try {
+    // In development the server is a separately launched process, so it
+    // cannot receive credentials from Electron at boot. Keep its established
+    // local config path there; production always uses the encrypted store.
+    const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
+    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patchFor(secret)),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || `Could not save credential (HTTP ${response.status})`);
+    return body;
+  } catch (error) {
+    if (app.isPackaged) {
+      await saveSecureCredentials(previousCredentials);
+      secureCredentials = previousCredentials;
+    }
+    throw error;
+  }
+});
+
+async function broadcastDesktopCapabilities() {
+  const capabilities = desktopCapabilities({
+    platform: process.platform,
+    env: process.env,
+    packaged: app.isPackaged,
+    localConnection: await cuaReady,
+  });
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send("desktop:capabilities-changed", capabilities);
+  }
+}
+
+setCuaStateListener((connection) => {
+  cuaReady = Promise.resolve(connection);
+  void broadcastDesktopCapabilities().catch((error) => {
+    console.error("[desktop] capability broadcast failed:", error);
+  });
 });
 
 app.whenReady().then(async () => {
@@ -509,19 +676,56 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     secureCredentials = await loadSecureCredentials();
     await secureComposioConfig();
+    await secureWorkspaceConfig();
     await ensureManagedComposioCredentials();
   }
-  // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
-  // inside the app's own processes — the one capture path macOS reliably
-  // attributes to the app (registers it in the Screen Recording pane and
-  // prompts). Used by the onboarding "Enable screen preview" button.
-  if (process.platform === "darwin") {
+  // Display capture remains user-initiated. The renderer first sends a
+  // short-lived one-shot intent, then calls getDisplayMedia in the same click.
+  // The handler binds that request to the same frame/origin, rejects audio,
+  // and requires Electron's active user-gesture signal.
+  if (process.platform === "darwin" || process.platform === "linux") {
     session.defaultSession.setDisplayMediaRequestHandler(
-      (_request, callback) => {
+      (request, callback) => {
+        displayMediaRequestCount += 1;
+        if (!displayMediaGuard.consume(request, rendererOrigin())) {
+          respondToDisplayMediaRequest(callback, {});
+          return;
+        }
+
+        const capabilities = desktopCapabilities({
+          platform: process.platform,
+          env: process.env,
+          packaged: app.isPackaged,
+        });
+        const captureHost =
+          process.platform === "darwin" ? "darwin" : capabilities.host.session;
+        if (!capabilities.screenPreview.available) {
+          respondToDisplayMediaRequest(callback, {});
+          return;
+        }
+
         desktopCapturer
-          .getSources({ types: ["screen"] })
-          .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
-          .catch(() => callback({}));
+          .getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } })
+          .then((sources) => {
+            const source = selectCaptureSource({
+              sources,
+              host: captureHost,
+              primaryDisplayId:
+                process.platform === "linux" && captureHost === "x11"
+                  ? screen.getPrimaryDisplay().id
+                  : null,
+            });
+            if (!source) {
+              console.warn(
+                `[screen-preview] rejected ${captureHost} source set (${sources.length} candidates)`,
+              );
+            }
+            respondToDisplayMediaRequest(callback, source ? { video: source } : {});
+          })
+          .catch((error) => {
+            console.warn("[screen-preview] source discovery failed:", error);
+            respondToDisplayMediaRequest(callback, {});
+          });
       },
       { useSystemPicker: false },
     );
@@ -533,7 +737,7 @@ app.whenReady().then(async () => {
   // connection descriptor on first render. Never blocks window creation on
   // failure — computer use degrades to "unavailable", the rest still works.
   cuaReady =
-    process.platform === "darwin"
+    process.platform === "darwin" || process.platform === "linux"
       ? startCua().catch((e) => {
           console.error("[cua] start failed:", e);
           return { mode: "unavailable", reason: String(e) };
@@ -577,7 +781,7 @@ app.on("before-quit", (e) => {
   void stopCompanion();
   // a live dictation session runs its own helper child that holds the mic —
   // stop it here so quitting never orphans a recording process
-  stopSpeech();
+  if (nativeActions.appleSpeech) stopSpeech();
   const cleanup = Promise.race([
     stopCua().catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, CUA_STOP_TIMEOUT_MS).unref()),

@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest";
 
-import { initialState, reducer, type Bot, type Message } from "./store";
+import { configStatusFromFrame, initialState, reducer, type Bot, type Message } from "./store";
+
+describe("config status frames", () => {
+  it("keeps the room turn timeout with the existing config fields", () => {
+    expect(
+      configStatusFromFrame({
+        xai: { configured: true },
+        composio: { configured: true, mode: "managed" },
+        box: { configured: false },
+        vps: { configured: true, sshAlias: "homelab" },
+        rooms: { turnTimeoutMinutes: 20 },
+        opencodeGo: { configured: true },
+        tts: { configured: true, ready: true, voice: "Ada" },
+        profile: { name: "Ian", email: "ian@example.test" },
+      }),
+    ).toEqual({
+      xai: { configured: true },
+      composio: { configured: true, mode: "managed" },
+      box: { configured: false },
+      vps: { configured: true, sshAlias: "homelab" },
+      rooms: { turnTimeoutMinutes: 20 },
+      opencodeGo: { configured: true },
+      tts: { configured: true, ready: true, voice: "Ada" },
+      profile: { name: "Ian", email: "ian@example.test" },
+    });
+  });
+});
 
 describe("cross-client bot creation", () => {
   it("adds an announced bot before its greeting frames arrive", () => {

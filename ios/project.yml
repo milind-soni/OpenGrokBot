@@ -24,16 +24,18 @@ targets:
     platform: iOS
     sources:
       - path: App
+      - path: Shared
     dependencies:
       - package: CompanionCore
         product: CompanionCore
+      - target: OpenMausCompanionWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openmausbot.companion
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         # The catalog lives in App/, which is already a source path. Generated
         # by `node scripts/make-app-icon.mjs` from the same mascot the app
         # draws, so the icon cannot drift from the thing it depicts.
@@ -49,6 +51,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
+        # The bot's Live Activity — its face and ask in the Dynamic Island
+        # and on the lock screen.
+        NSSupportsLiveActivities: true
         CFBundleURLTypes:
           - CFBundleURLName: com.openmausbot.companion.pairing
             CFBundleURLSchemes:
@@ -95,3 +100,30 @@ targets:
             ts.net:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
+
+  # The Live Activity lives in a widget extension. It shares the mascot's
+  # drawing and data with the app, and the activity contract in Shared/.
+  OpenMausCompanionWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+      - path: App/MausAvatar.swift
+      - path: App/MausFaceData.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openmausbot.companion.widgets
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: true
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: OpenMausMobile
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

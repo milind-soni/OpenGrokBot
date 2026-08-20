@@ -2,6 +2,15 @@
 // (container-mcp.ts for the Local VM, vps-container-mcp.ts for the BYO VPS).
 // It defines no tools and parses no MCP messages: bytes in, bytes out.
 //
+// The single exception to that transparency is the who-is-driving gate
+// (opt-in via `gate`). While the person holds control of this computer in
+// the app, a `tools/call` from the agent is answered with a refusal HERE,
+// on the near side, and never forwarded — Cua Driver on the far side has
+// no concept of a person holding the wheel, so the refusal cannot come
+// from anywhere else. Everything that is not a tools/call still passes
+// through untouched, and with no gate configured the bridge remains the
+// byte-for-byte pipe described above.
+//
 // Two behaviors live here so neither entry point can drift:
 //   1. Exit without truncation. `process.exit()` in a close/error handler
 //      discards whatever is still buffered on stdout — a final MCP result
@@ -12,7 +21,9 @@
 //      VPS dropping mid-turn leaves the exec silently wedged until the OS
 //      gives up — the harness sees a hung tool call, not an error.
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
+import { CONTROL_REFUSAL_PLAIN, createControlClient } from "./control-client.ts";
 import { augmentedPath } from "./env-path.ts";
 
 // 45s of TOTAL silence before the bridge even probes. An MCP session is
@@ -119,6 +130,79 @@ export interface BridgeOptions {
   /** Enables the dead-transport watchdog. Omitted for the Local VM, whose
    * runtime CLI talks to a local daemon and fails fast on its own. */
   liveness?: BridgeLiveness;
+  /** Enables the who-is-driving gate: the harness's loopback control
+   * endpoint plus its per-boot token. Absent → fully transparent bridge. */
+  gate?: { url: string; token: string };
+}
+
+/** Collect a byte stream into complete newline-terminated lines. MCP's
+ * stdio transport is one JSON-RPC frame per line, so line boundaries are
+ * the only safe place to inspect — or inject — anything. */
+export function createLineSplitter(onLine: (line: string) => void): {
+  push: (chunk: Buffer | string) => void;
+  flush: () => void;
+} {
+  let pending = "";
+  const decoder = new StringDecoder("utf8");
+  return {
+    push(chunk) {
+      pending += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        onLine(line);
+      }
+    },
+    flush() {
+      pending += decoder.end();
+      if (pending) onLine(pending);
+      pending = "";
+    },
+  };
+}
+
+/** The gate itself, factored free of process wiring so a test can drive it
+ * with plain strings. Frames are handled on a serialized queue: the
+ * held-check is async, and answering frame N+1 before frame N would
+ * reorder the agent's protocol stream. Only a `tools/call` is ever
+ * refused; every other frame — handshakes, tools/list, notifications,
+ * lines that are not JSON — passes through untouched. */
+export function createGateInterceptor(options: {
+  isHeld: () => Promise<boolean>;
+  forward: (line: string) => void;
+  refuse: (line: string) => void;
+  refusalText?: string;
+}): (line: string) => void {
+  const refusalText = options.refusalText ?? CONTROL_REFUSAL_PLAIN;
+  let queue: Promise<void> = Promise.resolve();
+  return (line: string) => {
+    queue = queue.then(async () => {
+      let frame: any = null;
+      try {
+        frame = JSON.parse(line);
+      } catch {
+        // not a frame this gate understands — never stand between the
+        // agent and its driver on anything but a recognized tool call
+      }
+      if (!frame || frame.method !== "tools/call") {
+        options.forward(line);
+        return;
+      }
+      const held = await options.isHeld().catch(() => false);
+      if (!held) {
+        options.forward(line);
+        return;
+      }
+      options.refuse(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: frame.id ?? null,
+          result: { content: [{ type: "text", text: refusalText }], isError: true },
+        }),
+      );
+    });
+  };
 }
 
 export function runMcpBridge(options: BridgeOptions): void {
@@ -130,14 +214,42 @@ export function runMcpBridge(options: BridgeOptions): void {
 
   // docker may exit before it drains stdin; pipe() leaves this error unhandled.
   child.stdin.on("error", () => {});
-  process.stdin.pipe(child.stdin);
-  child.stdout.pipe(process.stdout);
   child.stderr.pipe(process.stderr);
 
-  const detach = () => {
-    process.stdin.unpipe(child.stdin);
-    process.stdin.pause();
-  };
+  let detach: () => void;
+  if (options.gate) {
+    const client = createControlClient({ url: options.gate.url, token: options.gate.token });
+    const inbound = createLineSplitter(
+      createGateInterceptor({
+        isHeld: async () => (await client.state(true)).held,
+        forward: (line) => child.stdin.write(line + "\n"),
+        refuse: (line) => process.stdout.write(line + "\n"),
+      }),
+    );
+    const onStdin = (chunk: Buffer) => inbound.push(chunk);
+    process.stdin.on("data", onStdin);
+    process.stdin.on("end", () => {
+      inbound.flush();
+      child.stdin.end();
+    });
+    // Injected refusals must never land inside one of the child's
+    // half-written frames, so the child's stdout is re-emitted at line
+    // granularity as well.
+    const outbound = createLineSplitter((line) => process.stdout.write(line + "\n"));
+    child.stdout.on("data", (chunk) => outbound.push(chunk));
+    child.stdout.on("end", () => outbound.flush());
+    detach = () => {
+      process.stdin.off("data", onStdin);
+      process.stdin.pause();
+    };
+  } else {
+    process.stdin.pipe(child.stdin);
+    child.stdout.pipe(process.stdout);
+    detach = () => {
+      process.stdin.unpipe(child.stdin);
+      process.stdin.pause();
+    };
+  }
 
   let watchdog: WatchdogHandle | null = null;
   if (options.liveness) {

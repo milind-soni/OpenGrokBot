@@ -169,6 +169,19 @@ export function cancelPeerApprovalsFor(botId: string): void {
   }
 }
 
+/** Deny every peer-communication approval owned by a thread whose turn was
+ * interrupted. Patching the card alone is not enough: the in-memory promise
+ * must resolve too, or the delegation queue waits until its 15-minute timer. */
+export function cancelPeerApprovalsForThread(threadId: string): void {
+  for (const [requestId, pending] of pendingComms) {
+    if (pending.threadId !== threadId) continue;
+    pendingComms.delete(requestId);
+    clearTimeout(pending.timer);
+    settleCard(pending, "deny", "system");
+    pending.resolve("deny");
+  }
+}
+
 /** Cards left on disk by a previous run can never be answered — their
  * in-memory approval died with the process. Settle them at boot so a
  * crashed run doesn't leave a thread with a permanently blocked composer. */

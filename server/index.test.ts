@@ -93,6 +93,16 @@ beforeAll(async () => {
         createdAt: 3,
       },
       {
+        id: "test-cancel-room",
+        threadId: "test-cancel-room-thread",
+        name: "Cancel room",
+        memberIds: ["test-bot-a"],
+        defaultResponder: { kind: "member", botId: "test-bot-a" },
+        bulletin: "",
+        unread: false,
+        createdAt: 4,
+      },
+      {
         id: "test-pinned-room",
         threadId: "test-pinned-room-thread",
         name: "Pinned room",
@@ -124,6 +134,33 @@ beforeAll(async () => {
             subtitle: "rm -rf /tmp/scratch",
             options: ["Allow", "Deny"],
             requestId: "stranded-request",
+            tool: "Bash",
+            allowKey: "Bash:rm",
+          },
+          from: { botId: "test-bot-a", name: "Test bot A", color: "purple" },
+        },
+      ],
+    }),
+  );
+
+  // A room holding an approval nobody has answered yet, so "Cancel turn"
+  // has something open to close.
+  writeFileSync(
+    join(home, ".openmausbot", "messages-test-cancel-room-thread.json"),
+    JSON.stringify({
+      activeLeafId: "cancel-card",
+      messages: [
+        {
+          id: "cancel-card",
+          at: 4,
+          parentId: null,
+          role: "bot",
+          kind: "options",
+          card: {
+            title: "Approval needed",
+            subtitle: "rm -rf /tmp/scratch",
+            options: ["Allow", "Deny"],
+            requestId: "cancel-request",
             tool: "Bash",
             allowKey: "Bash:rm",
           },
@@ -793,6 +830,21 @@ describe("harness HTTP API", () => {
       behavior: "allow",
     });
     expect(nothing.status).toBe(404);
+  });
+
+  it("closes the approvals a cancelled turn can no longer answer", async () => {
+    // "Cancel turn" is a button ON the approval card, and a pending approval
+    // owns the composer. Stopping the turn without closing its card leaves the
+    // room blocked by a question whose asker is already gone.
+    const stopped = await api("POST", "/api/groups/test-cancel-room/interrupt");
+    expect(stopped.status).toBe(200);
+
+    const room = (await api("GET", "/api/bots")).body.groups.find(
+      (group: { id: string }) => group.id === "test-cancel-room",
+    );
+    const card = room.messages.find((message: { id: string }) => message.id === "cancel-card").card;
+    expect(card.dismissed).toBe(true);
+    expect(card.answered).toBe("unavailable");
   });
 
   it("rejects an empty message and explains an unavailable provider", async () => {

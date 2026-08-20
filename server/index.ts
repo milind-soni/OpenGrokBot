@@ -53,7 +53,7 @@ import { _loadPending, discardDelegations, drainDelegations, pendingThreads, que
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { cancelPeerApprovalsFor, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import {
   mentionedBots,
   roomResponders,
@@ -486,6 +486,22 @@ async function answerRequest(
     });
   }
   return outcome;
+}
+
+/** Close every approval still open on a thread. Interrupting a turn kills the
+ * process that raised its questions, so those cards can never be answered —
+ * and a pending approval owns the composer, so one left open blocks the
+ * conversation behind a question with nobody left to hear the answer. */
+function closeOpenApprovals(threadId: string): void {
+  // Peer approvals also hold an in-memory promise. Resolve those first; merely
+  // patching their cards would leave the delegation queue waiting 15 minutes.
+  cancelPeerApprovalsForThread(threadId);
+  for (const message of store.messagesFor(threadId)) {
+    const card = message.card;
+    if (!card?.requestId || card.answered || card.dismissed) continue;
+    store.patchMessage(threadId, message.id, { card: { ...card, answered: "unavailable", dismissed: true } });
+    askMessageByRequest.delete(`${threadId}:${card.requestId}`);
+  }
 }
 
 function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
@@ -2976,6 +2992,7 @@ const server = createServer(async (req, res) => {
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
       await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
+      closeOpenApprovals(group.threadId);
       return json(res, 200, { ok: true });
     }
 
@@ -3385,8 +3402,12 @@ const server = createServer(async (req, res) => {
       // a bot busy in a ROOM is running on the room's thread — stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
-      if (busyGroup) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
-      await instance?.adapter.interruptTurn(bot.threadId);
+      if (busyGroup) {
+        await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
+        closeOpenApprovals(busyGroup.threadId);
+      }
+      await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+      closeOpenApprovals(bot.threadId);
       return json(res, 200, { ok: true });
     }
 

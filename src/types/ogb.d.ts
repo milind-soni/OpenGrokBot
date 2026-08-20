@@ -2,6 +2,30 @@
 
 
 declare global {
+  type VaultContext = "vm" | "box";
+  interface VaultEntryMeta {
+    id: string;
+    origin: string;
+    username: string;
+    hasTotp: boolean;
+    allowedBots: string[];
+    contexts: VaultContext[];
+    askEveryFill: boolean;
+    createdAt: number;
+    updatedAt: number;
+    lastUsedAt?: number;
+  }
+  interface VaultUpsert {
+    id?: string;
+    origin: string;
+    username: string;
+    /** empty on an edit keeps the stored secret */
+    secret: string;
+    totpSeed?: string;
+    allowedBots: string[];
+    contexts: VaultContext[];
+    askEveryFill: boolean;
+  }
   type DesktopCapabilities = {
     host: {
       platform: "darwin" | "linux" | "win32" | "other";
@@ -68,6 +92,16 @@ declare global {
       openExternal?(url: string): Promise<boolean>;
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
+      /** The credential vault. The renderer only ever sees metadata; the raw
+       * secret never crosses this bridge (reveal is the one gated exception). */
+      vault?: {
+        list(): Promise<VaultEntryMeta[]>;
+        upsert(input: VaultUpsert): Promise<{ id: string }>;
+        remove(id: string): Promise<{ removed: boolean }>;
+        reveal(id: string): Promise<{ secret: string; totpSeed: string | null }>;
+        /** Diagnostic: run the real fill against the focused browser field. */
+        testFill(id: string, field: "username" | "password" | "totp"): Promise<{ outcome: string; origin?: string; reason?: string; entryOrigin?: string }>;
+      };
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(name: "composioApiKey", value: string): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). onState

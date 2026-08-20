@@ -271,7 +271,8 @@ export type AppSettingsSection =
   | "companion"
   | "voice"
   | "computer"
-  | "usage";
+  | "usage"
+  | "vault";
 
 export interface AppState {
   bots: Bot[];

@@ -13,6 +13,7 @@ import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { roomTurnTimeoutMessage, scheduleRoomTurnTimeout } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
@@ -1822,6 +1823,7 @@ async function runGroupMemberTurn(
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
   let replyText = "";
+  const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
   const outcome = await new Promise<"settled" | "dispatch_failed" | "timed_out">((resolve) => {
     let done = false;
     const finish = (value: "settled" | "dispatch_failed" | "timed_out") => {
@@ -1836,16 +1838,16 @@ async function runGroupMemberTurn(
       if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
       else if (e.type === "turn.completed") finish("settled");
     });
-    const timer = setTimeout(() => {
+    const timer = scheduleRoomTurnTimeout(timeoutMinutes, () => {
       void instance.adapter.interruptTurn(group.threadId).catch(() => {});
       store.appendMessage(group.threadId, {
         role: "bot",
         kind: "activity",
         from: { botId: bot.id, name: bot.name, color: bot.color },
-        tool: { name: `${bot.name}'s room turn exceeded 5 minutes and was stopped`, ok: false },
+        tool: { name: roomTurnTimeoutMessage(bot.name, timeoutMinutes), ok: false },
       });
       finish("timed_out");
-    }, 5 * 60_000);
+    });
     watchdog.watch(group.threadId, bot.id);
     instance.adapter
       .sendTurn({

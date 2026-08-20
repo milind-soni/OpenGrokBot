@@ -154,6 +154,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ELECTRON_RUN_AS_NODE: "1",
             OGB_BOX_ID: proxyEnv.OGB_BOX_ID ?? "",
             OGB_BOX_TOKEN: proxyEnv.OGB_BOX_TOKEN ?? "",
+            // who-is-driving endpoint, so a person taking the wheel in the
+            // panel pauses this bot's hands mid-turn
+            OMB_CONTROL_URL: proxyEnv.OMB_CONTROL_URL ?? "",
+            OMB_CONTROL_TOKEN: proxyEnv.OMB_CONTROL_TOKEN ?? "",
           },
         });
       } else if (turn.integrations?.localComputer) {

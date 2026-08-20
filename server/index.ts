@@ -35,6 +35,7 @@ import {
   EVENTS_DIR,
   NATIVE_DIR,
 } from "./config.ts";
+import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
@@ -164,6 +165,22 @@ function connectedAppsIntegration(botId: string, threadId: string) {
     botId,
     threadId,
   });
+}
+
+// ── computer control (who is driving) ──────────────────────────────────
+// The person can take the wheel of a bot's computer from the panel; while
+// they hold it, the bot's computer proxies refuse every action. The record
+// lives here; the proxies consult it over loopback with the boot token.
+const computerControl = new ComputerControl((botId, snapshot) => {
+  broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
+});
+
+/** The loopback endpoint a bot's computer proxy polls before acting. */
+function controlIntegration(botId: string) {
+  return {
+    url: `http://127.0.0.1:${PORT}/api/internal/computer-control?botId=${encodeURIComponent(botId)}`,
+    token: COMMS_TOKEN,
+  };
 }
 
 /** Run a turn on `targetBotId` and resolve with its assistant text — the
@@ -1305,7 +1322,7 @@ async function startTurn(
         if (!localVm.ready || !localVm.runtime) {
           throw new Error(`${localVm.problem ?? "the Local VM is not ready"} (App Settings → Local VM)`);
         }
-        integrations.localComputer = containerComputerMcp(localVm.runtime);
+        integrations.localComputer = containerComputerMcp(localVm.runtime, controlIntegration(bot.id));
         computerKind = "vm";
       } else if (wants === "local") {
         if (!shouldMountLocalComputer({
@@ -1334,7 +1351,12 @@ async function startTurn(
             : await vps.reuseVps(cfg, bot.id);
           if (remote?.ready && remote.sshAlias) {
             const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
-            integrations.localComputer = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
+            const vpsMcp = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
+            const vpsControl = controlIntegration(bot.id);
+            integrations.localComputer = {
+              ...vpsMcp,
+              env: { ...vpsMcp.env, OMB_CONTROL_URL: vpsControl.url, OMB_CONTROL_TOKEN: vpsControl.token },
+            };
             computerKind = "vps";
             previewCapture = () => vps.vpsComputerScreenshot(targetCfg, bot.id);
           } else {
@@ -1371,7 +1393,12 @@ async function startTurn(
         if (b) {
           previewCapture = () => box.screenshotBox(cfg, bot.id, b!.id);
           if (mountsCloudComputer) {
-            integrations.computer = { kind: "box", boxId: b.id, token: cfg.box!.token! };
+            integrations.computer = {
+              kind: "box",
+              boxId: b.id,
+              token: cfg.box!.token!,
+              control: controlIntegration(bot.id),
+            };
             computerKind = "box";
           }
         }
@@ -2303,6 +2330,27 @@ const server = createServer(async (req, res) => {
         res.writeHead(upstream.status, headers);
         return res.end(Buffer.from(upstream.bytes));
       }
+      // ── computer control: proxies read the hold, bots plead for help ──
+      if (path === "/api/internal/computer-control") {
+        const botId = url.searchParams.get("botId") ?? "";
+        const bot = store.bot(botId);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        if (method === "GET") {
+          const snapshot = computerControl.snapshot(botId);
+          return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const snapshot = computerControl.requestHelp(botId, body.reason);
+          // worth a buzz: the bot is blocked on the person's hands, which
+          // is exactly the "blocked on you" rule notify.ts encodes
+          notify(
+            buildNotification("takeover", bot, bot.threadId, snapshot.helpReason ?? "asked you to take over"),
+          );
+          return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
+        }
+        return json(res, 405, { error: "method not allowed" });
+      }
       if (method === "POST" && path === "/api/internal/connectors/request") {
         const body = await readBody(req);
         const botId = String(body.botId ?? "");
@@ -3016,6 +3064,7 @@ const server = createServer(async (req, res) => {
       // now, and its caller would otherwise wait out the 15-minute timeout
       cancelPeerApprovalsFor(bot.id);
       discardDelegations(commsBus, bot.threadId);
+      computerControl.forget(bot.id);
       store.deleteBot(bot.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
         try {
@@ -3604,6 +3653,29 @@ const server = createServer(async (req, res) => {
       return bot.cloudBackend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
         : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
+    }
+    // Who is driving this bot's computer. GET is the panel's initial read;
+    // POST take/release/dismiss-help are the person's three moves. The bot
+    // has no verb here at all — its only voice is the internal help plea.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/control$/);
+    if (m) {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (method === "GET") return json(res, 200, computerControl.snapshot(bot.id));
+      if (method === "POST") {
+        // JSON-only for the same anti-form-POST reason as every other
+        // computer mutation below.
+        if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+          return json(res, 415, { error: "content-type must be application/json" });
+        }
+        const body = await readBody(req);
+        const action = String(body.action ?? "");
+        if (action === "take") return json(res, 200, computerControl.take(bot.id));
+        if (action === "release") return json(res, 200, computerControl.release(bot.id));
+        if (action === "dismiss-help") return json(res, 200, computerControl.dismissHelp(bot.id));
+        return json(res, 400, { error: "action must be take, release, or dismiss-help" });
+      }
+      return json(res, 405, { error: "method not allowed" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot|remove)$/);
     if (m && method === "POST") {

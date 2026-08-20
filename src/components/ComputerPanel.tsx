@@ -9,6 +9,7 @@ import {
   CalendarDays,
   CalendarClock,
   ExternalLink,
+  Hand,
   Loader2,
   Monitor,
   Moon,
@@ -98,6 +99,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [vmFrame, setVmFrame] = useState<string | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | "provision" | null>(null);
+  const [controlPending, setControlPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creatingRoutine, setCreatingRoutine] = useState(false);
   const [panelView, setPanelView] = useState<"computer" | "android">("computer");
@@ -393,6 +395,42 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
         : null;
 
+  // who-is-driving: SSE keeps this fresh; the mount fetch covers a panel
+  // opened after the last frame (e.g. an app reload mid-hold)
+  const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
+  useEffect(() => {
+    let alive = true;
+    api(`/api/bots/${bot.id}/computer/control`)
+      .then((snap) => {
+        if (!alive) return;
+        dispatch({
+          type: "computerControl",
+          botId: bot.id,
+          held: snap.held === true,
+          helpReason: typeof snap.helpReason === "string" ? snap.helpReason : null,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot.id]);
+  const controlAction = (action: "take" | "release" | "dismiss-help") => {
+    setControlPending(true);
+    api(`/api/bots/${bot.id}/computer/control`, { method: "POST", body: JSON.stringify({ action }) })
+      .then((snap) =>
+        dispatch({
+          type: "computerControl",
+          botId: bot.id,
+          held: snap.held === true,
+          helpReason: typeof snap.helpReason === "string" ? snap.helpReason : null,
+        }),
+      )
+      .catch((e) => setError(e.message))
+      .finally(() => setControlPending(false));
+  };
+
   const run = (kind: "join" | "sleep" | "provision") => {
     setPending(kind);
     setError(null);
@@ -589,9 +627,72 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </div>
         )}
 
+        {/* Who is driving — take the wheel / hand it back */}
+        {(phase === "ready" || phase === "vm") && control.helpReason && !control.held && (
+          <div className="mt-3 rounded-xl border border-warning/25 bg-warning/10 p-4">
+            <div className="text-[13px] leading-relaxed text-warning">
+              <b>{bot.name}</b> asked for your hands: {control.helpReason}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => controlAction("take")}
+                disabled={controlPending}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+              >
+                <Hand size={14} />
+                Take control
+              </button>
+              <button
+                onClick={() => controlAction("dismiss-help")}
+                disabled={controlPending}
+                className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+        {(phase === "ready" || phase === "vm") && control.held && (
+          <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
+            <div className="text-[13px] leading-relaxed text-ink">
+              You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
+              {phase === "ready" && cloudBackend === "box" && " Use Open desktop to drive."}
+            </div>
+            <button
+              onClick={() => controlAction("release")}
+              disabled={controlPending}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+            >
+              <Hand size={14} />
+              Hand control back
+            </button>
+          </div>
+        )}
+        {phase === "vm" && !control.held && !control.helpReason && (
+          <button
+            onClick={() => controlAction("take")}
+            disabled={controlPending}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+            title="Pause the bot's hands and drive the Local VM yourself"
+          >
+            <Hand size={14} />
+            Take control
+          </button>
+        )}
         {/* Cloud-only actions */}
         {phase === "ready" && (
           <div className="mt-3 flex gap-2">
+            {!control.held && !control.helpReason && (
+              <button
+                onClick={() => controlAction("take")}
+                disabled={controlPending}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                title="Pause the bot's hands and drive this computer yourself"
+              >
+                <Hand size={14} />
+                Take control
+              </button>
+            )}
             {cloudBackend === "box" && (
               <button
                 onClick={() => run("join")}

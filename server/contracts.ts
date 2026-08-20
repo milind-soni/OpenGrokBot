@@ -155,8 +155,16 @@ export interface SendTurnInput {
      * bridge harness-controlled lets it turn connection requests into trusted
      * chat cards consistently across provider CLIs. */
     composio?: { command: string; args: string[]; env: Record<string, string> };
-    /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
-    computer?: { kind?: "box"; boxId: string; token: string };
+    /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter.
+     * `control` is the harness's loopback who-is-driving endpoint: the
+     * adapter consults it so a person who takes the wheel in the panel
+     * pauses the bot's hands mid-turn instead of typing over them. */
+    computer?: {
+      kind?: "box";
+      boxId: string;
+      token: string;
+      control?: { url: string; token: string };
+    };
     /** Direct stdio connection to a Cua Driver MCP server (host, sandbox, or
      * VPS). `scope` is set only for the user's host desktop; isolated and
      * remote computers intentionally omit it so host-only approval rules

@@ -299,6 +299,10 @@ export interface AppState {
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
+  /** who is driving each bot's computer: held = the person has the wheel
+   * (the bot's hands are refused server-side); helpReason = the bot's open
+   * plea for the person to take over */
+  computerControl: Record<string, { held: boolean; helpReason: string | null }>;
   /** a search hit to scroll to once its thread is on screen; nonce lets the
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean } | null;
@@ -377,6 +381,7 @@ export type Action =
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
+  | { type: "computerControl"; botId: string; held: boolean; helpReason: string | null }
   | { type: "setModel"; botId: string; selection: ModelSelection }
   | { type: "interrupt"; botId: string }
   | { type: "connected"; value: boolean }
@@ -694,6 +699,14 @@ export function reducer(state: AppState, action: Action): AppState {
         ...(action.on ? withMascotMotion(state, action.botId, "launch") : state),
         provisioning: { ...state.provisioning, [action.botId]: action.on },
       };
+    case "computerControl":
+      return {
+        ...state,
+        computerControl: {
+          ...state.computerControl,
+          [action.botId]: { held: action.held, helpReason: action.helpReason },
+        },
+      };
     case "setModel":
       return updateBot(state, action.botId, (b) => ({ ...b, modelSelection: action.selection }));
     case "connected":
@@ -878,6 +891,7 @@ export const initialState: AppState = {
   appSettingsSection: "general",
   screens: {},
   provisioning: {},
+  computerControl: {},
   focusMessage: null,
   connected: false,
   error: null,
@@ -1406,6 +1420,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
+          break;
+        case "computer-control":
+          rawDispatch({
+            type: "computerControl",
+            botId: frame.botId,
+            held: frame.held === true,
+            helpReason: typeof frame.helpReason === "string" ? frame.helpReason : null,
+          });
           break;
         case "bot.deleted":
           rawDispatch({ type: "deleteBot", botId: frame.botId });

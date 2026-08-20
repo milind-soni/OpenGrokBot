@@ -1292,3 +1292,56 @@ describe("instance CLI override API", () => {
     expect((await slowConfigWrite).status).toBe(200);
   });
 });
+
+describe("computer control API (who is driving)", () => {
+  let botId = "";
+
+  beforeAll(async () => {
+    const created = await api("POST", "/api/bots", {});
+    botId = created.body.bot.id;
+  });
+
+  it("starts disengaged", async () => {
+    const res = await api("GET", `/api/bots/${botId}/computer/control`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ held: false, helpReason: null, heldSinceMs: null });
+  });
+
+  it("take → held, broadcast on the wire, release → disengaged", async () => {
+    const sse = await openSse(`${BASE}/api/events`);
+    try {
+      const took = await api("POST", `/api/bots/${botId}/computer/control`, { action: "take" });
+      expect(took.status).toBe(200);
+      expect(took.body.held).toBe(true);
+      const frame = await sse.until(
+        (f) => f.kind === "computer-control" && f.botId === botId && f.held === true,
+      );
+      expect(frame.helpReason).toBeNull();
+      const released = await api("POST", `/api/bots/${botId}/computer/control`, { action: "release" });
+      expect(released.body.held).toBe(false);
+    } finally {
+      sse.close();
+    }
+  });
+
+  it("refuses an unknown action and an unknown bot", async () => {
+    const bad = await api("POST", `/api/bots/${botId}/computer/control`, { action: "hijack" });
+    expect(bad.status).toBe(400);
+    const ghost = await api("GET", "/api/bots/nope/computer/control");
+    expect(ghost.status).toBe(404);
+  });
+
+  it("refuses a form-shaped POST — control mutations are JSON-only", async () => {
+    const res = await fetch(`${BASE}/api/bots/${botId}/computer/control`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "action=take",
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("keeps the internal who-is-driving endpoint behind the boot token", async () => {
+    const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
+    expect(res.status).toBe(401);
+  });
+});

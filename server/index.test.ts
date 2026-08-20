@@ -874,6 +874,10 @@ describe("harness HTTP API", () => {
   it("keeps an active turn alive when only the room timeout changes", async () => {
     const created = await api("POST", "/api/bots", {});
     const botId = created.body.bot.id;
+    const room = (await api("POST", "/api/groups", {
+      name: "Room timeout capture",
+      memberIds: [botId],
+    })).body.group;
     try {
       const selected = await api("PATCH", `/api/bots/${botId}`, {
         modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
@@ -881,28 +885,36 @@ describe("harness HTTP API", () => {
       expect(selected.status).toBe(200);
 
       rmSync(fakeClaudeDump, { force: true });
-      const sent = await api("POST", `/api/bots/${botId}/messages`, { text: "stay active" });
+      const sent = await api("POST", `/api/groups/${room.id}/messages`, { text: "stay active" });
       expect(sent.status).toBe(202);
       await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
 
-      const before = (await api("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === botId);
-      expect(before.busy).toBe(true);
+      const before = (await api("GET", "/api/bots")).body;
+      expect(before.bots.find((bot: { id: string }) => bot.id === botId)?.busy).toBe(true);
+      expect(before.groups.find((group: { id: string }) => group.id === room.id)?.busyBotId).toBe(botId);
 
       const saved = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 20 } });
       expect(saved.status).toBe(200);
 
-      const after = (await api("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === botId);
-      expect(after.busy).toBe(true);
-      expect(after.messages.some((message: { tool?: { name?: string } }) =>
+      const after = (await api("GET", "/api/bots")).body;
+      expect(after.bots.find((bot: { id: string }) => bot.id === botId)?.busy).toBe(true);
+      const activeRoom = after.groups.find((group: { id: string }) => group.id === room.id);
+      expect(activeRoom?.busyBotId).toBe(botId);
+      expect(activeRoom.messages.some((message: { tool?: { name?: string } }) =>
         message.tool?.name?.includes("provider settings changed"),
       )).toBe(false);
     } finally {
-      await api("POST", `/api/bots/${botId}/interrupt`);
+      await api("POST", `/api/groups/${room.id}/interrupt`);
       await expect.poll(async () => {
-        const bots = await api("GET", "/api/bots");
-        return bots.body.bots.find((bot: { id: string }) => bot.id === botId)?.busy;
-      }, { timeout: 5_000 }).toBe(false);
+        const state = (await api("GET", "/api/bots")).body;
+        return {
+          botBusy: state.bots.find((bot: { id: string }) => bot.id === botId)?.busy,
+          roomBusyBotId: state.groups.find((group: { id: string }) => group.id === room.id)?.busyBotId,
+        };
+      }, { timeout: 5_000 }).toEqual({ botBusy: false, roomBusyBotId: null });
+      await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${botId}`);
+      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
     }
   });
 

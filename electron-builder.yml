@@ -54,11 +54,15 @@ extraResources:
     to: android-platform-tools
 
 mac:
+  # Two single-arch artifacts rather than one universal binary: the app is
+  # ~177 MB per arch, and universal would make every user download both halves.
+  # electron-updater picks by filename (arm64-marked files on Apple silicon,
+  # unmarked ones on Intel), so latest-mac.yml must list all four files.
   target:
     - target: dmg
-      arch: arm64
+      arch: [arm64, x64]
     - target: zip
-      arch: arm64
+      arch: [arm64, x64]
   icon: build/icon.icns
   category: public.app-category.productivity
   hardenedRuntime: true
@@ -71,9 +75,10 @@ mac:
       to: OpenMausBot Speech.app
     # CUA must live outside ASAR. prepare-cua stages the signed executable and
     # a self-contained JS/native SDK bundle selected for macOS arm64.
-    - from: dist-native/cua-driver
+    # ${arch} resolves per built arch — each bundle carries its own natives
+    - from: dist-native/${arch}/cua-driver
       to: cua-driver
-    - from: dist-native/cua-sdk
+    - from: dist-native/${arch}/cua-sdk
       to: cua-sdk
   extendInfo:
     NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
@@ -86,7 +91,10 @@ mac:
 
 dmg:
   sign: true
-  artifactName: OpenMausBot-${version}.dmg
+  # ${arch} is load-bearing: without it the x64 dmg silently overwrites
+  # the arm64 one when both arches build (this section overrides both the
+  # top-level and mac-level artifactName, so it must carry the arch itself)
+  artifactName: OpenMausBot-${version}-${arch}.dmg
 
 win:
   target:

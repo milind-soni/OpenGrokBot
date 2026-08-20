@@ -95,3 +95,12 @@ targets:
             ts.net:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
+        # Composer dictation. Without these two the first tap on the mic
+        # crashes rather than prompting, which looks like the app is broken
+        # rather than missing a string. Same keys the desktop speech-helper
+        # carries, worded for the phone.
+        NSMicrophoneUsageDescription: >-
+          OpenMausMobile listens while you dictate a message to a bot.
+        NSSpeechRecognitionUsageDescription: >-
+          OpenMausMobile converts your speech into text so you can send it
+          to a bot. Recognition runs on this phone when it can.

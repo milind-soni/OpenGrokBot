@@ -203,7 +203,15 @@ On the phone, in order:
    then come back. The transcript should catch up *without* a visible reload —
    that is the resumable stream doing its job. Watch the harness log to confirm
    it replayed rather than re-hydrated.
-6. **Revoke.** Remove the device in Settings → Companion on the computer. The
+6. **Dictate.** Open a chat, tap the mic, speak, tap the mic again. The words
+   should land in the field as you talk (not only after you stop), survive
+   an edit, and send like anything you typed. The first tap prompts for
+   Microphone and Speech Recognition; a denial names Settings → OpenMausMobile
+   on that same attempt. Backgrounding the app must stop the mic — lock the
+   phone mid-sentence and confirm it is not still listening when you come
+   back. Opening the computer panel must also release it (ChatView stays
+   mounted under the push).
+7. **Revoke.** Remove the device in Settings → Companion on the computer. The
    phone should land on "This phone was unpaired" rather than silently failing.
 
 ---
@@ -257,8 +265,9 @@ Not built yet, so not bugs:
 - **Nothing arrives after the app is terminated.** Live and replayed notification
   frames now become native alerts and badges, but closed-app push still needs an
   APNs relay with project-owned Apple credentials.
-- **No voice or routine management.** Tasks, SQLite transcript search/export,
-  reactions, and edit/version switching are available from the conversation UI.
+- **No call mode, spoken replies, or routine management.** Composer dictation
+  is in. Tasks, SQLite transcript search/export, reactions, and edit/version
+  switching are available from the conversation UI.
 
 (Two entries that used to sit on this list have since shipped: replies stream
 token by token as the provider emits them, and each bot has a computer panel —

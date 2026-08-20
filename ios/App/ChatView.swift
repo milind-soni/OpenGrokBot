@@ -14,15 +14,18 @@ import CompanionCore
 // isn't. The App target is iOS; CompanionCore is where the portable half
 // lives.
 import UIKit
+import AVFoundation
 
 struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
     @State private var showingTasks = false
     @State private var shareFile: ShareFile?
     @FocusState private var composerFocused: Bool
+    @StateObject private var dictation = SpeechDictation()
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
@@ -181,7 +184,11 @@ struct ChatView: View {
                 // guess. Bots only.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
+                        // Pushing does not disappear ChatView — it stays in
+                        // the stack under the computer panel — so onDisappear
+                        // would leave the mic open behind another screen.
                         ComputerView(bot: bot)
+                            .onAppear { dictation.stop() }
                     } label: {
                         Image(systemName: "display")
                             .font(.system(size: 15, weight: .medium))
@@ -231,6 +238,29 @@ struct ChatView: View {
             // bit here rather than leaving a badge on an open conversation.
             if unread { Task { await session.markRead(current) } }
         }
+        .onDisappear { dictation.stop() }
+        // Backgrounding does not always disappear this view — it stays in
+        // the navigation stack — and a microphone left open through a lock
+        // is a privacy surprise. The stream is already torn down on
+        // inactive; dictation should follow.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { dictation.stop() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
+            let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
+            if value == AVAudioSession.InterruptionType.began.rawValue {
+                dictation.stop()
+            }
+        }
+        // Frozen `dictation.base`, not the live draft: a later partial
+        // replaces an earlier one rather than concatenating onto it.
+        .onChange(of: dictation.transcript) { _, spoken in
+            draft = Dictation.draft(base: dictation.base, transcript: spoken)
+        }
+        .onChange(of: dictation.isListening) { _, listening in
+            if listening { composerFocused = false }
+        }
         .sheet(isPresented: $showingTasks) {
             if case let .bot(bot) = current { TaskManagerView(bot: bot) }
         }
@@ -251,6 +281,10 @@ struct ChatView: View {
     }
 
     private func submit() {
+        // Always, not only when `isListening`: send during the permission
+        // prompt must cancel the in-flight start, or capture would begin
+        // after the message has already left.
+        dictation.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
@@ -258,14 +292,32 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Ask \(current.name)", text: $draft, axis: .vertical)
+        VStack(spacing: 6) {
+            if let error = dictation.error {
+                Text(error)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            HStack(spacing: 10) {
+                TextField(
+                    dictation.isListening ? "Listening…" : "Ask \(current.name)",
+                    text: $draft,
+                    axis: .vertical
+                )
                 .lineLimit(1...5)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(Capsule().fill(Color.secondary.opacity(0.16)))
                 .focused($composerFocused)
                 .submitLabel(.send)
+                // Typing while partials stream in would fight the next
+                // transcript callback, which rewrites the whole field from
+                // the frozen base. `.disabled` would also fade the text,
+                // which makes dictated words look like a placeholder.
+                // Hit-testing off keeps them readable and not editable.
+                .allowsHitTesting(!dictation.isListening)
                 // Return sends, Shift+Return breaks the line — the shape
                 // every chat app has. `.ignored` hands the keypress back to
                 // the text field, which is what inserts the newline; there is
@@ -279,19 +331,43 @@ struct ChatView: View {
                 // key is a send — which is what `.submitLabel(.send)` promises
                 .onSubmit(submit)
 
-            Button {
-                submit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color(uiColor: .systemBackground))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.35))
-                    )
+                // The mic stays put. Hiding it once text arrives is the
+                // desktop pattern, where Escape stops listening and the
+                // toolbar only has room for one action. A phone has
+                // neither: this is how you stop, and how you add another
+                // sentence by voice after the first one.
+                Button {
+                    dictation.toggle(capturing: draft)
+                } label: {
+                    Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle().fill(
+                                dictation.isListening
+                                    ? Color.red.opacity(0.2)
+                                    : Color.secondary.opacity(0.16)
+                            )
+                        )
+                        .symbolEffect(.pulse, isActive: dictation.isListening)
+                }
+                .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+
+                if canSend {
+                    Button {
+                        submit()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(Color.primary))
+                    }
+                    .accessibilityLabel("Send message")
+                    .animation(.easeOut(duration: 0.15), value: canSend)
+                }
             }
-            .disabled(!canSend)
-            .animation(.easeOut(duration: 0.15), value: canSend)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var shareFile: ShareFile?
     @State private var showCommandHUD = false
     @State private var replyingTo: Message?
+    @State private var showingInspector = false
     @FocusState private var composerFocused: Bool
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -208,6 +209,18 @@ struct ChatView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showingInspector.toggle()
+                    }
+                    Haptics.selection()
+                } label: {
+                    Image(systemName: "sidebar.trailing")
+                        .foregroundStyle(showingInspector ? MausPalette.color(current.color) : Color.primary)
+                }
+                .help("Toggle Agent Inspector (Cmd+Option+I)")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     if case let .bot(bot) = current {
                         Button("Tasks", systemImage: "square.stack") { showingTasks = true }
@@ -240,6 +253,13 @@ struct ChatView: View {
         }
         .background {
             Group {
+                Button("") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showingInspector.toggle()
+                    }
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+
                 if case let .bot(bot) = current {
                     Button("") {
                         if bot.busy != true { showingTasks = true }
@@ -254,6 +274,21 @@ struct ChatView: View {
             }
             .opacity(0)
             .allowsHitTesting(false)
+        }
+        .inspector(isPresented: $showingInspector) {
+            AgentInspectorSidebarView(
+                chat: current,
+                onOpenComputer: { showingComputerSheet = true },
+                onOpenTasks: { showingTasks = true },
+                onSteer: {
+                    draft = "Pause and explain your current plan"
+                    composerFocused = true
+                },
+                onClear: {
+                    Task { await session.send("/clear", to: current) }
+                }
+            )
+            .inspectorColumnWidth(min: 260, ideal: 300, max: 360)
         }
         .task {
             // opening a chat is what marks it read, exactly as on the desktop

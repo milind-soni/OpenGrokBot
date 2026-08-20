@@ -121,6 +121,7 @@ struct CompanionApp: App {
         #if targetEnvironment(macCatalyst) || os(macOS)
         .commands {
             SidebarCommands()
+            InspectorCommands()
             TextEditingCommands()
             CommandMenu("View") {
                 Button("Zoom In") { zoomIn() }

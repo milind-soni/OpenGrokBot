@@ -73,7 +73,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -163,11 +163,9 @@ jobs:
           rm -f "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip"
           ditto -c -k --sequesterRsrc --keepParent release/mac-arm64/OpenMausBot.app "release/OpenMausBot-$v-arm64.zip"
           ditto -c -k --sequesterRsrc --keepParent release/mac/OpenMausBot.app "release/OpenMausBot-$v-x64.zip"
-          AB=$(node -p "require('app-builder-bin').appBuilderPath")
-          for f in "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip" \
-                   "release/OpenMausBot-$v-arm64.dmg" "release/OpenMausBot-$v-x64.dmg"; do
-            "$AB" blockmap -i "$f" -o "$f.blockmap" > /dev/null
-          done
+          node scripts/regenerate-blockmaps.mjs \
+            "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip" \
+            "release/OpenMausBot-$v-arm64.dmg" "release/OpenMausBot-$v-x64.dmg"
           # refreshes every hash from the post-staple bytes and refuses to
           # finish unless the feed matches the files on disk
           node scripts/regenerate-mac-feed.mjs
@@ -178,7 +176,7 @@ jobs:
           cp "release/OpenMausBot-$v-arm64.dmg" release/OpenMausBot.dmg
           cp "release/OpenMausBot-$v-x64.dmg" release/OpenMausBot-intel.dmg
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-release
           path: |
@@ -199,7 +197,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -236,7 +234,7 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           cp "release/OpenMausBot-$v-setup.exe" release/OpenMausBot-setup.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release
           path: |
@@ -256,7 +254,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -277,14 +275,16 @@ jobs:
           sudo chmod 4755 release/linux-unpacked/chrome-sandbox
           test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
       - name: Smoke the packages
-        run: node scripts/smoke-linux-package.mjs
+        env:
+          OMB_KEEP_SMOKE_DIR: "1"
+        run: pnpm smoke:linux-package
       - name: Stable-named copies and checksums
         run: |
           v=$(node -p "require('./package.json').version")
           cp "release/OpenMausBot-$v-amd64.deb" release/OpenMausBot-amd64.deb
           cp "release/OpenMausBot-$v-x86_64.AppImage" release/OpenMausBot.AppImage
           (cd release && sha256sum OpenMausBot-$v-amd64.deb OpenMausBot-$v-x86_64.AppImage > SHA256SUMS-ubuntu-x64.txt)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release
           path: |
@@ -301,7 +301,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: assets
           merge-multiple: true

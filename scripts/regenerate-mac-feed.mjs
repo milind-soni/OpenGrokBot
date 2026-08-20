@@ -12,8 +12,8 @@
 // top-level path/sha512 is the legacy fallback taken from the first entry —
 // and only recomputes sha512 + size from the bytes on disk right now.
 //
-// Blockmaps are NOT handled here: regenerate them separately (app-builder
-// blockmap) after stapling, for the same staleness reason.
+// Blockmaps are NOT handled here: regenerate them separately with
+// scripts/regenerate-blockmaps.mjs after stapling, for the same staleness reason.
 import { createHash } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

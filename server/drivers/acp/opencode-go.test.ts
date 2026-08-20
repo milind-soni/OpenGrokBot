@@ -104,6 +104,60 @@ describe("OpenCode Go catalog", () => {
     }
   });
 
+  it("finds the CLI's login at ~/.local/share on every platform, macOS included", async () => {
+    // `opencode auth list` prints ~/.local/share/opencode/auth.json on macOS —
+    // the CLI is xdg-flavoured everywhere. Looking only in Library/Application
+    // Support is the bug that told signed-in users to sign in. No XDG override
+    // here on purpose: this is the exact real-world shape.
+    const scratch = mkdtempSync(join(tmpdir(), "omb-opencode-home-"));
+    const authDir = join(scratch, ".local", "share", "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(join(authDir, "auth.json"), JSON.stringify({
+      "opencode-go": { type: "api", key: "stored-secret" },
+    }));
+    const driver = createOpenCodeGoDriver(async () => new Response("[]", { status: 200 }));
+    const instance = await driver.create({
+      instanceId: "opencode-home-auth",
+      displayName: "OpenCode Go",
+      environment: { HOME: scratch, USERPROFILE: scratch, XDG_DATA_HOME: "", OPENCODE_API_KEY: "" },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
+  it("accepts a browser (oauth) sign-in stored under the plain 'opencode' id", async () => {
+    // `opencode auth login` -> OpenCode writes {type:"oauth", access, refresh}
+    // under "opencode", not an api `key` under "opencode-go". Both unlock the
+    // Go models; demanding `key` under "opencode-go" rejected every real
+    // browser login.
+    const scratch = mkdtempSync(join(tmpdir(), "omb-opencode-oauth-"));
+    const authDir = join(scratch, "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(join(authDir, "auth.json"), JSON.stringify({
+      opencode: { type: "oauth", access: "acc-token", refresh: "ref-token" },
+    }));
+    const driver = createOpenCodeGoDriver(async () => new Response("[]", { status: 200 }));
+    const instance = await driver.create({
+      instanceId: "opencode-oauth-auth",
+      displayName: "OpenCode Go",
+      environment: { XDG_DATA_HOME: scratch, OPENCODE_API_KEY: "" },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      expect((await instance.snapshot()).authenticated).toBe(true);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(scratch);
+    }
+  });
+
   it("classifies ACP's standard authentication error", () => {
     expect(classifyOpenCodeGoError({ code: -32000 })).toBe("invalid_credentials");
   });

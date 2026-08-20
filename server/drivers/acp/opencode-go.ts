@@ -147,30 +147,56 @@ export function ensureOpenCodeInjectModel(
   return native;
 }
 
-function storedAuthPath(env: Record<string, string | undefined>) {
+/** Every path the OpenCode CLI may keep auth.json at.
+ *
+ * The CLI is xdg-flavoured on EVERY platform — `opencode auth list` on macOS
+ * prints `~/.local/share/opencode/auth.json`, and that is where real logins
+ * land. The platform-conventional locations are kept as fallbacks in case a
+ * future CLI moves there, but the xdg path must come first: checking only
+ * Library/Application Support on macOS is exactly the bug that made the app
+ * demand a sign-in from users who were already signed in. */
+function storedAuthPaths(env: Record<string, string | undefined>): string[] {
   const home = env.HOME || env.USERPROFILE || homedir();
-  const dataRoot = env.XDG_DATA_HOME
-    || (process.platform === "darwin"
+  const roots = [
+    env.XDG_DATA_HOME || join(home, ".local", "share"),
+    process.platform === "darwin"
       ? join(home, "Library", "Application Support")
       : process.platform === "win32"
         ? env.LOCALAPPDATA || join(home, "AppData", "Local")
-        : join(home, ".local", "share"));
-  return join(dataRoot, "opencode", "auth.json");
+        : "",
+  ].filter(Boolean);
+  return [...new Set(roots)].map((root) => join(root, "opencode", "auth.json"));
+}
+
+/** True when an auth.json entry looks like a usable OpenCode login.
+ *
+ * The CLI writes `{type:"api", key}` for pasted keys and
+ * `{type:"oauth", access, refresh}` for browser sign-ins — demanding `key`
+ * alone rejects every OAuth login. The entry id is `"opencode"` for the
+ * standard Zen sign-in and `"opencode-go"` for the Go product; both unlock
+ * the Go models, so both count. */
+function usableAuthEntry(parsed: Record<string, unknown>): boolean {
+  return ["opencode-go", "opencode"].some((id) => {
+    const auth = parsed[id];
+    if (!auth || typeof auth !== "object") return false;
+    const entry = auth as { key?: unknown; access?: unknown; refresh?: unknown };
+    return Boolean(entry.key || entry.access || entry.refresh);
+  });
 }
 
 function hasStoredOpenCodeGoAuth(env: Record<string, string | undefined>) {
   const candidates: string[] = [];
   if (env.OPENCODE_AUTH_CONTENT) candidates.push(env.OPENCODE_AUTH_CONTENT);
-  try {
-    candidates.push(readFileSync(storedAuthPath(env), "utf8"));
-  } catch {
-    // A missing or unreadable file simply means there is no ambient login.
+  for (const path of storedAuthPaths(env)) {
+    try {
+      candidates.push(readFileSync(path, "utf8"));
+    } catch {
+      // A missing or unreadable file simply means there is no ambient login.
+    }
   }
   return candidates.some((raw) => {
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const auth = parsed["opencode-go"];
-      return Boolean(auth && typeof auth === "object" && (auth as { key?: unknown }).key);
+      return usableAuthEntry(JSON.parse(raw) as Record<string, unknown>);
     } catch {
       return false;
     }
@@ -183,7 +209,8 @@ const support = (fetcher: typeof fetch): AcpSupport => ({
   models: STATIC_MODELS,
   defaultCli: "opencode",
   nativeSource: "opencode-go.acp",
-  loginNote: "OpenCode Go is not configured — add an OPENCODE_API_KEY in OpenMausBot settings",
+  loginNote:
+    "OpenCode is not signed in — run `opencode auth login` and pick OpenCode, or add an OPENCODE_API_KEY in OpenMausBot settings",
   install: {
     command: {
       darwin: "npm install -g opencode-ai",

@@ -541,10 +541,19 @@ describe("harness HTTP API", () => {
       const imported = await api("POST", "/api/teams/import", exported.body);
       expect(imported.status).toBe(201);
       // the originals still exist, so every member arrives visibly numbered
-      // rather than wearing a name that already resolves to another bot
-      expect(imported.body.bots.map((bot: { name: string }) => bot.name)).toEqual(
-        visibleNames.map((name: string) => `${name} 2`),
-      );
+      // rather than wearing a name that already resolves to another bot. The
+      // starter name is intentionally random, so it can duplicate a member
+      // name and advance that member to the next available suffix.
+      const importedNames = imported.body.bots.map((bot: { name: string }) => bot.name);
+      const namesBefore = new Set(stateBefore.bots.map((bot: { name: string }) => bot.name.toLowerCase()));
+      expect(importedNames).toHaveLength(visibleNames.length);
+      expect(new Set(importedNames.map((name: string) => name.toLowerCase())).size).toBe(importedNames.length);
+      for (const [index, name] of importedNames.entries()) {
+        const base = visibleNames[index]!;
+        expect(name.startsWith(`${base} `)).toBe(true);
+        expect(Number(name.slice(base.length + 1))).toBeGreaterThanOrEqual(2);
+        expect(namesBefore.has(name.toLowerCase())).toBe(false);
+      }
       expect(imported.body.bots.every((bot: { id: string }) => ![first.id, second.id].includes(bot.id))).toBe(true);
       expect(imported.body.bots[0]).not.toHaveProperty("alwaysAllow");
       // imported bots arrive quiet and without reach: no seeded greeting

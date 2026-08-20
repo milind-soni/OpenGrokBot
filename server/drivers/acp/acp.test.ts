@@ -20,6 +20,7 @@ import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
 import { DroidAgentDriver } from "./droid.ts";
+import { CursorAgentDriver } from "./cursor.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
@@ -128,6 +129,19 @@ describe("ACP decodeConfig", () => {
     });
     expect(DroidAgentDriver.install?.signInCommand).toBe("droid");
   });
+  it("cursor defaults to its unambiguous binary and declares cross-platform setup", () => {
+    expect(CursorAgentDriver.decodeConfig(undefined)).toEqual({
+      cli: "cursor-agent",
+      fullAuto: false,
+      workspace: undefined,
+    });
+    expect(CursorAgentDriver.install?.command).toMatchObject({
+      darwin: expect.stringContaining("cursor.com/install"),
+      linux: expect.stringContaining("cursor.com/install"),
+      win32: expect.stringContaining("cursor.com/install"),
+    });
+    expect(CursorAgentDriver.install?.signInCommand).toBe("cursor-agent login");
+  });
   it("fullAuto only when explicitly true", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
     expect(GrokAgentDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
@@ -189,6 +203,8 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_DUMP;
     delete process.env.XAI_API_KEY;
     delete process.env.OPENCODE_API_KEY;
+    delete process.env.CURSOR_API_KEY;
+    delete process.env.CURSOR_AUTH_TOKEN;
     delete process.env.BOX_TOKEN;
     delete process.env.OMB_TTS_KEY;
     delete process.env.FAKE_ACP_MODELS;
@@ -241,6 +257,8 @@ describe("ACP turns (fake CLI)", () => {
     process.env.FAKE_ACP_DUMP = dump;
     process.env.XAI_API_KEY = "xai-should-not-leak";
     process.env.OPENCODE_API_KEY = "opencode-should-not-leak";
+    process.env.CURSOR_API_KEY = "cursor-should-not-leak";
+    process.env.CURSOR_AUTH_TOKEN = "cursor-token-should-not-leak";
     // workspace credentials with no CLI consumer at all — held by the
     // harness (env-injected at boot by the desktop shell), used in-process
     process.env.BOX_TOKEN = "box-should-not-leak";
@@ -255,6 +273,8 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
     expect(seen.env.OPENCODE_API_KEY).toBeUndefined();
+    expect(seen.env.CURSOR_API_KEY).toBeUndefined();
+    expect(seen.env.CURSOR_AUTH_TOKEN).toBeUndefined();
     expect(seen.env.BOX_TOKEN).toBeUndefined();
     expect(seen.env.OMB_TTS_KEY).toBeUndefined();
   });

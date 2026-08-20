@@ -2,8 +2,9 @@
 import { Monitor } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HermesMark } from "./HermesMark";
+import { CursorMark } from "./CursorMark";
 
-export { HermesMark };
+export { HermesMark, CursorMark };
 
 export interface IconProps {
   size?: number;
@@ -121,6 +122,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <KimiMark size={size} className={className} />;
     case "droidAgent":
       return <DroidMark size={size} className={className} />;
+    case "cursorAgent":
+      return <CursorMark size={size} className={className} />;
     case "antigravityAgent":
       return <AntigravityMark size={size} className={className} />;
     case "opencodeGo":

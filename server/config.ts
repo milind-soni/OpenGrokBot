@@ -322,6 +322,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     grok: { driver: "grokAgent" },
     kimi: { driver: "kimiAgent" },
     droid: { driver: "droidAgent" },
+    cursor: { driver: "cursorAgent" },
     claude: { driver: "claudeAgent" },
     codex: { driver: "codex" },
     antigravity: { driver: "antigravityAgent" },
@@ -334,15 +335,22 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
   } as const;
+  // New default-fleet engines that existing product configs would otherwise
+  // never see. Custom-only engines stay in CUSTOM_ONLY so a one-off test map
+  // is not expanded, matching the claude/grok/codex product-fleet probe.
+  const PRODUCT_FLEET_ADDITIONS = {
+    cursor: { driver: "cursorAgent" },
+    ...CUSTOM_ONLY,
+  } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
   const map: InstanceConfigMap = configured ? { ...configured } : { ...DEFAULT_FLEET };
-  // Product fleets pick up newly shipped custom-only engines. A one-off
-  // test/shadow map (no claude/grok/codex) is left exactly as written.
+  // Product fleets pick up newly shipped engines. A one-off test/shadow map
+  // (no claude/grok/codex) is left exactly as written.
   if (
     configured &&
     (Object.hasOwn(configured, "claude") || Object.hasOwn(configured, "grok") || Object.hasOwn(configured, "codex"))
   ) {
-    for (const [id, entry] of Object.entries(CUSTOM_ONLY)) {
+    for (const [id, entry] of Object.entries(PRODUCT_FLEET_ADDITIONS)) {
       if (!Object.hasOwn(map, id)) map[id] = { ...entry };
     }
   }

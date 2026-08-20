@@ -64,8 +64,13 @@ export interface AcpSupport {
   effortLevels?: readonly EffortLevel[];
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
-  /** Optional live model catalog. A failed lookup keeps the last usable catalog. */
-  resolveModels?(environment: Record<string, string | undefined>): ModelCatalog | Promise<ModelCatalog>;
+  /** Optional live model catalog. A failed lookup keeps the last usable catalog.
+   *  `config` is the instance decode so a support can ask the same binary it
+   *  will spawn (custom `cli` paths), not whatever happens to be named on PATH. */
+  resolveModels?(
+    environment: Record<string, string | undefined>,
+    config: AcpConfig,
+  ): ModelCatalog | Promise<ModelCatalog>;
   /** Native-protocol log label, e.g. "grok.acp". */
   nativeSource: string;
   /** Whether models behind this ACP harness can consume a referenced image.
@@ -133,6 +138,8 @@ const PROVIDER_CREDENTIAL_ENV = [
   "OPENAI_API_KEY",
   "OPENCODE_API_KEY",
   "XAI_API_KEY",
+  "CURSOR_API_KEY",
+  "CURSOR_AUTH_TOKEN",
 ] as const;
 
 function decodeAcpConfig(defaultCli: string) {
@@ -189,7 +196,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const refreshModels = async () => {
         if (!support.resolveModels) return;
         try {
-          const resolved = await support.resolveModels(childEnv());
+          const resolved = await support.resolveModels(childEnv(), config);
           if (resolved.options.length) models = resolved;
         } catch {
           // Keep the last usable catalog when an optional discovery source is down.

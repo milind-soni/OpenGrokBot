@@ -475,8 +475,36 @@ private struct ActivityShareSheet: UIViewControllerRepresentable {
 struct TextBubble: View {
     let message: Message
 
+    private var parsedDiff: (filename: String, diff: String)? {
+        guard let text = message.text, message.role != .user else { return nil }
+        if text.contains("```diff") || text.hasPrefix("diff --git") || (text.contains("@@") && text.contains("\n+")) {
+            var diffBody = text
+            if let start = text.range(of: "```diff"), let end = text.range(of: "```", range: start.upperBound..<text.endIndex) {
+                diffBody = String(text[start.upperBound..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return (filename: "Git Patch", diff: diffBody)
+        }
+        return nil
+    }
+
+    private var parsedTable: (headers: [String], rows: [[String]])? {
+        guard let text = message.text, message.role != .user else { return nil }
+        let lines = text.components(separatedBy: "\n").filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("|") && $0.contains("|") }
+        guard lines.count >= 2 else { return nil }
+        let headers = lines[0].split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !headers.isEmpty else { return nil }
+        let dataLines = lines.dropFirst().filter { !$0.contains("---") }
+        let rows = dataLines.map { line in
+            line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        guard !rows.isEmpty else { return nil }
+        return (headers: headers, rows: rows)
+    }
+
     var body: some View {
         let mine = message.role == .user
+        let hasCustomCard = parsedDiff != nil || parsedTable != nil
+
         HStack {
             if mine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
@@ -486,10 +514,12 @@ struct TextBubble: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(MausPalette.color(from.color))
                 }
-                // Bots get markdown, you do not — the same split the desktop
-                // makes. Markdown you did not intend is worse than markdown
-                // you did: a message about `**` should show the asterisks.
-                if mine {
+
+                if let diffInfo = parsedDiff {
+                    GitPRDiffCardView(filename: diffInfo.filename, diffText: diffInfo.diff)
+                } else if let tableInfo = parsedTable {
+                    SQLResultTableView(columns: tableInfo.headers, rows: tableInfo.rows)
+                } else if mine {
                     Text(message.text ?? "")
                         .font(.system(size: 17))
                         .foregroundStyle(Color.primary)
@@ -502,32 +532,35 @@ struct TextBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, hasCustomCard ? 2 : 16)
+            .padding(.vertical, hasCustomCard ? 2 : 12)
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.secondary.opacity(mine ? 0.24 : 0.13))
+                Group {
+                    if !hasCustomCard {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(Color.secondary.opacity(mine ? 0.24 : 0.13))
+                    }
+                }
             )
             if !mine { Spacer(minLength: 44) }
         }
     }
 }
 
-/// A tool the bot ran. Deliberately quiet — these are the bulk of a busy
-/// transcript and they are context, not content.
+/// A tool the bot ran. Shows rich execution receipt.
 struct ActivityChip: View {
     let tool: ToolActivity?
 
     var body: some View {
         if let tool {
-            Label {
-                Text(tool.name).lineLimit(1)
-            } icon: {
-                Image(systemName: tool.ok == false ? "exclamationmark.triangle" : "wrench.and.screwdriver")
-            }
-            .font(.system(size: 13))
-            .foregroundStyle(tool.ok == false ? Color.red : Color.secondary)
-            .padding(.leading, 4)
+            SkillExecutionReceiptView(
+                skillName: tool.name,
+                status: tool.ok == false ? "error" : "success",
+                durationMs: 0,
+                parameters: "",
+                output: ""
+            )
+            .padding(.leading, 2)
         }
     }
 }
@@ -540,6 +573,7 @@ struct CardView: View {
     let message: Message
     @EnvironmentObject private var session: Session
     @State private var answering = false
+    @State private var showConfetti = false
 
     /// Deliberately not the literal string "Allow". `options` is whatever the
     /// harness sent, and it only falls back to ["Allow", "Deny"] when the
@@ -563,74 +597,84 @@ struct CardView: View {
 
     var body: some View {
         if let card = message.card {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(card.title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                Text(card.subtitle)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Color.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+            ZStack {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(card.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                    Text(card.subtitle)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                if let held = card.held {
-                    Label(held, systemImage: "exclamationmark.shield")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.orange)
-                }
+                    if let held = card.held {
+                        Label(held, systemImage: "exclamationmark.shield")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.orange)
+                    }
 
-                if card.isPending {
-                    HStack(spacing: 10) {
-                        ForEach(card.options, id: \.self) { option in
-                            Button(option) {
+                    if card.isPending {
+                        HStack(spacing: 10) {
+                            ForEach(card.options, id: \.self) { option in
+                                Button(option) {
+                                    answering = true
+                                    if !Self.isRefusal(option) {
+                                        showConfetti = true
+                                        SoundEffects.playCelebration()
+                                    } else {
+                                        SoundEffects.playActionSuccess()
+                                    }
+                                    Haptics.success()
+                                    Task {
+                                        await session.answer(threadId: chat.threadId, card: card, choice: option)
+                                        answering = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Self.isRefusal(option) ? Color.secondary : Color.accentColor)
+                                .disabled(answering)
+                            }
+                        }
+
+                        // The grant key comes from the card. The phone never
+                        // derives its own, so it cannot permit something subtly
+                        // wider than the computer would have. The same goes for
+                        // the answer: it is one of the options the card offered,
+                        // never a string invented here.
+                        if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat {
+                            Button("Always allow this tool") {
                                 answering = true
-                                SoundEffects.playActionSuccess()
+                                showConfetti = true
+                                SoundEffects.playCelebration()
                                 Haptics.success()
                                 Task {
-                                    await session.answer(threadId: chat.threadId, card: card, choice: option)
+                                    await session.alwaysAllow(bot: bot, card: card)
+                                    await session.answer(threadId: chat.threadId, card: card, choice: allow)
                                     answering = false
                                 }
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Self.isRefusal(option) ? Color.secondary : Color.accentColor)
+                            .font(.system(size: 14))
                             .disabled(answering)
                         }
+                    } else if let answered = card.answered {
+                        Label(answered, systemImage: "checkmark.circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.secondary)
                     }
-
-                    // The grant key comes from the card. The phone never
-                    // derives its own, so it cannot permit something subtly
-                    // wider than the computer would have. The same goes for
-                    // the answer: it is one of the options the card offered,
-                    // never a string invented here.
-                    if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat {
-                        Button("Always allow this tool") {
-                            answering = true
-                            SoundEffects.playCelebration()
-                            Haptics.success()
-                            Task {
-                                await session.alwaysAllow(bot: bot, card: card)
-                                await session.answer(threadId: chat.threadId, card: card, choice: allow)
-                                answering = false
-                            }
-                        }
-                        .font(.system(size: 14))
-                        .disabled(answering)
-                    }
-                } else if let answered = card.answered {
-                    Label(answered, systemImage: "checkmark.circle")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.secondary)
                 }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.secondary.opacity(0.13))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(card.isPending ? Color.accentColor : .clear, lineWidth: 1.5)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.secondary.opacity(0.13))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(card.isPending ? Color.accentColor : .clear, lineWidth: 1.5)
+                }
+
+                ConfettiBurstView(isTriggered: $showConfetti)
             }
         }
     }
@@ -692,43 +736,33 @@ struct StreamingBubble: View {
     let reasoning: String?
 
     var body: some View {
+        let hasReasoningOnly = reasoning != nil && !reasoning!.isEmpty && text?.isEmpty != false
         HStack {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
-                    // Quieter and smaller than an answer, because it is not
-                    // one. Tail-limited: reasoning runs to thousands of words
-                    // and the part worth seeing is always the end.
-                    //
-                    // Plain text, unlike the answer: the tail cut lands
-                    // wherever it lands, and rendering markdown that starts
-                    // mid-syntax invents structure the model did not write.
-                    Text(String(reasoning.suffix(400)))
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    AgentThoughtChamberView(
+                        reasoning: reasoning,
+                        botName: "Bot",
+                        mascotColor: Color.accentColor,
+                        isStreaming: true
+                    )
                 }
                 if let text, !text.isEmpty {
-                    // Same renderer as the settled bubble, for the same
-                    // reason as the padding: a live reply showing `**bold**`
-                    // that snaps to bold on arrival is the message jumping,
-                    // just in a different dimension. The parser tolerates the
-                    // half-finished markdown this is always holding — an
-                    // unclosed fence renders as code, an unclosed link as the
-                    // characters typed so far.
                     MarkdownText(source: text, caret: true)
                         .foregroundStyle(Color.primary)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, hasReasoningOnly ? 2 : 16)
+            .padding(.vertical, hasReasoningOnly ? 2 : 12)
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.secondary.opacity(0.13))
+                Group {
+                    if !hasReasoningOnly {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(Color.secondary.opacity(0.13))
+                    }
+                }
             )
             Spacer(minLength: 44)
         }
-        // No `.textSelection` on purpose: selecting text that is still growing
-        // fights the reader, and the settled bubble a frame later is
-        // selectable anyway.
     }
 }

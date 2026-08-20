@@ -26,6 +26,8 @@ struct ChatView: View {
     @State private var showingTasks = false
     @State private var showingComputerSheet = false
     @State private var shareFile: ShareFile?
+    @State private var showCommandHUD = false
+    @State private var replyingTo: Message?
     @FocusState private var composerFocused: Bool
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -94,7 +96,12 @@ struct ChatView: View {
                                         .frame(maxWidth: .infinity)
                                         .padding(.top, 6)
                                 }
-                                MessageRow(chat: current, message: message)
+                                MessageRow(chat: current, message: message) { msg in
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                                        replyingTo = msg
+                                        composerFocused = true
+                                    }
+                                }
                             }
                             .id(message.id)
                         }
@@ -290,52 +297,116 @@ struct ChatView: View {
     }
 
     private func submit() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if let reply = replyingTo {
+            let quoteFirstLine = (reply.text ?? "Attachment").components(separatedBy: "\n").first ?? ""
+            let quotePrefix = "> \(quoteFirstLine)\n\n"
+            text = quotePrefix + text
+            replyingTo = nil
+        }
         draft = ""
+        showCommandHUD = false
         SoundEffects.playSent()
         Haptics.impact(.medium)
         Task { await session.send(text, to: current) }
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Ask \(current.name)", text: $draft, axis: .vertical)
-                .lineLimit(1...5)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Capsule().fill(Color.secondary.opacity(0.16)))
-                .focused($composerFocused)
-                .submitLabel(.send)
-                // Return sends, Shift+Return breaks the line — the shape
-                // every chat app has. `.ignored` hands the keypress back to
-                // the text field, which is what inserts the newline; there is
-                // no way to type one otherwise once Return is claimed.
-                .onKeyPress(.return, phases: .down) { press in
-                    guard !press.modifiers.contains(.shift) else { return .ignored }
-                    submit()
-                    return .handled
+        VStack(spacing: 0) {
+            if showCommandHUD {
+                CommandSkillHUDView(
+                    text: $draft,
+                    isVisible: $showCommandHUD,
+                    accentColor: MausPalette.color(current.color)
+                ) { cmd in
+                    if cmd.id == "computer" {
+                        showingComputerSheet = true
+                    } else if cmd.id == "tasks" {
+                        showingTasks = true
+                    } else {
+                        draft = cmd.command
+                        submit()
+                    }
                 }
-                // software keyboards have no Shift+Return, so their Return
-                // key is a send — which is what `.submitLabel(.send)` promises
-                .onSubmit(submit)
-
-            Button {
-                submit()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color(uiColor: .systemBackground))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.35))
-                    )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let replyMsg = replyingTo {
+                InlineReplyBanner(
+                    message: replyMsg,
+                    botName: current.name,
+                    accentColor: MausPalette.color(current.color),
+                    replyingTo: $replyingTo
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if draft.isEmpty {
+                PredictiveActionChipsView(
+                    accentColor: MausPalette.color(current.color)
+                ) { chip in
+                    draft = chip.prompt
+                    submit()
+                }
+                .transition(.opacity)
             }
-            .disabled(!canSend)
-            .animation(.easeOut(duration: 0.15), value: canSend)
+
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        showCommandHUD.toggle()
+                    }
+                    Haptics.selection()
+                } label: {
+                    Image(systemName: "command")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.secondary.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
+                TextField("Ask \(current.name)", text: $draft, axis: .vertical)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color.secondary.opacity(0.16)))
+                    .focused($composerFocused)
+                    .submitLabel(.send)
+                    .onChange(of: draft) { _, newDraft in
+                        if newDraft == "/" {
+                            withAnimation { showCommandHUD = true }
+                        } else if !newDraft.hasPrefix("/") && showCommandHUD {
+                            withAnimation { showCommandHUD = false }
+                        }
+                    }
+                    // Return sends, Shift+Return breaks the line — the shape
+                    // every chat app has. `.ignored` hands the keypress back to
+                    // the text field, which is what inserts the newline; there is
+                    // no way to type one otherwise once Return is claimed.
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard !press.modifiers.contains(.shift) else { return .ignored }
+                        submit()
+                        return .handled
+                    }
+                    // software keyboards have no Shift+Return, so their Return
+                    // key is a send — which is what `.submitLabel(.send)` promises
+                    .onSubmit(submit)
+
+                Button {
+                    submit()
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Color(uiColor: .systemBackground))
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.35))
+                        )
+                }
+                .disabled(!canSend)
+                .animation(.easeOut(duration: 0.15), value: canSend)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
         .background(.bar)
     }
 }
@@ -343,6 +414,7 @@ struct ChatView: View {
 struct MessageRow: View {
     let chat: Chat
     let message: Message
+    var onReply: ((Message) -> Void)? = nil
     @EnvironmentObject private var session: Session
     @State private var showingEdit = false
     @State private var editingText = ""
@@ -395,6 +467,9 @@ struct MessageRow: View {
             }
         }
         .contextMenu {
+            Button("Reply", systemImage: "arrowshape.turn.up.left") {
+                onReply?(message)
+            }
             if let text = message.text, !text.isEmpty {
                 Button("Copy Text", systemImage: "doc.on.doc") {
                     PlatformBridge.copyToPasteboard(text)

@@ -8,7 +8,9 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+#if canImport(VisionKit) && !targetEnvironment(macCatalyst)
 import VisionKit
+#endif
 
 struct PairingScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -25,6 +27,13 @@ struct PairingScannerSheet: View {
     var body: some View {
         NavigationStack {
             Group {
+                #if targetEnvironment(macCatalyst)
+                ContentUnavailableView {
+                    Label("Scanner unavailable", systemImage: "qrcode.viewfinder")
+                } description: {
+                    Text("QR code scanning is available on iPhone and iPad. On Mac, choose your computer from the network list or enter the address manually.")
+                }
+                #else
                 if !permissionResolved {
                     ProgressView("Requesting camera access…")
                 } else if !cameraAuthorized {
@@ -69,6 +78,7 @@ struct PairingScannerSheet: View {
                         .padding()
                     }
                 }
+                #endif
             }
             .navigationTitle("Scan QR Code")
             .navigationBarTitleDisplayMode(.inline)
@@ -106,6 +116,7 @@ struct PairingScannerSheet: View {
     }
 }
 
+#if canImport(VisionKit) && !targetEnvironment(macCatalyst)
 private struct PairingQRScanner: UIViewControllerRepresentable {
     let onPayload: (String) -> Bool
 
@@ -171,3 +182,4 @@ private struct PairingQRScanner: UIViewControllerRepresentable {
         }
     }
 }
+#endif

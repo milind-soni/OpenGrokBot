@@ -22,6 +22,7 @@ targets:
   OpenMausCompanion:
     type: application
     platform: iOS
+    supportedDestinations: [iOS, iPadOS, macOS]
     sources:
       - path: App
     dependencies:
@@ -33,7 +34,10 @@ targets:
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: YES
+        TARGETED_DEVICE_FAMILY: "1,2,6"
+        SKIP_INSTALL: NO
+        INSTALL_PATH: "/Applications"
         # The catalog lives in App/, which is already a source path. Generated
         # by `node scripts/make-app-icon.mjs` from the same mascot the app
         # draws, so the icon cannot drift from the thing it depicts.

@@ -15,7 +15,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { DATA_DIR } from "../config.ts";
+import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 import { injectedApiModel, mergeLocalInject } from "./local-inject.ts";
 
@@ -249,6 +249,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (resumeCursor) args.push("--conversation", resumeCursor);
 
       const env = { ...process.env, PATH: augmentedPath() };
+      // The harness process may hold workspace credentials (xai/box/voice
+      // keys, env-injected at boot); none of them are this CLI's to see.
+      stripWorkspaceCredentialEnv(env);
 
       // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
       // owns the process-group vs windowsHide difference (see procs.ts)

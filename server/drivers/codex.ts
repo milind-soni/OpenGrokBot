@@ -11,6 +11,7 @@
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
 
+import { stripWorkspaceCredentialEnv } from "../config.ts";
 import { computerProxyEnv } from "../container-computer.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
@@ -100,6 +101,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // The CLI owns its own ChatGPT login; a leaked API key silently flips
       // billing to pay-as-you-go (agentcal).
       delete env.OPENAI_API_KEY;
+      // The harness process may hold workspace credentials (xai/box/voice
+      // keys, env-injected at boot); none of them are this CLI's to see.
+      stripWorkspaceCredentialEnv(env);
       return env;
     };
     const catalogEnv = childEnv();

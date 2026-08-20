@@ -30,6 +30,7 @@ import {
   loadConfig,
   parseConfigPatch,
   saveConfig,
+  syncCredentialEnv,
   withInstanceCli,
   vpsSshAlias,
   EVENTS_DIR,
@@ -3470,6 +3471,10 @@ const server = createServer(async (req, res) => {
         if (composioPatch.apiKey !== undefined) process.env.COMPOSIO_API_KEY = composioPatch.apiKey;
       } else {
         saveConfig(patch);
+        // loadConfig prefers env over the file for credentials, so the env
+        // must follow the save — otherwise the value injected at boot would
+        // shadow the new key until the next launch
+        syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
       }
       // provider keys change the fleet; a profile or voice edit must not

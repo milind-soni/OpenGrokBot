@@ -8,6 +8,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
+import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
@@ -95,6 +96,33 @@ async function secureComposioConfig() {
     if (!changed) return;
     const temporary = `${configPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, configPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") slog(`credential migration failed: ${error?.message ?? error}`);
+  }
+}
+
+// The remaining workspace credentials (xai/box/voice/OpenCode Go keys) get
+// the same at-rest treatment as the Composio key above: on every packaged
+// boot, any plaintext value found in config.json moves into the encrypted
+// credentials.bin and the plaintext field is deleted. The server saves a
+// mid-session key change back into config.json, so this sweep is also how
+// an updated (or cleared — saved as "") key reaches the encrypted store on
+// the following launch. See workspace-credentials.mjs for the exact rules.
+async function secureWorkspaceConfig() {
+  const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  const configPath = path.join(dataDir, "config.json");
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const migrated = migrateWorkspaceCredentials(config, secureCredentials);
+    // credentials.bin first: if the OS store cannot take the secrets, the
+    // plaintext stays put and the next boot retries — losing the only copy
+    // is the one unacceptable outcome
+    if (migrated.credentialsChanged) await saveSecureCredentials(migrated.credentials);
+    secureCredentials = migrated.credentials;
+    if (!migrated.configChanged) return;
+    const temporary = `${configPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(migrated.config, null, 2), { mode: 0o600 });
     fs.renameSync(temporary, configPath);
   } catch (error) {
     if (error?.code !== "ENOENT") slog(`credential migration failed: ${error?.message ?? error}`);
@@ -193,6 +221,10 @@ async function startServerOn(port) {
       ...(secureCredentials.composioApiKey
         ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
         : {}),
+      // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
+      // the server prefers these over config.json, whose plaintext fields
+      // the boot migration has deleted
+      ...workspaceCredentialEnv(secureCredentials),
       ...(composioBrokerUrl() && secureCredentials.composioBrokerToken
         ? {
             OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
@@ -622,6 +654,7 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     secureCredentials = await loadSecureCredentials();
     await secureComposioConfig();
+    await secureWorkspaceConfig();
     await ensureManagedComposioCredentials();
   }
   // Display capture remains user-initiated. The renderer first sends a

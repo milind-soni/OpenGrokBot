@@ -69,6 +69,8 @@ const dumpEnv = Object.fromEntries(
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
     "XAI_API_KEY",
+    "BOX_TOKEN",
+    "OMB_TTS_KEY",
     "UNSLOTH_STUDIO_AUTH_TOKEN",
   ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
 );

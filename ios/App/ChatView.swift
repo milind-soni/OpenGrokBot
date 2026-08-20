@@ -19,8 +19,12 @@ struct ChatView: View {
     let chat: Chat
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @State private var draft = ""
     @State private var showingTasks = false
+    @State private var showingComputerSheet = false
     @State private var shareFile: ShareFile?
     @FocusState private var composerFocused: Bool
 
@@ -152,17 +156,23 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        #if os(iOS)
+        .navigationBarBackButtonHidden(horizontalSizeClass == .compact)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.secondary.opacity(0.16)))
+            #if os(iOS)
+            if horizontalSizeClass == .compact {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(Color.secondary.opacity(0.16)))
+                    }
                 }
             }
+            #endif
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
                     MausAvatar(color: current.color, size: 26)
@@ -180,8 +190,8 @@ struct ChatView: View {
                 // speaking owns one, and picking for the reader would be a
                 // guess. Bots only.
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        ComputerView(bot: bot)
+                    Button {
+                        showingComputerSheet = true
                     } label: {
                         Image(systemName: "display")
                             .font(.system(size: 15, weight: .medium))
@@ -221,6 +231,23 @@ struct ChatView: View {
                 }
             }
         }
+        .background {
+            Group {
+                if case let .bot(bot) = current {
+                    Button("") {
+                        if bot.busy != true { showingTasks = true }
+                    }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                    Button("") {
+                        showingComputerSheet = true
+                    }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                }
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+        }
         .task {
             // opening a chat is what marks it read, exactly as on the desktop
             if current.unread { await session.markRead(current) }
@@ -233,6 +260,18 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showingTasks) {
             if case let .bot(bot) = current { TaskManagerView(bot: bot) }
+        }
+        .sheet(isPresented: $showingComputerSheet) {
+            if case let .bot(bot) = current {
+                NavigationStack {
+                    ComputerView(bot: bot)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingComputerSheet = false }
+                            }
+                        }
+                }
+            }
         }
         .sheet(item: $shareFile) { file in
             ActivityShareSheet(items: [file.url])
@@ -254,6 +293,8 @@ struct ChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
+        SoundEffects.playSent()
+        Haptics.impact(.medium)
         Task { await session.send(text, to: current) }
     }
 
@@ -303,17 +344,17 @@ struct MessageRow: View {
     let chat: Chat
     let message: Message
     @EnvironmentObject private var session: Session
-    @State private var editingText = ""
     @State private var showingEdit = false
+    @State private var editingText = ""
 
-    private static let reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"]
+    private static let reactionChoices = ["👍", "❤️", "🔥", "🎉", "👀"]
 
     private var versions: [Message] {
         session.state.versions(of: message, inThread: chat.threadId)
     }
 
     var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             content
 
             if let comm = message.comm {
@@ -354,6 +395,11 @@ struct MessageRow: View {
             }
         }
         .contextMenu {
+            if let text = message.text, !text.isEmpty {
+                Button("Copy Text", systemImage: "doc.on.doc") {
+                    PlatformBridge.copyToPasteboard(text)
+                }
+            }
             ForEach(Self.reactionChoices, id: \.self) { emoji in
                 Button(emoji) { Task { await session.react(to: message, in: chat.threadId, emoji: emoji) } }
             }
@@ -488,15 +534,13 @@ struct ActivityChip: View {
 
 /// An option card. When it still has a request behind it, this is the
 /// screen the companion exists for — a bot stopped, and only a person can
-/// let it continue.
+/// answer.
 struct CardView: View {
     let chat: Chat
     let message: Message
     @EnvironmentObject private var session: Session
     @State private var answering = false
 
-    /// The option this card offers that means "go ahead".
-    ///
     /// Deliberately not the literal string "Allow". `options` is whatever the
     /// harness sent, and it only falls back to ["Allow", "Deny"] when the
     /// provider event named no choices of its own (`server/index.ts`) — a card
@@ -540,6 +584,8 @@ struct CardView: View {
                         ForEach(card.options, id: \.self) { option in
                             Button(option) {
                                 answering = true
+                                SoundEffects.playActionSuccess()
+                                Haptics.success()
                                 Task {
                                     await session.answer(threadId: chat.threadId, card: card, choice: option)
                                     answering = false
@@ -559,6 +605,8 @@ struct CardView: View {
                     if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat {
                         Button("Always allow this tool") {
                             answering = true
+                            SoundEffects.playCelebration()
+                            Haptics.success()
                             Task {
                                 await session.alwaysAllow(bot: bot, card: card)
                                 await session.answer(threadId: chat.threadId, card: card, choice: allow)

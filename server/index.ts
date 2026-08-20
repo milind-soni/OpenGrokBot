@@ -412,8 +412,14 @@ async function answerRequest(
   // resolves the request synchronously through the fold, which consumes
   // the askMessageByRequest entry — by the time the await returns, nobody
   // remembers which tool this requestId was about.
+  const thread = store.messagesFor(threadId);
   const cardMessageId = askMessageByRequest.get(`${threadId}:${requestId}`);
-  const card = cardMessageId ? store.messagesFor(threadId).find((m) => m.id === cardMessageId)?.card : undefined;
+  // The map is an in-flight optimization and disappears on restart; the
+  // durable transcript still carries the request id and its audit metadata.
+  const cardMessage = cardMessageId
+    ? thread.find((m) => m.id === cardMessageId)
+    : thread.find((m) => m.card?.requestId === requestId);
+  const card = cardMessage?.card;
   const instance = registry.get(instanceId);
   let outcome: RequestOutcome = "unavailable";
   if (instance) {
@@ -765,6 +771,7 @@ bus.subscribe((event: RuntimeEvent) => {
               summary,
               decision: "card-shown",
               source: "auto-fallback",
+              rule: verdict.rule,
             });
           }
         })();

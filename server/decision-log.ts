@@ -19,7 +19,8 @@
 // the runtime bus (peer-approval.ts appends its cards straight to the
 // store), so wiring them here would mean a second, parallel tap — a
 // separate change if it earns its keep.
-import { appendFileSync, readFileSync, renameSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { appendFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { AutoVerdictSource } from "./auto-approve.ts";
@@ -57,6 +58,22 @@ const FILE_NAME = "decisions.ndjson";
 // is years of human-scale approvals, and anything fancier — dated segments,
 // compression — is more machinery than an audit trail this size warrants.
 const MAX_BYTES = 4 * 1024 * 1024;
+const writeQueues = new Map<string, Promise<void>>();
+
+async function writeDecision(
+  dataDir: string,
+  row: Omit<DecisionRow, "at">,
+  maxBytes: number,
+): Promise<void> {
+  const file = join(dataDir, FILE_NAME);
+  try {
+    if ((await stat(file)).size >= maxBytes) await rename(file, `${file}.1`);
+  } catch {
+    /* no live file yet — nothing to rotate */
+  }
+  const record = redactSecrets({ at: new Date().toISOString(), ...row });
+  await appendFile(file, JSON.stringify(record) + "\n", { mode: 0o600 });
+}
 
 /** Append one decision row. Fire-and-forget, mirroring the event bus tee:
  * the fold that calls this is delivering approvals and cards, and a full
@@ -66,18 +83,25 @@ export function appendDecision(
   row: Omit<DecisionRow, "at">,
   opts?: { maxBytes?: number },
 ): void {
-  try {
-    const file = join(dataDir, FILE_NAME);
-    try {
-      if (statSync(file).size >= (opts?.maxBytes ?? MAX_BYTES)) renameSync(file, `${file}.1`);
-    } catch {
-      /* no live file yet — nothing to rotate */
-    }
-    const record = redactSecrets({ at: new Date().toISOString(), ...row });
-    appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
-  } catch {
-    /* logging must never take down the fold */
-  }
+  const previous = writeQueues.get(dataDir) ?? Promise.resolve();
+  // Serialize stat → optional rotate → append for each directory. Without
+  // this queue two simultaneous approvals can both rotate, overwrite .1,
+  // or append out of decision order.
+  const queued = previous
+    .then(() => writeDecision(dataDir, row, opts?.maxBytes ?? MAX_BYTES))
+    .catch(() => {
+      /* logging must never take down the fold */
+    });
+  writeQueues.set(dataDir, queued);
+  void queued.finally(() => {
+    if (writeQueues.get(dataDir) === queued) writeQueues.delete(dataDir);
+  });
+}
+
+/** Test/shutdown seam: wait until every decision already queued for this
+ * directory has reached disk. Normal request paths deliberately do not wait. */
+export async function flushDecisionLog(dataDir: string): Promise<void> {
+  await writeQueues.get(dataDir);
 }
 
 const isDecisionRow = (value: unknown): value is DecisionRow =>

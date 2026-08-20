@@ -94,7 +94,7 @@ export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null 
   const seen = new Set<string>();
   for (const row of records) {
     if (typeof row === "string") {
-      pushModel(options, seen, row, undefined, true);
+      pushModel(options, seen, row);
       continue;
     }
     const rec = asRecord(row);
@@ -105,7 +105,7 @@ export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null 
       (typeof rec.label === "string" && rec.label) ||
       (typeof rec.displayName === "string" && rec.displayName) ||
       (typeof rec.name === "string" && rec.name !== id ? rec.name : undefined);
-    pushModel(options, seen, id, label || undefined, true);
+    pushModel(options, seen, id, label || undefined);
   }
   if (!options.length) return null;
 
@@ -159,7 +159,7 @@ export function decodeCursorModelText(text: string): ModelCatalog | null {
     const id = (parts[0] ?? "").trim();
     const rawLabel = parts.slice(1).join(" ").trim();
     const { label, isDefault, isCurrent } = stripModelMarkers(rawLabel);
-    pushModel(options, seen, id, label || undefined, true);
+    pushModel(options, seen, id, label || undefined);
     if (isDefault) markedDefault = id;
     if (isCurrent) markedCurrent = id;
   }

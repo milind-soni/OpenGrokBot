@@ -47,7 +47,7 @@ describe("decodeCursorModelCatalog", () => {
     });
     expect(catalog?.default).toBe("composer-2.5");
     expect(catalog?.options.slice(0, STATIC_CURSOR_MODELS.options.length)).toEqual(STATIC_CURSOR_MODELS.options);
-    expect(catalog?.options).toContainEqual({ id: "cursor-live", label: "Cursor Live", custom: true });
+    expect(catalog?.options).toContainEqual({ id: "cursor-live", label: "Cursor Live" });
     expect(catalog?.options.some((option) => option.id === "bad id")).toBe(false);
   });
 
@@ -55,12 +55,10 @@ describe("decodeCursorModelCatalog", () => {
     expect(decodeCursorModelCatalog({ data: [{ id: "extra-one", label: "Extra One" }] })?.options).toContainEqual({
       id: "extra-one",
       label: "Extra One",
-      custom: true,
     });
     expect(decodeCursorModelCatalog(["composer-2.5", "brand-new"])?.options).toContainEqual({
       id: "brand-new",
       label: "Brand New",
-      custom: true,
     });
   });
 
@@ -81,7 +79,7 @@ composer-2.5 - Composer 2.5 (current)
 cursor-text - Cursor Text
 `);
     expect(catalog?.default).toBe("auto");
-    expect(catalog?.options).toContainEqual({ id: "cursor-text", label: "Cursor Text", custom: true });
+    expect(catalog?.options).toContainEqual({ id: "cursor-text", label: "Cursor Text" });
     expect(catalog?.options).toContainEqual({ id: "composer-2.5", label: "Composer 2.5" });
   });
 
@@ -134,7 +132,7 @@ describe("CursorAgentDriver", () => {
       config: { cli: FAKE_CLI, fullAuto: false },
     });
     try {
-      expect(instance.models.options.some((option) => option.id === "cursor-live" && option.custom)).toBe(true);
+      expect(instance.models.options.some((option) => option.id === "cursor-live")).toBe(true);
       expect(instance.models.default).toBe("auto");
     } finally {
       await instance.dispose();

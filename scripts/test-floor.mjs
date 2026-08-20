@@ -21,12 +21,36 @@ import { pathToFileURL } from "node:url";
 
 // The FLOOR, not an exact count. An exact count would catch the failure mode
 // too, but it would need editing on every PR that adds or removes a test —
-// so it is set to roughly 90% of the suite's size when this gate landed
-// (1081 tests, 2026-08). Ordinary churn never touches it; losing a whole
-// file's worth of tests does. If the suite legitimately shrinks below this,
+// so this keeps a small buffer below the most recently verified full run
+// (1091 registered tests, 2026-08). Adding tests never touches it; removing
+// a meaningful slice does. If the suite legitimately shrinks below this,
 // lower the number here in the same PR that removes the tests, so the change
 // is a visible, reviewed decision rather than a silent one.
-export const TEST_COUNT_FLOOR = 970;
+export const TEST_COUNT_FLOOR = 1070;
+
+const TARGET_FLAGS = ["--changed", "--related", "--shard", "--exclude", "--testNamePattern", "-t", "--project"];
+
+/** A path/name/project filter intentionally collects only part of the suite,
+ * so applying the global floor would make Vitest's normal targeted-run
+ * workflow unusable. CI invokes the wrapper without arguments and therefore
+ * always keeps the floor. */
+export function isTargetedRun(args) {
+  return args.some((arg) => {
+    if (!arg.startsWith("-")) return true;
+    return TARGET_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`));
+  });
+}
+
+export function vitestArguments(vitestBin, summaryFile, cliArgs) {
+  return [
+    vitestBin,
+    "run",
+    ...cliArgs,
+    "--reporter=default",
+    "--reporter=json",
+    `--outputFile.json=${summaryFile}`,
+  ];
+}
 
 // Registered tests, not executed tests, on purpose: POSIX-only process tests
 // self-skip on Windows, and a skipped test still proves its file was imported
@@ -63,7 +87,7 @@ export function evaluateRun({ exitCode, summary }, floor = TEST_COUNT_FLOOR) {
     };
   }
 
-  if (counted < floor) {
+  if (floor !== null && counted < floor) {
     return {
       ok: false,
       message:
@@ -77,11 +101,13 @@ export function evaluateRun({ exitCode, summary }, floor = TEST_COUNT_FLOOR) {
 
   return {
     ok: true,
-    message: `test-floor: ${counted} tests counted, floor is ${floor} ✓`,
+    message: floor === null
+      ? `test-floor: ${counted} targeted tests counted (global floor intentionally skipped) ✓`
+      : `test-floor: ${counted} tests counted, floor is ${floor} ✓`,
   };
 }
 
-async function main() {
+async function main(cliArgs = process.argv.slice(2)) {
   // Resolve vitest's CLI entry and run it under this same Node binary instead
   // of shelling out to `pnpm exec` — spawning package-manager shims is the
   // classic Windows CI papercut (.cmd resolution), and this script runs on
@@ -102,13 +128,7 @@ async function main() {
   const exitCode = await new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [
-        vitestBin,
-        "run",
-        "--reporter=default",
-        "--reporter=json",
-        `--outputFile.json=${summaryFile}`,
-      ],
+      vitestArguments(vitestBin, summaryFile, cliArgs),
       { stdio: "inherit" },
     );
     child.on("error", reject);
@@ -129,7 +149,7 @@ async function main() {
     // Scratch cleanup must never decide the verdict.
   }
 
-  const result = evaluateRun({ exitCode, summary });
+  const result = evaluateRun({ exitCode, summary }, isTargetedRun(cliArgs) ? null : TEST_COUNT_FLOOR);
   console[result.ok ? "log" : "error"](result.message);
   process.exit(result.ok ? 0 : (exitCode ?? 1) || 1);
 }

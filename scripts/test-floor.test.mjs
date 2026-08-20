@@ -4,7 +4,7 @@
 // down here; the process-spawning half of test-floor.mjs stays a thin shell
 // around it.
 import { describe, expect, it } from "vitest";
-import { evaluateRun, TEST_COUNT_FLOOR } from "./test-floor.mjs";
+import { evaluateRun, isTargetedRun, TEST_COUNT_FLOOR, vitestArguments } from "./test-floor.mjs";
 
 const summary = (overrides = {}) => ({
   numTotalTests: 1000,
@@ -60,5 +60,38 @@ describe("evaluateRun", () => {
     const belowFloor = summary({ numTotalTests: TEST_COUNT_FLOOR - 1 });
     expect(evaluateRun({ exitCode: 0, summary: atFloor }).ok).toBe(true);
     expect(evaluateRun({ exitCode: 0, summary: belowFloor }).ok).toBe(false);
+  });
+
+  it("allows an intentional targeted run without weakening its exit checks", () => {
+    expect(evaluateRun({ exitCode: 0, summary: summary({ numTotalTests: 1 }) }, null)).toMatchObject({ ok: true });
+    expect(evaluateRun({ exitCode: 1, summary: summary({ numTotalTests: 1 }) }, null)).toMatchObject({ ok: false });
+  });
+});
+
+describe("isTargetedRun", () => {
+  it("recognizes positional file filters and Vitest collection filters", () => {
+    expect(isTargetedRun(["server/config.test.ts"])).toBe(true);
+    expect(isTargetedRun(["--testNamePattern", "credential"])).toBe(true);
+    expect(isTargetedRun(["--changed=origin/main"])).toBe(true);
+    expect(isTargetedRun(["--project", "unit"])).toBe(true);
+  });
+
+  it("keeps the floor for an unfiltered run with execution-only options", () => {
+    expect(isTargetedRun([])).toBe(false);
+    expect(isTargetedRun(["--coverage", "--pool=threads"])).toBe(false);
+  });
+
+  it("forwards the caller's filters to Vitest", () => {
+    expect(vitestArguments("/vitest.mjs", "/summary.json", ["server/config.test.ts", "-t", "env"]))
+      .toEqual([
+        "/vitest.mjs",
+        "run",
+        "server/config.test.ts",
+        "-t",
+        "env",
+        "--reporter=default",
+        "--reporter=json",
+        "--outputFile.json=/summary.json",
+      ]);
   });
 });

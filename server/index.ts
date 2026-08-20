@@ -13,7 +13,7 @@ import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { roomTurnTimeoutMessage, scheduleRoomTurnTimeout } from "./room-turn-timeout.ts";
+import { RoomTurnStallRegistry, roomTurnTimeoutMessage, scheduleRoomTurnTimeout } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
@@ -518,12 +518,13 @@ const turnUsage = new Map<string, { input: number; output: number }>();
 const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 256 });
 
 // ── stall watchdog ─────────────────────────────────────────────────────
-// ask_bot has a 4-minute ceiling and room turns a 5-minute one; the main
-// 1:1 path had none, so a wedged CLI left its bot busy forever. The
-// watchdog stops a turn whose thread has emitted NOTHING for stallMs —
+// ask_bot has a 4-minute ceiling, while room turns have a separately
+// configurable absolute ceiling. The main 1:1 path had none, so a wedged CLI
+// left its bot busy forever. The watchdog stops a turn whose thread has emitted NOTHING for stallMs —
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
 const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
+const roomStallCompletions = new RoomTurnStallRegistry();
 const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
   checkMs: 60_000,
@@ -540,6 +541,7 @@ const watchdog = new TurnWatchdog({
     });
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
     turnUsage.delete(turn.threadId);
+    roomStallCompletions.stall(turn.threadId);
     // ACP interruption settles within five seconds; other adapters settle
     // sooner. Keep ownership during that grace period so another turn cannot
     // overlap the process we are stopping. The normal turn.completed fold
@@ -1824,21 +1826,25 @@ async function runGroupMemberTurn(
   // chained @mention can be routed afterwards
   let replyText = "";
   const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
-  const outcome = await new Promise<"settled" | "dispatch_failed" | "timed_out">((resolve) => {
+  const outcome = await new Promise<"settled" | "dispatch_failed" | "stalled" | "timed_out">((resolve) => {
     let done = false;
-    const finish = (value: "settled" | "dispatch_failed" | "timed_out") => {
+    let timer!: ReturnType<typeof setTimeout>;
+    let unsub = () => {};
+    let unregisterStall = () => {};
+    const finish = (value: "settled" | "dispatch_failed" | "stalled" | "timed_out") => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       unsub();
+      unregisterStall();
       resolve(value);
     };
-    const unsub = bus.subscribe((e: RuntimeEvent) => {
+    unsub = bus.subscribe((e: RuntimeEvent) => {
       if (e.threadId !== group.threadId) return;
       if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
       else if (e.type === "turn.completed") finish("settled");
     });
-    const timer = scheduleRoomTurnTimeout(timeoutMinutes, () => {
+    timer = scheduleRoomTurnTimeout(timeoutMinutes, () => {
       void instance.adapter.interruptTurn(group.threadId).catch(() => {});
       store.appendMessage(group.threadId, {
         role: "bot",
@@ -1848,6 +1854,7 @@ async function runGroupMemberTurn(
       });
       finish("timed_out");
     });
+    unregisterStall = roomStallCompletions.register(group.threadId, () => finish("stalled"));
     watchdog.watch(group.threadId, bot.id);
     instance.adapter
       .sendTurn({
@@ -1872,7 +1879,7 @@ async function runGroupMemberTurn(
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
-  if (outcome === "timed_out") return false;
+  if (outcome === "stalled" || outcome === "timed_out") return false;
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.

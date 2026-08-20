@@ -224,6 +224,24 @@ export interface ConfigStatus {
   profile?: { name: string; email: string };
 }
 
+export type ConfigStatusFrame = Pick<
+  ConfigStatus,
+  "xai" | "composio" | "box" | "vps" | "rooms" | "opencodeGo" | "tts" | "profile"
+>;
+
+export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
+  return {
+    xai: frame.xai,
+    composio: frame.composio,
+    box: frame.box,
+    vps: frame.vps,
+    rooms: frame.rooms,
+    opencodeGo: frame.opencodeGo,
+    tts: frame.tts,
+    profile: frame.profile,
+  };
+}
+
 /** How an engine gets installed — declared by its driver, mirrors
  * EngineInstall in server/contracts.ts. Absent for engines that need no
  * local binary. `command` omits platforms that have no one-liner. */
@@ -1455,15 +1473,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: {
-              xai: frame.xai,
-              composio: frame.composio,
-              box: frame.box,
-              vps: frame.vps,
-              rooms: frame.rooms,
-              tts: frame.tts,
-              profile: frame.profile,
-            },
+            config: configStatusFromFrame(frame),
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))

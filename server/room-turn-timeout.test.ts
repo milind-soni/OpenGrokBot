@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  RoomTurnStallRegistry,
   roomTurnTimeoutMessage,
   roomTurnTimeoutMs,
   scheduleRoomTurnTimeout,
@@ -34,6 +35,51 @@ describe("room turn timeout", () => {
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("settles a stalled room turn once, cancels its ceiling, and can be reused", async () => {
+    vi.useFakeTimers();
+    const stalls = new RoomTurnStallRegistry();
+    const onTimeout = vi.fn();
+    let resolveFinished!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    let completions = 0;
+    let timer!: ReturnType<typeof setTimeout>;
+    let unregister = () => {};
+    const finish = () => {
+      if (completions > 0) return;
+      completions += 1;
+      clearTimeout(timer);
+      unregister();
+      resolveFinished();
+    };
+    timer = scheduleRoomTurnTimeout(20, () => {
+      onTimeout();
+      finish();
+    });
+    unregister = stalls.register("room-thread", finish);
+
+    expect(stalls.stall("room-thread")).toBe(true);
+    expect(stalls.stall("room-thread")).toBe(false);
+    await finished;
+    expect(completions).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(completions).toBe(1);
+
+    const settledElsewhere = vi.fn();
+    const cleanup = stalls.register("room-thread", settledElsewhere);
+    cleanup();
+    expect(stalls.stall("room-thread")).toBe(false);
+    expect(settledElsewhere).not.toHaveBeenCalled();
+
+    const nextTurn = vi.fn();
+    stalls.register("room-thread", nextTurn);
+    expect(stalls.stall("room-thread")).toBe(true);
+    expect(nextTurn).toHaveBeenCalledOnce();
   });
 
   it("formats singular and plural timeout messages", () => {

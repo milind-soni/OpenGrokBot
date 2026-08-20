@@ -832,6 +832,30 @@ describe("harness HTTP API", () => {
     expect(nothing.status).toBe(400);
   });
 
+  it("validates and persists the global room turn timeout", async () => {
+    const before = await api("GET", "/api/config");
+    expect(before.status).toBe(200);
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 5 });
+
+    for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
+      const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.error).toContain("rooms.turnTimeoutMinutes");
+    }
+
+    const saved = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 20 } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    const after = await api("GET", "/api/config");
+    expect(after.body.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
+
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+  });
+
   it("validates the non-secret VPS alias and keeps old bots on Box by default", async () => {
     const before = await api("GET", "/api/bots");
     const bot = before.body.bots[0];

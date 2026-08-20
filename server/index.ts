@@ -30,6 +30,7 @@ import {
   instanceConfigs,
   loadConfig,
   parseConfigPatch,
+  roomTurnTimeoutMinutes,
   saveConfig,
   syncCredentialEnv,
   withInstanceCli,
@@ -2115,6 +2116,7 @@ function configStatus() {
     tts: tts.describeVoice(cfg),
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
   };
 }
 
@@ -3642,12 +3644,13 @@ const server = createServer(async (req, res) => {
         syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
       }
-      // provider keys change the fleet; a profile or voice edit must not
-      // kill in-flight turns with a pointless reload — no driver reads
-      // either, and picking a voice mid-turn should be free
-      // The VPS alias is consumed by lifecycle commands, not provider
-      // engines. Saving it must not interrupt an in-flight turn.
-      if (Object.keys(patch).some((k) => k !== "profile" && k !== "tts" && k !== "vps")) await reloadProviders();
+      // Provider keys change the fleet. Profile, voice, VPS, and room timeout
+      // changes do not rebuild it: no driver reads them, and they should not
+      // interrupt in-flight turns.
+      const reloadKeys = Object.keys(patch).filter(
+        (key) => key !== "profile" && key !== "tts" && key !== "vps" && key !== "rooms",
+      );
+      if (reloadKeys.length > 0) await reloadProviders();
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);

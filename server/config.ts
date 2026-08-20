@@ -13,6 +13,10 @@ import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schem
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
+export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 5;
+export const MIN_ROOM_TURN_TIMEOUT_MINUTES = 1;
+export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
+
 export function isValidSshAlias(value: unknown): value is string {
   return typeof value === "string" && SSH_ALIAS.test(value);
 }
@@ -36,6 +40,13 @@ const vpsConfigSchema = z.object({
     message: "must be a simple SSH config alias",
   }).optional(),
 });
+const roomConfigSchema = z.object({
+  turnTimeoutMinutes: z
+    .number()
+    .int()
+    .min(MIN_ROOM_TURN_TIMEOUT_MINUTES)
+    .max(MAX_ROOM_TURN_TIMEOUT_MINUTES),
+});
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
   displayName: optionalText,
@@ -58,6 +69,7 @@ const appConfigSchema = z.object({
   tts: z.object({ key: optionalText, voice: optionalText }).optional(),
   /** Non-secret profile details shown in the sidebar. */
   profile: z.object({ name: optionalText, email: optionalText }).optional(),
+  rooms: roomConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
@@ -72,6 +84,7 @@ export interface AppConfig {
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; voice?: string };
   profile?: { name?: string; email?: string };
+  rooms?: { turnTimeoutMinutes: number };
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
@@ -92,6 +105,10 @@ export function parseConfigPatch(value: JsonValue): ConfigPatch {
 
 export function vpsSshAlias(cfg: AppConfig): string | null {
   return isValidSshAlias(cfg.vps?.sshAlias) ? cfg.vps.sshAlias : null;
+}
+
+export function roomTurnTimeoutMinutes(cfg: AppConfig): number {
+  return cfg.rooms?.turnTimeoutMinutes ?? DEFAULT_ROOM_TURN_TIMEOUT_MINUTES;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -193,7 +210,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile"] as const) {
+  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "profile", "rooms"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

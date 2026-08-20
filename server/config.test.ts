@@ -10,6 +10,7 @@ import {
   loadConfig,
   parseConfigPatch,
   parseStoredConfig,
+  roomTurnTimeoutMinutes,
   stripWorkspaceCredentialEnv,
   syncCredentialEnv,
   vpsSshAlias,
@@ -48,6 +49,23 @@ describe("configuration boundaries", () => {
     expect(vpsSshAlias({ vps: { sshAlias: "production-vps" } })).toBe("production-vps");
     expect(vpsSshAlias({ vps: { sshAlias: "-bad" } })).toBeNull();
   });
+
+  it("accepts a persisted global room turn timeout and supplies the legacy default", () => {
+    expect(parseStoredConfig({ rooms: { turnTimeoutMinutes: 20 } })).toEqual({
+      rooms: { turnTimeoutMinutes: 20 },
+    });
+    expect(roomTurnTimeoutMinutes({ rooms: { turnTimeoutMinutes: 20 } })).toBe(20);
+    expect(roomTurnTimeoutMinutes({})).toBe(5);
+  });
+
+  it.each([0, 1.5, 1441, "20", null])(
+    "rejects an invalid room turn timeout: %j",
+    (turnTimeoutMinutes) => {
+      expect(() => parseConfigPatch({ rooms: { turnTimeoutMinutes } })).toThrow(
+        "rooms.turnTimeoutMinutes",
+      );
+    },
+  );
 });
 
 describe("default fleet", () => {

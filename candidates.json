@@ -1,0 +1,5654 @@
+[
+ [
+  "Escape",
+  15
+ ],
+ [
+  "text-ink-secondary hover:text-ink",
+  11
+ ],
+ [
+  "Enter",
+  10
+ ],
+ [
+  "Save",
+  9
+ ],
+ [
+  "flex justify-start",
+  9
+ ],
+ [
+  "This computer",
+  8
+ ],
+ [
+  "rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink",
+  8
+ ],
+ [
+  "text-[10px] uppercase tracking-wider text-ink-secondary",
+  8
+ ],
+ [
+  " for ",
+  7
+ ],
+ [
+  ", expected ",
+  7
+ ],
+ [
+  "rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink",
+  7
+ ],
+ [
+  ") scale(",
+  6
+ ],
+ [
+  "Cloud VM",
+  6
+ ],
+ [
+  "Local VM",
+  6
+ ],
+ [
+  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
+  6
+ ],
+ [
+  ", or ",
+  5
+ ],
+ [
+  "Cancel",
+  5
+ ],
+ [
+  "Cloud",
+  5
+ ],
+ [
+  "Companion",
+  5
+ ],
+ [
+  "Literal",
+  5
+ ],
+ [
+  " more)",
+  4
+ ],
+ [
+  ") translate(",
+  4
+ ],
+ [
+  "Clear",
+  4
+ ],
+ [
+  "Connected",
+  4
+ ],
+ [
+  "DetermineComponentFrameRoot",
+  4
+ ],
+ [
+  "Off",
+  4
+ ],
+ [
+  "Runs on",
+  4
+ ],
+ [
+  "Today",
+  4
+ ],
+ [
+  "Try again",
+  4
+ ],
+ [
+  "Voice",
+  4
+ ],
+ [
+  "bg-raised text-ink hover:bg-raised-hover",
+  4
+ ],
+ [
+  "border-hairline/50 bg-inset hover:bg-raised/60",
+  4
+ ],
+ [
+  "flex flex-col gap-4",
+  4
+ ],
+ [
+  "flex gap-2",
+  4
+ ],
+ [
+  "flex w-full justify-start",
+  4
+ ],
+ [
+  "text-ink-secondary hover:bg-raised/60 hover:text-ink",
+  4
+ ],
+ [
+  " restored",
+  3
+ ],
+ [
+  ",body:JSON.stringify({text:_.text})}).catch(w);break;case",
+  3
+ ],
+ [
+  ",bot:E.bot})).catch(w);break;case",
+  3
+ ],
+ [
+  "Activity",
+  3
+ ],
+ [
+  "ArrowDown",
+  3
+ ],
+ [
+  "ArrowUp",
+  3
+ ],
+ [
+  "Bot",
+  3
+ ],
+ [
+  "DataView",
+  3
+ ],
+ [
+  "Deleted MAUS",
+  3
+ ],
+ [
+  "Event '",
+  3
+ ],
+ [
+  "File-change approval requested",
+  3
+ ],
+ [
+  "Invalid argument",
+  3
+ ],
+ [
+  "Local",
+  3
+ ],
+ [
+  "PASTED",
+  3
+ ],
+ [
+  "Ready",
+  3
+ ],
+ [
+  "Tab",
+  3
+ ],
+ [
+  "Usage",
+  3
+ ],
+ [
+  "blockQuotePrefixWhitespace",
+  3
+ ],
+ [
+  "characterReferenceMarkerNumeric",
+  3
+ ],
+ [
+  "disabled:cursor-not-allowed disabled:opacity-50",
+  3
+ ],
+ [
+  "mb-1.5 block text-[11.5px] font-medium text-ink-secondary",
+  3
+ ],
+ [
+  "mb-1.5 block text-[12px] font-medium text-ink-secondary",
+  3
+ ],
+ [
+  "mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary",
+  3
+ ],
+ [
+  "min-w-0 flex-1 truncate",
+  3
+ ],
+ [
+  "mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover",
+  3
+ ],
+ [
+  "mt-3 flex gap-2",
+  3
+ ],
+ [
+  "mt-3 flex overflow-hidden rounded-lg border border-hairline/40",
+  3
+ ],
+ [
+  "needs you",
+  3
+ ],
+ [
+  "noopener noreferrer",
+  3
+ ],
+ [
+  "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
+  3
+ ],
+ [
+  "remove-buggy-html-in-markdown-parser",
+  3
+ ],
+ [
+  "replace-allownode-allowedtypes-and-disallowedtypes",
+  3
+ ],
+ [
+  "text-[11.5px] uppercase tracking-wide text-ink-secondary",
+  3
+ ],
+ [
+  "text-ink-secondary hover:bg-raised hover:text-ink",
+  3
+ ],
+ [
+  "truncate text-[14px] font-semibold text-ink",
+  3
+ ],
+ [
+  "truncate text-[14px] text-ink",
+  3
+ ],
+ [
+  " Connected",
+  2
+ ],
+ [
+  " Hang up",
+  2
+ ],
+ [
+  " Jump to latest",
+  2
+ ],
+ [
+  " or ",
+  2
+ ],
+ [
+  " tok",
+  2
+ ],
+ [
+  " transform=",
+  2
+ ],
+ [
+  "+d),i.setAttribute(c,d);break;case",
+  2
+ ],
+ [
+  ",body:JSON.stringify(_.patch)}).catch(w);break;case",
+  2
+ ],
+ [
+  ",body:JSON.stringify({hidden:!1})});r({type:",
+  2
+ ],
+ [
+  ",i),c.head.appendChild(v)),v={type:",
+  2
+ ],
+ [
+  "/><circle fill=",
+  2
+ ],
+ [
+  ":t.message.tool?.ok===!0?",
+  2
+ ],
+ [
+  "?t.message.tool?.ok===!1?",
+  2
+ ],
+ [
+  "A room member",
+  2
+ ],
+ [
+  "Archive ",
+  2
+ ],
+ [
+  "Array",
+  2
+ ],
+ [
+  "ArrayBuffer",
+  2
+ ],
+ [
+  "Ask me before contacting other bots",
+  2
+ ],
+ [
+  "Auto mode",
+  2
+ ],
+ [
+  "BigInt",
+  2
+ ],
+ [
+  "Bot settings",
+  2
+ ],
+ [
+  "Call unavailable",
+  2
+ ],
+ [
+  "Calls need macOS dictation, which isn't available here yet.",
+  2
+ ],
+ [
+  "Cannot `",
+  2
+ ],
+ [
+  "Cannot close `",
+  2
+ ],
+ [
+  "Chief of Staff",
+  2
+ ],
+ [
+  "Close the Inspector",
+  2
+ ],
+ [
+  "Command approval requested",
+  2
+ ],
+ [
+  "Computer",
+  2
+ ],
+ [
+  "Connected apps",
+  2
+ ],
+ [
+  "Connections",
+  2
+ ],
+ [
+  "Context",
+  2
+ ],
+ [
+  "Copy command",
+  2
+ ],
+ [
+  "Copy message",
+  2
+ ],
+ [
+  "Cost",
+  2
+ ],
+ [
+  "Couldn't display screen preview.",
+  2
+ ],
+ [
+  "Create local webhook",
+  2
+ ],
+ [
+  "Create schedule",
+  2
+ ],
+ [
+  "Default",
+  2
+ ],
+ [
+  "Delete routine",
+  2
+ ],
+ [
+  "Dictation needs Microphone + Speech Recognition access in System Settings.",
+  2
+ ],
+ [
+  "Dictation stopped unexpectedly. Check Microphone and Speech Recognition access.",
+  2
+ ],
+ [
+  "Dismiss",
+  2
+ ],
+ [
+  "ECI assignment value out of range",
+  2
+ ],
+ [
+  "Each bot's own folder",
+  2
+ ],
+ [
+  "Edit",
+  2
+ ],
+ [
+  "Edit message",
+  2
+ ],
+ [
+  "Edit settings",
+  2
+ ],
+ [
+  "ElevenLabs key",
+  2
+ ],
+ [
+  "Empty payload",
+  2
+ ],
+ [
+  "Every day",
+  2
+ ],
+ [
+  "Expected non-empty string",
+  2
+ ],
+ [
+  "Expected usable value, not `",
+  2
+ ],
+ [
+  "Failed to fetch remote config from PostHog.",
+  2
+ ],
+ [
+  "Fragment",
+  2
+ ],
+ [
+  "Fri",
+  2
+ ],
+ [
+  "Hang up",
+  2
+ ],
+ [
+  "Hear this voice",
+  2
+ ],
+ [
+  "Identifier",
+  2
+ ],
+ [
+  "Interrupt",
+  2
+ ],
+ [
+  "Jump to latest messages",
+  2
+ ],
+ [
+  "Listening",
+  2
+ ],
+ [
+  "MAUS setup",
+  2
+ ],
+ [
+  "Mask value out of range",
+  2
+ ],
+ [
+  "Mon",
+  2
+ ],
+ [
+  "New schedule",
+  2
+ ],
+ [
+  "Not now",
+  2
+ ],
+ [
+  "Open VPS settings",
+  2
+ ],
+ [
+  "Optional",
+  2
+ ],
+ [
+  "Pause",
+  2
+ ],
+ [
+  "Paused",
+  2
+ ],
+ [
+  "Push to talk",
+  2
+ ],
+ [
+  "Push to talk couldn't start. Check Microphone and Speech Recognition access.",
+  2
+ ],
+ [
+  "Reference",
+  2
+ ],
+ [
+  "Regenerate response",
+  2
+ ],
+ [
+  "Reset",
+  2
+ ],
+ [
+  "Resume",
+  2
+ ],
+ [
+  "Routine",
+  2
+ ],
+ [
+  "Sat",
+  2
+ ],
+ [
+  "Save changes",
+  2
+ ],
+ [
+  "Schedules",
+  2
+ ],
+ [
+  "Search apps",
+  2
+ ],
+ [
+  "Search models",
+  2
+ ],
+ [
+  "Selected screen",
+  2
+ ],
+ [
+  "Self-hosted VPS",
+  2
+ ],
+ [
+  "Send",
+  2
+ ],
+ [
+  "Settings",
+  2
+ ],
+ [
+  "Setup",
+  2
+ ],
+ [
+  "Show earlier messages (",
+  2
+ ],
+ [
+  "Show later messages (",
+  2
+ ],
+ [
+  "Space",
+  2
+ ],
+ [
+  "Stop",
+  2
+ ],
+ [
+  "Stop this turn",
+  2
+ ],
+ [
+  "Sun",
+  2
+ ],
+ [
+  "Suspense",
+  2
+ ],
+ [
+  "SuspenseList",
+  2
+ ],
+ [
+  "Team member ",
+  2
+ ],
+ [
+  "The VPS Cua desktop is not ready yet",
+  2
+ ],
+ [
+  "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again.",
+  2
+ ],
+ [
+  "The microphone couldn't start. Check Microphone and Speech Recognition access.",
+  2
+ ],
+ [
+  "This engine cannot contact other bots",
+  2
+ ],
+ [
+  "Thu",
+  2
+ ],
+ [
+  "Tokens",
+  2
+ ],
+ [
+  "Try microphone again",
+  2
+ ],
+ [
+  "Tue",
+  2
+ ],
+ [
+  "Turns",
+  2
+ ],
+ [
+  "Use a local model",
+  2
+ ],
+ [
+  "Version ",
+  2
+ ],
+ [
+  "Webhook",
+  2
+ ],
+ [
+  "Webhook event",
+  2
+ ],
+ [
+  "Webhooks",
+  2
+ ],
+ [
+  "Wed",
+  2
+ ],
+ [
+  "Weekdays",
+  2
+ ],
+ [
+  "Working",
+  2
+ ],
+ [
+  "Working folder",
+  2
+ ],
+ [
+  "Yesterday",
+  2
+ ],
+ [
+  "[object Object]",
+  2
+ ],
+ [
+  "` instead",
+  2
+ ],
+ [
+  "absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink",
+  2
+ ],
+ [
+  "animate-caret ml-0.5 inline-block h-[14px] w-[2px] bg-ink align-middle",
+  2
+ ],
+ [
+  "bg-accent text-white hover:brightness-110",
+  2
+ ],
+ [
+  "bg-raised text-danger hover:bg-raised-hover",
+  2
+ ],
+ [
+  "border-hairline/50 bg-panel hover:bg-raised/60",
+  2
+ ],
+ [
+  "border-transparent text-ink-secondary hover:text-ink",
+  2
+ ],
+ [
+  "characterReferenceMarkerHexadecimal",
+  2
+ ],
+ [
+  "failed to load script",
+  2
+ ],
+ [
+  "flex justify-center",
+  2
+ ],
+ [
+  "flex justify-center pt-2",
+  2
+ ],
+ [
+  "flex-1 overflow-y-auto px-5 [overflow-anchor:none]",
+  2
+ ],
+ [
+  "flex-1 py-1.5 text-[13px] capitalize",
+  2
+ ],
+ [
+  "grid grid-cols-2 gap-2",
+  2
+ ],
+ [
+  "grid grid-cols-2 gap-3",
+  2
+ ],
+ [
+  "linux-local-control-title",
+  2
+ ],
+ [
+  "max-w-[480px] truncate font-mono",
+  2
+ ],
+ [
+  "min-w-0 flex-1 truncate text-[13px] font-medium text-ink",
+  2
+ ],
+ [
+  "mt-0.5 truncate text-[12.5px] text-ink-secondary",
+  2
+ ],
+ [
+  "mt-1 text-[12.5px] text-ink-secondary hover:text-ink",
+  2
+ ],
+ [
+  "mt-2.5 flex gap-2",
+  2
+ ],
+ [
+  "mx-auto flex max-w-[900px] flex-col gap-3 pb-4",
+  2
+ ],
+ [
+  "pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-secondary",
+  2
+ ],
+ [
+  "px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  2
+ ],
+ [
+  "relative flex h-full min-w-0 flex-1 flex-col bg-app",
+  2
+ ],
+ [
+  "rounded-full border border-hairline/50 px-4 py-2 text-[13.5px] text-ink hover:bg-raised",
+  2
+ ],
+ [
+  "rounded-full border border-warning/40 px-3 py-1.5 text-[12px] hover:bg-warning/10",
+  2
+ ],
+ [
+  "rounded-md p-1.5 hover:bg-raised",
+  2
+ ],
+ [
+  "rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12px] text-danger",
+  2
+ ],
+ [
+  "rounded-xl px-4 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
+  2
+ ],
+ [
+  "setextHeadingLineSequence",
+  2
+ ],
+ [
+  "size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:0ms]",
+  2
+ ],
+ [
+  "size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:150ms]",
+  2
+ ],
+ [
+  "size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:300ms]",
+  2
+ ],
+ [
+  "text-ink-secondary hover:bg-raised/50 hover:text-ink",
+  2
+ ],
+ [
+  "this computer",
+  2
+ ],
+ [
+  "truncate font-mono",
+  2
+ ],
+ [
+  "truncate font-mono text-[12.5px] text-ink",
+  2
+ ],
+ [
+  "\n    at",
+  1
+ ],
+ [
+  " (<anonymous>)",
+  1
+ ],
+ [
+  " (Browser is offline)",
+  1
+ ],
+ [
+  " (Default: no level is sent)",
+  1
+ ],
+ [
+  " (currently: auto)",
+  1
+ ],
+ [
+  " 0) scale(-1 1)",
+  1
+ ],
+ [
+  " 1) translate(",
+  1
+ ],
+ [
+  " Android",
+  1
+ ],
+ [
+  " Back",
+  1
+ ],
+ [
+  " Back to ",
+  1
+ ],
+ [
+  " Chief of Staff",
+  1
+ ],
+ [
+  " Computer",
+  1
+ ],
+ [
+  " Continue task",
+  1
+ ],
+ [
+  " Continuing",
+  1
+ ],
+ [
+  " Delete VM",
+  1
+ ],
+ [
+  " Delete and recreate",
+  1
+ ],
+ [
+  " Download",
+  1
+ ],
+ [
+  " First-time USB setup",
+  1
+ ],
+ [
+  " GNOME may also ask you to allow foreground input for this desktop session.",
+  1
+ ],
+ [
+  " Home",
+  1
+ ],
+ [
+  " Inspector",
+  1
+ ],
+ [
+  " New task",
+  1
+ ],
+ [
+  " Overriding feature flag details!",
+  1
+ ],
+ [
+  " Overriding feature flag payloads!",
+  1
+ ],
+ [
+  " Overriding feature flags!",
+  1
+ ],
+ [
+  " Re-check",
+  1
+ ],
+ [
+  " Recent",
+  1
+ ],
+ [
+  " Restart to update",
+  1
+ ],
+ [
+  " Retry",
+  1
+ ],
+ [
+  " Stop",
+  1
+ ],
+ [
+  " Task",
+  1
+ ],
+ [
+  " The options are ",
+  1
+ ],
+ [
+  " USB",
+  1
+ ],
+ [
+  " Watch screen",
+  1
+ ],
+ [
+  " active",
+  1
+ ],
+ [
+  " after ",
+  1
+ ],
+ [
+  " archived",
+  1
+ ],
+ [
+  " asks: ",
+  1
+ ],
+ [
+  " at ",
+  1
+ ],
+ [
+  " at new ",
+  1
+ ],
+ [
+  " available",
+  1
+ ],
+ [
+  " bots exported",
+  1
+ ],
+ [
+  " bytes was rejected by the browser, falling back to fetch",
+  1
+ ],
+ [
+  " copy",
+  1
+ ],
+ [
+  " does not have a name.",
+  1
+ ],
+ [
+  " event(s) dropped since the last warning",
+  1
+ ],
+ [
+  " events burst limit.",
+  1
+ ],
+ [
+  " events per second and ",
+  1
+ ],
+ [
+  " fill=",
+  1
+ ],
+ [
+  " for experiment ",
+  1
+ ],
+ [
+  " in a splice buffer of size ",
+  1
+ ],
+ [
+  " is invalid.",
+  1
+ ],
+ [
+  " is not supported.",
+  1
+ ],
+ [
+  " is quota limited.",
+  1
+ ],
+ [
+  " is speaking",
+  1
+ ],
+ [
+  " is working",
+  1
+ ],
+ [
+  " mascot",
+  1
+ ],
+ [
+  " minutes",
+  1
+ ],
+ [
+  " models",
+  1
+ ],
+ [
+  " models ",
+  1
+ ],
+ [
+  " need attention",
+  1
+ ],
+ [
+  " of ",
+  1
+ ],
+ [
+  " on the phone. You can choose Always allow for this trusted computer.",
+  1
+ ],
+ [
+  " or property_blacklist config: ",
+  1
+ ],
+ [
+  " paused",
+  1
+ ],
+ [
+  " ready-to-load bots",
+  1
+ ],
+ [
+  " retries.",
+  1
+ ],
+ [
+  " seven times in About phone, then turn on ",
+  1
+ ],
+ [
+  " started",
+  1
+ ],
+ [
+  " stroke-linecap=",
+  1
+ ],
+ [
+  " stroke-width=",
+  1
+ ],
+ [
+  " stroke=",
+  1
+ ],
+ [
+  " to web experiment ",
+  1
+ ],
+ [
+  " wants to ",
+  1
+ ],
+ [
+  "\" failed. Feature flags didn't load in time.",
+  1
+ ],
+ [
+  "#cannot-handle-mdx-estrees-without-createevaluater",
+  1
+ ],
+ [
+  "#cannot-parse-style-attribute",
+  1
+ ],
+ [
+  "#remove-includeelementindex",
+  1
+ ],
+ [
+  "$$client_ingestion_warning",
+  1
+ ],
+ [
+  "$posthog_sr_group_event_trigger_",
+  1
+ ],
+ [
+  "$posthog_sr_group_sampling_",
+  1
+ ],
+ [
+  "$posthog_sr_group_url_trigger_",
+  1
+ ],
+ [
+  "$product_tour_last_seen_date",
+  1
+ ],
+ [
+  "' had its '",
+  1
+ ],
+ [
+  "' instead. The old field will be removed in a future major version.",
+  1
+ ],
+ [
+  "' is deprecated. Please use '",
+  1
+ ],
+ [
+  "')},g3={forward:1,authored:.25},BS={arrive:{state:",
+  1
+ ],
+ [
+  "', { ... }, 'project2')",
+  1
+ ],
+ [
+  "'s chat; edit the task text for whatever you want done.",
+  1
+ ],
+ [
+  "'s screen",
+  1
+ ],
+ [
+  ") and ",
+  1
+ ],
+ [
+  ") is open",
+  1
+ ],
+ [
+  ") is still open",
+  1
+ ],
+ [
+  ") translate(-120 ",
+  1
+ ],
+ [
+  "))),gn(v,d,c),v[hn]=i,un(v),d=v;break e;case",
+  1
+ ],
+ [
+  ")),this.Kt(a,t.value),this.$t()}else this.rt.warn(",
+  1
+ ],
+ [
+  ")),this._instance.capture(",
+  1
+ ],
+ [
+  "));var Ql=",
+  1
+ ],
+ [
+  "). If you meant to render a collection of children, use an array instead.",
+  1
+ ],
+ [
+  ").matches??!1;p.scrollIntoView({block:",
+  1
+ ],
+ [
+  "): a different token (`",
+  1
+ ],
+ [
+  "):e,provisioning:{...e.provisioning,[t.botId]:t.on}};case",
+  1
+ ],
+ [
+  "):i.removeAttribute(c);break;case",
+  1
+ ],
+ [
+  ");else if(a[1].type===",
+  1
+ ],
+ [
+  ");else pt.warn(",
+  1
+ ],
+ [
+  ");else this.rt.warn(",
+  1
+ ],
+ [
+  ");else{var a=",
+  1
+ ],
+ [
+  ");if(e.config.external_scripts_inject_target===",
+  1
+ ],
+ [
+  ");var f={},p=this._instance.get_property(",
+  1
+ ],
+ [
+  ");var j0=",
+  1
+ ],
+ [
+  ");var p=e+",
+  1
+ ],
+ [
+  ")?I5:Fe(e.toLowerCase(),Kp.toLowerCase())?Kp:Fe(e,Ro+",
+  1
+ ],
+ [
+  ")break}else a[0]===",
+  1
+ ],
+ [
+  ")d++;else if(c===",
+  1
+ ],
+ [
+  ")try{var a=Xo(n);t=(t+",
+  1
+ ],
+ [
+  ")})),9e4);this._instance._send_request(pe({method:",
+  1
+ ],
+ [
+  ")})}),9e4);this._instance._send_request({method:",
+  1
+ ],
+ [
+  ")}else pt.warn(",
+  1
+ ],
+ [
+  "+L.toFixed(1)}p.setAttribute(",
+  1
+ ],
+ [
+  "+Math.floor(Date.now()/o)*o}r=e.requestRouter.endpointFor(",
+  1
+ ],
+ [
+  "+a.appearance.surveyPopupDelaySeconds+",
+  1
+ ],
+ [
+  "+d):i.removeAttribute(c);break;case",
+  1
+ ],
+ [
+  "+e.Ct);else if(m.kind===",
+  1
+ ],
+ [
+  "+e.toString(16).toUpperCase()+",
+  1
+ ],
+ [
+  "+encodeURIComponent(JSON.stringify(t))+o+",
+  1
+ ],
+ [
+  "+h)});else{var f;a({kind:",
+  1
+ ],
+ [
+  "+s,c}var ca={animationend:os(",
+  1
+ ],
+ [
+  "+s.charCodeAt(0).toString(16)+",
+  1
+ ],
+ [
+  "+t.slice(3).toLowerCase()}}),cT={classId:",
+  1
+ ],
+ [
+  "+t.slice(5).toLowerCase()}}),M6=ul({attributes:{xmlnsxlink:",
+  1
+ ],
+ [
+  "+this.Ne.maxSeriesPerFlush+",
+  1
+ ],
+ [
+  "+this.Ne.token+a),method:",
+  1
+ ],
+ [
+  "+this._instance.config.token),method:",
+  1
+ ],
+ [
+  "+ti(O):i.removeAttribute(",
+  1
+ ],
+ [
+  ",(4+m*2.4).toFixed(1)),f.setAttribute(",
+  1
+ ],
+ [
+  ",(5+m*3).toFixed(1)),p.setAttribute(",
+  1
+ ],
+ [
+  ",Hr,Ce,Te,S]}],container:[",
+  1
+ ],
+ [
+  ",N,Te,Ce]}],delay:[{delay:[Xe,Te,Ce]}],animate:[{animate:[",
+  1
+ ],
+ [
+  ",NS(Pe,Me)),de.setAttribute(",
+  1
+ ],
+ [
+  ",Te,Ay]}],leading:[{leading:[o,...D()]}],",
+  1
+ ],
+ [
+  ",Te,Ce],conic:[Mi,Te,Ce]},oE,sE]}],",
+  1
+ ],
+ [
+  ",Te,Ce]}],basis:[{basis:[Hr,",
+  1
+ ],
+ [
+  ",Te,Ce]}],filter:[{filter:[",
+  1
+ ],
+ [
+  ",Te,Ce]}],whitespace:[{whitespace:[",
+  1
+ ],
+ [
+  ",Xe,Te,Ce]}],order:[{order:[Mi,",
+  1
+ ],
+ [
+  ",Xe,Te,Ce]}],saturate:[{saturate:[Xe,Te,Ce]}],sepia:[{sepia:[",
+  1
+ ],
+ [
+  ",Xe,Te,Ce]}],shrink:[{shrink:[",
+  1
+ ],
+ [
+  ",_,Te,Ce]}],backface:[{backface:[",
+  1
+ ],
+ [
+  ",_S(Me)),Ze.setAttribute(",
+  1
+ ],
+ [
+  ",a)}Hf(e,r,n)}else{var u=e.requestRouter.endpointFor(",
+  1
+ ],
+ [
+  ",attempt:B.attempt});break;case",
+  1
+ ],
+ [
+  ",autocapture:!1,capture_pageview:!1,person_profiles:",
+  1
+ ],
+ [
+  ",before:o})),h(),u(),o+=a.move(",
+  1
+ ],
+ [
+  ",blink:!0},celebrate:{state:",
+  1
+ ],
+ [
+  ",blink:!0},failure:{state:",
+  1
+ ],
+ [
+  ",body:JSON.stringify(_.input)}).catch(w);break;case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({alwaysAllow:A})}).catch(w).finally(E);break}E();break}case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({emoji:_.emoji,by:",
+  1
+ ],
+ [
+  ",body:JSON.stringify({hidden:!0})});if(r({type:",
+  1
+ ],
+ [
+  ",body:JSON.stringify({hidden:!1,chiefOfStaff:!0})});r({type:",
+  1
+ ],
+ [
+  ",body:JSON.stringify({messageId:_.messageId})}).catch(w);break;case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({modelSelection:_.selection})}).catch(w);break;case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({requestId:$.requestId,behavior:",
+  1
+ ],
+ [
+  ",body:JSON.stringify({requestId:$.requestId,behavior:A,message:A===",
+  1
+ ],
+ [
+  ",body:JSON.stringify({text:_.answer})}).catch(w);break}case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({title:_.title})}).catch(w);break;case",
+  1
+ ],
+ [
+  ",body:JSON.stringify({url:A.trim()})});R(mp(oe),",
+  1
+ ],
+ [
+  ",body:`\n<path xmlns=",
+  1
+ ],
+ [
+  ",bot:E})).catch(w);break;case",
+  1
+ ],
+ [
+  ",bot:{...$,...A,messages:$.messages}}))).catch(w);break}case",
+  1
+ ],
+ [
+  ",botId:B.botId});break;case",
+  1
+ ],
+ [
+  ",botId:e,messageId:t.id}),className:",
+  1
+ ],
+ [
+  ",botId:e.id,patch:{name:w}}),onEditingChange:h,className:",
+  1
+ ],
+ [
+  ",colorInterpolationFilters:",
+  1
+ ],
+ [
+  ",currentDispatcherRef:F,reconcilerVersion:",
+  1
+ ],
+ [
+  ",d),i.head.appendChild(x),s.instance=x);case",
+  1
+ ],
+ [
+  ",e.BootstrapFeatureFlagDetails=",
+  1
+ ],
+ [
+  ",e.BootstrapFeatureFlagPayloads=",
+  1
+ ],
+ [
+  ",e.BootstrapFeatureFlags=",
+  1
+ ],
+ [
+  ",e.EnablePersonProcessing=",
+  1
+ ],
+ [
+  ",e.SessionReplayEventTriggerActivatedSession=",
+  1
+ ],
+ [
+  ",e.SessionStartTimestamp=",
+  1
+ ],
+ [
+  ",e.bodyContent.style.opacity=",
+  1
+ ],
+ [
+  ",e.pathname+e.search):e.hash=",
+  1
+ ],
+ [
+  ",expression:n,size:r=44,label:a,motion:o=",
+  1
+ ],
+ [
+  ",glyphOrientationHorizontal:",
+  1
+ ],
+ [
+  ",glyphOrientationVertical:",
+  1
+ ],
+ [
+  ",groupId:B.groupId});break;case",
+  1
+ ],
+ [
+  ",groupId:a.id}),t()},className:",
+  1
+ ],
+ [
+  ",i),navigation.removeEventListener(",
+  1
+ ],
+ [
+  ",id:E.id})}).catch(w);break;case",
+  1
+ ],
+ [
+  ",intent:e.instance.access===",
+  1
+ ],
+ [
+  ",minHeight:e.run?.triggerSource===\"webhook\"?\"48px\":",
+  1
+ ],
+ [
+  ",n={available:t,engine:t?",
+  1
+ ],
+ [
+  ",new Date().toISOString()),Wa.capture(",
+  1
+ ],
+ [
+  ",o),t}}var f4=",
+  1
+ ],
+ [
+  ",o),void this.Tl(0);this.Tl(2),this.Il(r)})),Ot(ae,",
+  1
+ ],
+ [
+  ",packaged:!1},windowChrome:",
+  1
+ ],
+ [
+  ",routine:B.routine});break;case",
+  1
+ ],
+ [
+  ",routineId:B.routineId});break;case",
+  1
+ ],
+ [
+  ",s),dg(s,d.value,d.defaultValue,d.checked,d.defaultChecked,d.type,d.name,!0);break;case",
+  1
+ ],
+ [
+  ",s),navigation.removeEventListener(",
+  1
+ ],
+ [
+  ",screenPreview:{available:!1,interaction:",
+  1
+ ],
+ [
+  ",selectedId:t.bot.id},t.bot.id,",
+  1
+ ],
+ [
+  ",settingsOpen:!1,computerOpen:!1,inspectorOpen:!1,appSettingsOpen:!1,pluginsOpen:!1};case",
+  1
+ ],
+ [
+  ",size:t=24,strokeWidth:n=2,absoluteStrokeWidth:r,className:a=",
+  1
+ ],
+ [
+  ",spin:620},customize:{state:",
+  1
+ ],
+ [
+  ",spin:700},blink:{blink:!0},surprise:{state:",
+  1
+ ],
+ [
+  ",spin:900},switch:{state:",
+  1
+ ],
+ [
+  ",stroke:$,strokeWidth:g,strokeLinecap:",
+  1
+ ],
+ [
+  ",strokeWidth:2,strokeLinecap:",
+  1
+ ],
+ [
+  ",t);Hf(e,r,n)};ut.DEBUG=!1,ut.LIB_VERSION=",
+  1
+ ],
+ [
+  ",threadId:B.threadId,activeLeafId:B.activeLeafId}),f(B.threadId);break;case",
+  1
+ ],
+ [
+  ",threadId:B.threadId,message:B.message}),B.message?.role===",
+  1
+ ],
+ [
+  ",threadId:B.threadId,message:B.message});break;case",
+  1
+ ],
+ [
+  ",threadId:e.threadId,activeLeafId:u.activeLeafId})}n({type:",
+  1
+ ],
+ [
+  ",tokenize:KO,previous:E8},C8={name:",
+  1
+ ],
+ [
+  ",tokenize:QO,previous:T8},gr={name:",
+  1
+ ],
+ [
+  ",tokenize:aD,continuation:{tokenize:lD},exit:oD}},text:{91:{name:",
+  1
+ ],
+ [
+  ",transform:T6}),oT=ul({attributes:{accentHeight:",
+  1
+ ],
+ [
+  ",url:this.au(),data:e,compression:",
+  1
+ ],
+ [
+  ",url:this.ru(),data:e,compression:",
+  1
+ ],
+ [
+  ",url:this.ru(),data:u,compression:",
+  1
+ ],
+ [
+  ",v=v.removeChild(v.firstChild);break;case",
+  1
+ ],
+ [
+  ",webhook:B.webhook});break;case",
+  1
+ ],
+ [
+  ",webhookId:B.webhookId});break;case",
+  1
+ ],
+ [
+  ",width:24,height:24,viewBox:",
+  1
+ ],
+ [
+  ",x),mu(d,c.precedence,i),s.instance=d;case",
+  1
+ ],
+ [
+  "-ml-1 size-2 rounded-full bg-danger",
+  1
+ ],
+ [
+  "-ml-3 first:ml-0",
+  1
+ ],
+ [
+  ". Config is set to ",
+  1
+ ],
+ [
+  ". Should I allow it?",
+  1
+ ],
+ [
+  ". The MAUS keeps its model, tools, permissions, and computer setup.",
+  1
+ ],
+ [
+  ". This can cause unexpected behavior.",
+  1
+ ],
+ [
+  ". Use its current setup, or run the whole job inside its cloud VM.",
+  1
+ ],
+ [
+  ".repeat(A):z===99?A%2?(E=",
+  1
+ ],
+ [
+  "/>\n`,clip:'<path xmlns=",
+  1
+ ],
+ [
+  "/>',anchor:{x:93,y:101,scale:.74}},rS=[",
+  1
+ ],
+ [
+  "/>',hS='<path fill=",
+  1
+ ],
+ [
+  "/api/local-computer/interrupt",
+  1
+ ],
+ [
+  "/api/local-computer/screenshot",
+  1
+ ],
+ [
+  "/api/web_experiments/?token=",
+  1
+ ],
+ [
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:",
+  1
+ ],
+ [
+  "1 token",
+  1
+ ],
+ [
+  "3 days",
+  1
+ ],
+ [
+  ":!0,style:{top:g,left:y},className:",
+  1
+ ],
+ [
+  ":!0,style:{top:o,left:u},className:",
+  1
+ ],
+ [
+  ":A()}],rotate:[{rotate:_e()}],",
+  1
+ ],
+ [
+  ":B1=!1,Bg(fe,c,ue);break;case",
+  1
+ ],
+ [
+  ":Ee()}],transform:[{transform:[Te,Ce,",
+  1
+ ],
+ [
+  ":M()}],grayscale:[{grayscale:[",
+  1
+ ],
+ [
+  ":M()}],opacity:[{opacity:[Xe,Te,Ce]}],",
+  1
+ ],
+ [
+  ":String.fromCharCode(i)):i.type===",
+  1
+ ],
+ [
+  ":[Xe,Te,Ce]}],invert:[{invert:[",
+  1
+ ],
+ [
+  ":[tE],columns:[{columns:[Xe,Ce,Te,h]}],",
+  1
+ ],
+ [
+  ":[{object:A()}],overflow:[{overflow:z()}],",
+  1
+ ],
+ [
+  ":[{stroke:[Xe,xo,As,Ay]}],stroke:[{stroke:[",
+  1
+ ],
+ [
+  ":[{to:M()}],rounded:[{rounded:K()}],",
+  1
+ ],
+ [
+  ":_e()}],scale:[{scale:Ne()}],",
+  1
+ ],
+ [
+  ":`Archive ${e.name}`,className:",
+  1
+ ],
+ [
+  ":`Archive ${e.name}`,title:e.chiefOfStaff?",
+  1
+ ],
+ [
+  ":a(/\\b(design|designer|creative|brainstorm|art|illustration|music|story)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(marketing|growth|launch|campaign|social|sales|outreach|brand)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(monitor|monitoring|incident|alert|watch|status|uptime)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(overnight|night|background|async|queue|batch|long-running)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(review|reviewer|audit|critic|critique|quality|qa|test|legal)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(security|secure|compliance|risk|privacy|finance|financial)\\b/)?",
+  1
+ ],
+ [
+  ":a(/\\b(support|help|success|onboarding|coach|teacher|guide|welcome)\\b/)?",
+  1
+ ],
+ [
+  ":be??void 0,",
+  1
+ ],
+ [
+  ":break;default:if(!ag.hasOwnProperty(c))e:{if(c[0]===",
+  1
+ ],
+ [
+  ":ce=Z7;break;case Pg:case Ug:case Hg:ce=B7;break;case qg:ce=W7;break;case",
+  1
+ ],
+ [
+  ":d=!!d.autoFocus;break e;case",
+  1
+ ],
+ [
+  ":d===!0?i.setAttribute(c,",
+  1
+ ],
+ [
+  ":e.discovery?.advertising?",
+  1
+ ],
+ [
+  ":e.status===\"downloaded\"?",
+  1
+ ],
+ [
+  ":e.status===\"downloading\"?",
+  1
+ ],
+ [
+  ":e?.status===\"downloaded\"?",
+  1
+ ],
+ [
+  ":e?.status===\"downloading\"?",
+  1
+ ],
+ [
+  ":gf(c),b1(c);continue;case",
+  1
+ ],
+ [
+  ":gf(i);break;default:i.textContent=",
+  1
+ ],
+ [
+  ":hg(i,c.value,c.defaultValue);break e;case",
+  1
+ ],
+ [
+  ":if(bc(c)===0)break e;case",
+  1
+ ],
+ [
+  ":if(c.button===2)break e;case",
+  1
+ ],
+ [
+  ":if(c.rel.toLowerCase()===",
+  1
+ ],
+ [
+  ":m0(this._instance.config)?",
+  1
+ ],
+ [
+  ":t=e.className;break;case",
+  1
+ ],
+ [
+  ":to.delete(s.pointerId);break;case",
+  1
+ ],
+ [
+  ":v=x.getElementsByTagName(",
+  1
+ ],
+ [
+  ":var it=",
+  1
+ ],
+ [
+  ":var j=zv(",
+  1
+ ],
+ [
+  ":void 0,",
+  1
+ ],
+ [
+  ":z()}],overscroll:[{overscroll:L()}],",
+  1
+ ],
+ [
+  "?(Rg(),wl=s,_l=c,wl.attachEvent(",
+  1
+ ],
+ [
+  "?U.text+=I.delta:I.streamKind===",
+  1
+ ],
+ [
+  "?a:void 0,payload:b3(o)}}}else nn.warn('getFeatureFlagResult for key ",
+  1
+ ],
+ [
+  "?e:void 0}var lo,VS=[",
+  1
+ ],
+ [
+  "?f=f.slice(0,-1):f+=h.move(",
+  1
+ ],
+ [
+  "?i.setAttribute(c,d):i.removeAttribute(c);break;case",
+  1
+ ],
+ [
+  "?i.type=j:i.removeAttribute(",
+  1
+ ],
+ [
+  "?u.sum={aggregationTemporality:1,isMonotonic:!0,dataPoints:[]}:r.type===",
+  1
+ ],
+ [
+  "?{$external_click_url:k}:{},N)}}var mo=It(",
+  1
+ ],
+ [
+  "?{...u,autoApprove:!1}:u})}case",
+  1
+ ],
+ [
+  "@ to bring a bot in",
+  1
+ ],
+ [
+  "@everyone ",
+  1
+ ],
+ [
+  "A bot",
+  1
+ ],
+ [
+  "A customer wrote: This app saved me hours. Write a short thank-you reply.",
+  1
+ ],
+ [
+  "A newer version is ready to download.",
+  1
+ ],
+ [
+  "AUTHENTICATED WEBHOOK TASK",
+  1
+ ],
+ [
+  "Active",
+  1
+ ],
+ [
+  "Add an ElevenLabs API key so the bot can speak during calls.",
+  1
+ ],
+ [
+  "Add an ElevenLabs key in App Settings to make calls",
+  1
+ ],
+ [
+  "Add an ElevenLabs key in App Settings to read messages aloud",
+  1
+ ],
+ [
+  "Advanced",
+  1
+ ],
+ [
+  "Advanced options",
+  1
+ ],
+ [
+  "Agent",
+  1
+ ],
+ [
+  "All MAUSes",
+  1
+ ],
+ [
+  "All bots",
+  1
+ ],
+ [
+  "Allow USB debugging",
+  1
+ ],
+ [
+  "Allow once",
+  1
+ ],
+ [
+  "Allow this bot to use connected apps",
+  1
+ ],
+ [
+  "AltLeft",
+  1
+ ],
+ [
+  "AltRight",
+  1
+ ],
+ [
+  "Always allow",
+  1
+ ],
+ [
+  "Android",
+  1
+ ],
+ [
+  "Android device",
+  1
+ ],
+ [
+  "Answer the approval above to continue",
+  1
+ ],
+ [
+  "Apostrophe",
+  1
+ ],
+ [
+  "App default",
+  1
+ ],
+ [
+  "Applies instantly and is remembered on this machine.",
+  1
+ ],
+ [
+  "Approval requested",
+  1
+ ],
+ [
+  "Assigned from Computer",
+  1
+ ],
+ [
+  "Atelier",
+  1
+ ],
+ [
+  "Attempting to create alias for existing People user - aborting.",
+  1
+ ],
+ [
+  "Auto reuses a ready VPS when one exists, otherwise this computer. ",
+  1
+ ],
+ [
+  "Auto reuses a ready VPS when one is configured; otherwise computer use stays off. ",
+  1
+ ],
+ [
+  "Auto uses a cloud box when one exists, otherwise this computer. ",
+  1
+ ],
+ [
+  "Auto uses a cloud box when one is configured; otherwise computer use stays off.",
+  1
+ ],
+ [
+  "Automations",
+  1
+ ],
+ [
+  "Available apps",
+  1
+ ],
+ [
+  "Back",
+  1
+ ],
+ [
+  "Back to reference ",
+  1
+ ],
+ [
+  "Beacon of ~",
+  1
+ ],
+ [
+  "Beacon send failed",
+  1
+ ],
+ [
+  "Boolean",
+  1
+ ],
+ [
+  "Bot memory",
+  1
+ ],
+ [
+  "Bot voice",
+  1
+ ],
+ [
+  "Bot's computer",
+  1
+ ],
+ [
+  "Bot's screen",
+  1
+ ],
+ [
+  "Bots",
+  1
+ ],
+ [
+  "Box",
+  1
+ ],
+ [
+  "Box API key",
+  1
+ ],
+ [
+  "Box is a paid service after its trial. Usage may incur charges.",
+  1
+ ],
+ [
+  "Bringing the room in",
+  1
+ ],
+ [
+  "Browser",
+  1
+ ],
+ [
+  "Browser extension event listener failed",
+  1
+ ],
+ [
+  "Browser extension remote config listener failed",
+  1
+ ],
+ [
+  "Build number",
+  1
+ ],
+ [
+  "Bundled Cua Driver",
+  1
+ ],
+ [
+  "Byte out of range",
+  1
+ ],
+ [
+  "CUA Driver is not ready for local computer control.",
+  1
+ ],
+ [
+  "Calendar block",
+  1
+ ],
+ [
+  "Calls currently need the macOS desktop app",
+  1
+ ],
+ [
+  "Calls require OpenMausBot for macOS because speech recognition runs on-device.",
+  1
+ ],
+ [
+  "Cancel run",
+  1
+ ],
+ [
+  "Cancel turn",
+  1
+ ],
+ [
+  "Cannot access index `",
+  1
+ ],
+ [
+  "Cannot add an extension to a disposed ExtensionRuntime",
+  1
+ ],
+ [
+  "Cannot call `",
+  1
+ ],
+ [
+  "Cannot close document, a token (`",
+  1
+ ],
+ [
+  "Cannot handle MDX estrees without `createEvaluater`",
+  1
+ ],
+ [
+  "Cannot parse `style` attribute",
+  1
+ ],
+ [
+  "Capture",
+  1
+ ],
+ [
+  "Check again",
+  1
+ ],
+ [
+  "Check for updates",
+  1
+ ],
+ [
+  "Check the failed build",
+  1
+ ],
+ [
+  "Checking call availability",
+  1
+ ],
+ [
+  "Checking whether this device can make calls.",
+  1
+ ],
+ [
+  "Choose a MAUS, copy one command, and every request becomes a new task in its chat.",
+  1
+ ],
+ [
+  "Choose a model for this bot.",
+  1
+ ],
+ [
+  "Choose a screen",
+  1
+ ],
+ [
+  "Choose an ElevenLabs voice before starting a call.",
+  1
+ ],
+ [
+  "Choose an app voice, or give every room member their own ElevenLabs voice.",
+  1
+ ],
+ [
+  "Choose model",
+  1
+ ],
+ [
+  "Click to tap, drag or use a trackpad to scroll, and type after selecting a field.",
+  1
+ ],
+ [
+  "Close connected apps",
+  1
+ ],
+ [
+  "Close settings",
+  1
+ ],
+ [
+  "Cloud VM needs a working Box API key in App Settings before this routine can run.",
+  1
+ ],
+ [
+  "Cloud backend",
+  1
+ ],
+ [
+  "Cloud desktop",
+  1
+ ],
+ [
+  "Color",
+  1
+ ],
+ [
+  "Command palette",
+  1
+ ],
+ [
+  "Composio project key",
+  1
+ ],
+ [
+  "Config field '",
+  1
+ ],
+ [
+  "Connect",
+  1
+ ],
+ [
+  "Connect Gmail, GitHub, Slack, Notion, and other apps through your own Composio project.",
+  1
+ ],
+ [
+  "Connect a phone",
+  1
+ ],
+ [
+  "Connect an app from Marketplace and it will appear here.",
+  1
+ ],
+ [
+  "Connect apps in App Settings before giving this bot access.",
+  1
+ ],
+ [
+  "Connect apps in App Settings first",
+  1
+ ],
+ [
+  "Connect securely",
+  1
+ ],
+ [
+  "Connect the apps your bots can use.",
+  1
+ ],
+ [
+  "Connect the phone with a data-capable USB cable and keep it unlocked.",
+  1
+ ],
+ [
+  "Connected apps service is ready",
+  1
+ ],
+ [
+  "Connected apps view",
+  1
+ ],
+ [
+  "Connected directly over USB. The screen and controls stay on this computer.",
+  1
+ ],
+ [
+  "Connected securely. Continue the paused task when you're ready.",
+  1
+ ],
+ [
+  "Connected securely. Your bot is continuing the task.",
+  1
+ ],
+ [
+  "Console",
+  1
+ ],
+ [
+  "Continue",
+  1
+ ],
+ [
+  "Control variants leave the page unmodified.",
+  1
+ ],
+ [
+  "ControlLeft",
+  1
+ ],
+ [
+  "ControlRight",
+  1
+ ],
+ [
+  "Conversations not available yet.",
+  1
+ ],
+ [
+  "Cool daylight. Porcelain and deep teal.",
+  1
+ ],
+ [
+  "Copied",
+  1
+ ],
+ [
+  "Cost is ",
+  1
+ ],
+ [
+  "Could not create a terminal command",
+  1
+ ],
+ [
+  "Could not stop active local computer turns.",
+  1
+ ],
+ [
+  "Couldn't reach the computer",
+  1
+ ],
+ [
+  "Couldn't reach the update server.",
+  1
+ ],
+ [
+  "Couldn't start screen preview.",
+  1
+ ],
+ [
+  "Create Local VM",
+  1
+ ],
+ [
+  "Create a MAUS first, then come back here.",
+  1
+ ],
+ [
+  "Create a bot first, then come back to schedule it.",
+  1
+ ],
+ [
+  "Create and start the Local VM",
+  1
+ ],
+ [
+  "Create or copy a project key",
+  1
+ ],
+ [
+  "Create your first schedule",
+  1
+ ],
+ [
+  "Create your first webhook",
+  1
+ ],
+ [
+  "Cua Driver is not ready for local control.",
+  1
+ ],
+ [
+  "Cua Driver: ",
+  1
+ ],
+ [
+  "Current bot voice",
+  1
+ ],
+ [
+  "DEFAULT WEBHOOK INSTRUCTIONS",
+  1
+ ],
+ [
+  "Data too long",
+  1
+ ],
+ [
+  "Date",
+  1
+ ],
+ [
+  "Day",
+  1
+ ],
+ [
+  "Daylight on paper, warm and quiet.",
+  1
+ ],
+ [
+  "Default instruction:",
+  1
+ ],
+ [
+  "Default instructions ",
+  1
+ ],
+ [
+  "Default responder",
+  1
+ ],
+ [
+  "Deferring extension initialization to improve startup performance",
+  1
+ ],
+ [
+  "Degree out of range",
+  1
+ ],
+ [
+  "Delete",
+  1
+ ],
+ [
+  "Delete task",
+  1
+ ],
+ [
+  "Delete the Local VM? Files and browser sign-ins in its durable workspace will remain.",
+  1
+ ],
+ [
+  "Delete this task and its conversation",
+  1
+ ],
+ [
+  "Delivery ID",
+  1
+ ],
+ [
+  "Denied by the user, on a call.",
+  1
+ ],
+ [
+  "Denied by the user, on a group call.",
+  1
+ ],
+ [
+  "Denied by the user.",
+  1
+ ],
+ [
+  "Deny",
+  1
+ ],
+ [
+  "Describe what your agent does",
+  1
+ ],
+ [
+  "Description",
+  1
+ ],
+ [
+  "Desktop",
+  1
+ ],
+ [
+  "Dictate",
+  1
+ ],
+ [
+  "Dictation is only available on macOS for now.",
+  1
+ ],
+ [
+  "Dictation isn't available in this build.",
+  1
+ ],
+ [
+  "Disable local control",
+  1
+ ],
+ [
+  "Discard IP data",
+  1
+ ],
+ [
+  "Discard queued message",
+  1
+ ],
+ [
+  "Download",
+  1
+ ],
+ [
+  "Driver setup and troubleshooting",
+  1
+ ],
+ [
+  "Duplicate",
+  1
+ ],
+ [
+  "Durable workspace: ",
+  1
+ ],
+ [
+  "Duration",
+  1
+ ],
+ [
+  "EQ",
+  1
+ ],
+ [
+  "ERR_INVALID_FILE_URL_HOST",
+  1
+ ],
+ [
+  "ERR_INVALID_FILE_URL_PATH",
+  1
+ ],
+ [
+  "Each request starts a new task in the MAUS chat.",
+  1
+ ],
+ [
+  "Edit path",
+  1
+ ],
+ [
+  "Edit schedule",
+  1
+ ],
+ [
+  "Edit webhook",
+  1
+ ],
+ [
+  "Effort",
+  1
+ ],
+ [
+  "Enable",
+  1
+ ],
+ [
+  "Enable Developer options by tapping ",
+  1
+ ],
+ [
+  "Enable local control (Beta)",
+  1
+ ],
+ [
+  "Enable the local control beta and complete the Cua Driver checks first.",
+  1
+ ],
+ [
+  "Enabling lets bots you explicitly assign to ",
+  1
+ ],
+ [
+  "End of comment missing",
+  1
+ ],
+ [
+  "Engine CLIs",
+  1
+ ],
+ [
+  "Engines",
+  1
+ ],
+ [
+  "Enqueued failed request for retry in ",
+  1
+ ],
+ [
+  "Everyone responds",
+  1
+ ],
+ [
+  "Everyone responds unless you @mention specific bots.",
+  1
+ ],
+ [
+  "Expected `Fragment` in options",
+  1
+ ],
+ [
+  "Expected a list of plugins, not `",
+  1
+ ],
+ [
+  "Expected a string",
+  1
+ ],
+ [
+  "Expected array of non-empty strings",
+  1
+ ],
+ [
+  "Expected character",
+  1
+ ],
+ [
+  "Expected find and replace tuple or list of tuples",
+  1
+ ],
+ [
+  "Expected node, got `",
+  1
+ ],
+ [
+  "Expires in ",
+  1
+ ],
+ [
+  "Expression",
+  1
+ ],
+ [
+  "FILE",
+  1
+ ],
+ [
+  "Failed to gzip request body, sending uncompressed payload",
+  1
+ ],
+ [
+  "Failed to persist survey seen state",
+  1
+ ],
+ [
+  "Failed to produce browser extension event properties",
+  1
+ ],
+ [
+  "Feature flag cache is stale, triggering refresh...",
+  1
+ ],
+ [
+  "File URL path must not include encoded / characters",
+  1
+ ],
+ [
+  "File-read approval requested",
+  1
+ ],
+ [
+  "Files",
+  1
+ ],
+ [
+  "Finish setup in your browser",
+  1
+ ],
+ [
+  "First argument must be a string",
+  1
+ ],
+ [
+  "Footnotes",
+  1
+ ],
+ [
+  "ForwardRef",
+  1
+ ],
+ [
+  "Foundry",
+  1
+ ],
+ [
+  "General",
+  1
+ ],
+ [
+  "Generate new private URL",
+  1
+ ],
+ [
+  "Get a key from ElevenLabs",
+  1
+ ],
+ [
+  "Get notified when this agent finishes or needs input",
+  1
+ ],
+ [
+  "Give a MAUS scheduled work with a calendar you can trust.",
+  1
+ ],
+ [
+  "Give bots an isolated remote Linux computer with a desktop and terminal.",
+  1
+ ],
+ [
+  "Home",
+  1
+ ],
+ [
+  "How hard this bot thinks",
+  1
+ ],
+ [
+  "INITIATED",
+  1
+ ],
+ [
+  "Ignored",
+  1
+ ],
+ [
+  "Initializing extensions synchronously",
+  1
+ ],
+ [
+  "Inspector",
+  1
+ ],
+ [
+  "Install ",
+  1
+ ],
+ [
+  "Install a container runtime",
+  1
+ ],
+ [
+  "Install an AI engine to get started",
+  1
+ ],
+ [
+  "Instructions",
+  1
+ ],
+ [
+  "Invalid distinct_id for replay event. This indicates a bug in your implementation",
+  1
+ ],
+ [
+  "Invalid evaluation context found:",
+  1
+ ],
+ [
+  "Invalid flag key found:",
+  1
+ ],
+ [
+  "Invalid flag_keys found:",
+  1
+ ],
+ [
+  "Invalid sessionID in bootstrap",
+  1
+ ],
+ [
+  "Invalid value",
+  1
+ ],
+ [
+  "Invalid value for property_denylist config: ",
+  1
+ ],
+ [
+  "Just now",
+  1
+ ],
+ [
+  "Keep your connected apps unavailable to this bot.",
+  1
+ ],
+ [
+  "Kindle Fire",
+  1
+ ],
+ [
+  "Kobo",
+  1
+ ],
+ [
+  "LINK",
+  1
+ ],
+ [
+  "Lagoon",
+  1
+ ],
+ [
+  "Last output",
+  1
+ ],
+ [
+  "Last seen ",
+  1
+ ],
+ [
+  "Later",
+  1
+ ],
+ [
+  "Lazy",
+  1
+ ],
+ [
+  "Lead",
+  1
+ ],
+ [
+  "Lead: ",
+  1
+ ],
+ [
+  "Live preview of the selected screen",
+  1
+ ],
+ [
+  "Loaded",
+  1
+ ],
+ [
+  "Loaded now",
+  1
+ ],
+ [
+  "Local beta",
+  1
+ ],
+ [
+  "Local computer actions always require your approval in this beta.",
+  1
+ ],
+ [
+  "Local computer control isn't ready",
+  1
+ ],
+ [
+  "Local computer control isn't ready.",
+  1
+ ],
+ [
+  "Local computer control requires the desktop app.",
+  1
+ ],
+ [
+  "Local control",
+  1
+ ],
+ [
+  "Local control guide",
+  1
+ ],
+ [
+  "Local models",
+  1
+ ],
+ [
+  "Local models will appear as soon as the agent is installed.",
+  1
+ ],
+ [
+  "Local only for now. Keep OpenMausBot open while sending the request.",
+  1
+ ],
+ [
+  "MAUS",
+  1
+ ],
+ [
+  "MSIE",
+  1
+ ],
+ [
+  "Mac",
+  1
+ ],
+ [
+  "Make this bot your primary contact for work that may involve several bots.",
+  1
+ ],
+ [
+  "Manual code",
+  1
+ ],
+ [
+  "Map",
+  1
+ ],
+ [
+  "Marketplace",
+  1
+ ],
+ [
+  "MemberExpression",
+  1
+ ],
+ [
+  "Memo",
+  1
+ ],
+ [
+  "Memory",
+  1
+ ],
+ [
+  "Mention a bot with @ to bring them in.",
+  1
+ ],
+ [
+  "Mentions only",
+  1
+ ],
+ [
+  "Messages",
+  1
+ ],
+ [
+  "Midnight",
+  1
+ ],
+ [
+  "Model",
+  1
+ ],
+ [
+  "Module",
+  1
+ ],
+ [
+  "Morning research brief",
+  1
+ ],
+ [
+  "Morning. Overnight the tests went green, and I left two notes for you in the thread.",
+  1
+ ],
+ [
+  "Name",
+  1
+ ],
+ [
+  "Name ",
+  1
+ ],
+ [
+  "Needs attention",
+  1
+ ],
+ [
+  "Needs you",
+  1
+ ],
+ [
+  "Never",
+  1
+ ],
+ [
+  "New local webhook",
+  1
+ ],
+ [
+  "New tasks start here. This task is pinned to ",
+  1
+ ],
+ [
+  "New webhook",
+  1
+ ],
+ [
+  "Next dates",
+  1
+ ],
+ [
+  "Next version",
+  1
+ ],
+ [
+  "Night shift. Dark, warm, lit in brass.",
+  1
+ ],
+ [
+  "No CLI engines detected yet.",
+  1
+ ],
+ [
+  "No apps found",
+  1
+ ],
+ [
+  "No available transport method",
+  1
+ ],
+ [
+  "No bots yet",
+  1
+ ],
+ [
+  "No cloud computer configured",
+  1
+ ],
+ [
+  "No config found after loading remote JS config. Falling back to JSON.",
+  1
+ ],
+ [
+  "No connected apps yet",
+  1
+ ],
+ [
+  "No event name provided to posthog.capture",
+  1
+ ],
+ [
+  "No local models found",
+  1
+ ],
+ [
+  "No managed VPS computer is configured for this bot",
+  1
+ ],
+ [
+  "No model providers are available.",
+  1
+ ],
+ [
+  "No native protocol messages recorded for this thread yet.",
+  1
+ ],
+ [
+  "No phones are paired yet.",
+  1
+ ],
+ [
+  "No ready VPS container",
+  1
+ ],
+ [
+  "No requests yet. Use the command in Setup to send one.",
+  1
+ ],
+ [
+  "No runtime events for this thread yet.",
+  1
+ ],
+ [
+  "No update has been published for this platform yet.",
+  1
+ ],
+ [
+  "No userId set, resetting PostHog",
+  1
+ ],
+ [
+  "None",
+  1
+ ],
+ [
+  "Not installed",
+  1
+ ],
+ [
+  "Not ready",
+  1
+ ],
+ [
+  "Nothing on this computer is reachable from the network.",
+  1
+ ],
+ [
+  "Nothing to switch to yet",
+  1
+ ],
+ [
+  "Notifications",
+  1
+ ],
+ [
+  "Number",
+  1
+ ],
+ [
+  "Object",
+  1
+ ],
+ [
+  "On",
+  1
+ ],
+ [
+  "On this network only: ",
+  1
+ ],
+ [
+  "Once",
+  1
+ ],
+ [
+  "Once a container runtime is open, OpenMausBot prepares Cua and the VM for you.",
+  1
+ ],
+ [
+  "One moment",
+  1
+ ],
+ [
+  "One per workspace",
+  1
+ ],
+ [
+  "Only explicitly @mentioned bots respond",
+  1
+ ],
+ [
+  "Open Box API key guide",
+  1
+ ],
+ [
+  "Open Local VM setup",
+  1
+ ],
+ [
+  "Open OpenCode Go setup guide",
+  1
+ ],
+ [
+  "Open OpenMausMobile, choose this computer, and enter the code.",
+  1
+ ],
+ [
+  "Open Settings",
+  1
+ ],
+ [
+  "Open Voice settings",
+  1
+ ],
+ [
+  "Open a short, single-use pairing window for a trusted phone.",
+  1
+ ],
+ [
+  "Open again",
+  1
+ ],
+ [
+  "Open bot list",
+  1
+ ],
+ [
+  "Open chat",
+  1
+ ],
+ [
+  "Open desktop",
+  1
+ ],
+ [
+  "Open schedules",
+  1
+ ],
+ [
+  "Open settings",
+  1
+ ],
+ [
+  "Open task",
+  1
+ ],
+ [
+  "Open the Podman installation guide",
+  1
+ ],
+ [
+  "Open the installed runtime and start its engine, then re-check.",
+  1
+ ],
+ [
+  "Open this execution in the MAUS chat",
+  1
+ ],
+ [
+  "OpenCode Go API key",
+  1
+ ],
+ [
+  "OpenMausBot could not inspect the container runtime. Re-check, or review the app logs.",
+  1
+ ],
+ [
+  "OpenMausBot will reopen in a moment.",
+  1
+ ],
+ [
+  "PageUp",
+  1
+ ],
+ [
+  "Pair another phone",
+  1
+ ],
+ [
+  "Paired devices",
+  1
+ ],
+ [
+  "Paste your Box API key",
+  1
+ ],
+ [
+  "Paste your ElevenLabs API key",
+  1
+ ],
+ [
+  "Paste your OpenCode Go API key",
+  1
+ ],
+ [
+  "Path must be a string. Received ",
+  1
+ ],
+ [
+  "Paused routines",
+  1
+ ],
+ [
+  "Pending approval",
+  1
+ ],
+ [
+  "Persistence loaded",
+  1
+ ],
+ [
+  "Phone pairing QR code",
+  1
+ ],
+ [
+  "Pick a voice",
+  1
+ ],
+ [
+  "Pick a voice first",
+  1
+ ],
+ [
+  "Pick a voice in App Settings to make calls",
+  1
+ ],
+ [
+  "Pick where this bot's computer lives. ",
+  1
+ ],
+ [
+  "Plain messages go to every room member; @mentions override this",
+  1
+ ],
+ [
+  "Portal",
+  1
+ ],
+ [
+  "PostHog JS",
+  1
+ ],
+ [
+  "PostHog Person URL",
+  1
+ ],
+ [
+  "PostHog Recording URL",
+  1
+ ],
+ [
+  "PostHog extensions initialized (",
+  1
+ ],
+ [
+  "PostHog request timed out",
+  1
+ ],
+ [
+  "PostHog syntheticException",
+  1
+ ],
+ [
+  "Prepare Cua desktop",
+  1
+ ],
+ [
+  "Prepare the Cua desktop (one-time download and build)",
+  1
+ ],
+ [
+  "Prepare the pinned Cua desktop above before replacing this VM.",
+  1
+ ],
+ [
+  "Preview only",
+  1
+ ],
+ [
+  "Preview this computer",
+  1
+ ],
+ [
+  "Previewing web experiment [",
+  1
+ ],
+ [
+  "Previous dates",
+  1
+ ],
+ [
+  "Previous version",
+  1
+ ],
+ [
+  "Private bot workspace",
+  1
+ ],
+ [
+  "Profile",
+  1
+ ],
+ [
+  "Profiler",
+  1
+ ],
+ [
+  "Put the computer to sleep",
+  1
+ ],
+ [
+  "Put your MAUS team on a rhythm",
+  1
+ ],
+ [
+  "QRCodeCanvas",
+  1
+ ],
+ [
+  "QRCodeSVG",
+  1
+ ],
+ [
+  "Queue message",
+  1
+ ],
+ [
+  "Quote",
+  1
+ ],
+ [
+  "Read replies aloud",
+  1
+ ],
+ [
+  "Read this aloud",
+  1
+ ],
+ [
+  "Read this bot's replies aloud",
+  1
+ ],
+ [
+  "Ready for bots explicitly assigned to this computer.",
+  1
+ ],
+ [
+  "Ready to enable",
+  1
+ ],
+ [
+  "Ready to use",
+  1
+ ],
+ [
+  "Receiver running",
+  1
+ ],
+ [
+  "Receiver unavailable",
+  1
+ ],
+ [
+  "Recent deliveries",
+  1
+ ],
+ [
+  "Refresh connection status",
+  1
+ ],
+ [
+  "Refusing to render web experiment since the viewer is a likely bot",
+  1
+ ],
+ [
+  "RegExp",
+  1
+ ],
+ [
+  "Register this path anyway?",
+  1
+ ],
+ [
+  "Rejected",
+  1
+ ],
+ [
+  "Rejected request",
+  1
+ ],
+ [
+  "Reload from disk",
+  1
+ ],
+ [
+  "Remote config is disabled. Falling back to local config.",
+  1
+ ],
+ [
+  "Remove the saved alias",
+  1
+ ],
+ [
+  "Remove the saved key",
+  1
+ ],
+ [
+  "Rename ",
+  1
+ ],
+ [
+  "Repeating",
+  1
+ ],
+ [
+  "Replace the older or unsafe VM",
+  1
+ ],
+ [
+  "Replace this private URL? Every previously copied command will stop working.",
+  1
+ ],
+ [
+  "Reply here to continue the bot-to-bot conversation.",
+  1
+ ],
+ [
+  "Request received",
+  1
+ ],
+ [
+  "Requested by your bot",
+  1
+ ],
+ [
+  "Restart and install",
+  1
+ ],
+ [
+  "Restart to finish updating.",
+  1
+ ],
+ [
+  "Retry",
+  1
+ ],
+ [
+  "Room",
+  1
+ ],
+ [
+  "Room behavior",
+  1
+ ],
+ [
+  "Room lead",
+  1
+ ],
+ [
+  "Room member",
+  1
+ ],
+ [
+  "Room working folder",
+  1
+ ],
+ [
+  "Rooms",
+  1
+ ],
+ [
+  "Rotate private URL",
+  1
+ ],
+ [
+  "Run MAUS tasks on a schedule.",
+  1
+ ],
+ [
+  "Run MAUS tasks when an event arrives.",
+  1
+ ],
+ [
+  "Run OpenCode Go models through the maintained OpenCode CLI and ACP.",
+  1
+ ],
+ [
+  "Run now",
+  1
+ ],
+ [
+  "Run on",
+  1
+ ],
+ [
+  "Run this agent with a model already on your machine.",
+  1
+ ],
+ [
+  "Runs the MAUS and its tools inside its Box virtual machine.",
+  1
+ ],
+ [
+  "Safety and storage",
+  1
+ ],
+ [
+  "Save anyway",
+  1
+ ],
+ [
+  "Say a member's name",
+  1
+ ],
+ [
+  "Schedule",
+  1
+ ],
+ [
+  "Schedule name",
+  1
+ ],
+ [
+  "Schedule work for ",
+  1
+ ],
+ [
+  "Scheduled tasks",
+  1
+ ],
+ [
+  "Screen preview isn't available in this desktop session.",
+  1
+ ],
+ [
+  "Screen preview isn't available right now.",
+  1
+ ],
+ [
+  "Search local models",
+  1
+ ],
+ [
+  "Search results",
+  1
+ ],
+ [
+  "See the",
+  1
+ ],
+ [
+  "Self-host connected apps",
+  1
+ ],
+ [
+  "Self-hosted VPS SSH config alias",
+  1
+ ],
+ [
+  "Self-hosted VPS requires Claude or an ACP engine",
+  1
+ ],
+ [
+  "Send a message to start the conversation.",
+  1
+ ],
+ [
+  "Send a request before turning this webhook on",
+  1
+ ],
+ [
+  "Send a task",
+  1
+ ],
+ [
+  "Send a task to a MAUS when another tool reports an event.",
+  1
+ ],
+ [
+  "Send message",
+  1
+ ],
+ [
+  "Send the task in the request: ",
+  1
+ ],
+ [
+  "Sends when the current turn finishes",
+  1
+ ],
+ [
+  "SessionIdManager requires a PostHogPersistence instance",
+  1
+ ],
+ [
+  "Set",
+  1
+ ],
+ [
+  "Set up a phone",
+  1
+ ],
+ [
+  "Setting `",
+  1
+ ],
+ [
+  "Show all ",
+  1
+ ],
+ [
+  "Show base-image download",
+  1
+ ],
+ [
+  "Show command",
+  1
+ ],
+ [
+  "Show full message",
+  1
+ ],
+ [
+  "Show less",
+  1
+ ],
+ [
+  "Show suggested only",
+  1
+ ],
+ [
+  "Showing featured apps.",
+  1
+ ],
+ [
+  "Shown in the sidebar. Saved as you go.",
+  1
+ ],
+ [
+  "Sign in to ",
+  1
+ ],
+ [
+  "Sign-in required",
+  1
+ ],
+ [
+  "Skin",
+  1
+ ],
+ [
+  "Skipping decoding for malformed query param: ",
+  1
+ ],
+ [
+  "Sleep",
+  1
+ ],
+ [
+  "Something went wrong.",
+  1
+ ],
+ [
+  "Speak this bot's answers as they arrive, even when you're in another chat",
+  1
+ ],
+ [
+  "Start Local VM",
+  1
+ ],
+ [
+  "Start VPS computer",
+  1
+ ],
+ [
+  "Start a private, view-only preview when you need it.",
+  1
+ ],
+ [
+  "Start dictation",
+  1
+ ],
+ [
+  "Start it with ",
+  1
+ ],
+ [
+  "Start oMLX, Ollama, Unsloth, LM Studio, or EXO, then reopen this picker.",
+  1
+ ],
+ [
+  "Start preview",
+  1
+ ],
+ [
+  "Start the container runtime",
+  1
+ ],
+ [
+  "Starting in debug mode",
+  1
+ ],
+ [
+  "Status unavailable",
+  1
+ ],
+ [
+  "Stop dictation",
+  1
+ ],
+ [
+  "Stop dictation (Esc)",
+  1
+ ],
+ [
+  "Stop preview",
+  1
+ ],
+ [
+  "Stop speaking",
+  1
+ ],
+ [
+  "StrictMode",
+  1
+ ],
+ [
+  "String",
+  1
+ ],
+ [
+  "String contains non-numeric characters",
+  1
+ ],
+ [
+  "String contains unencodable characters in alphanumeric mode",
+  1
+ ],
+ [
+  "Suggested",
+  1
+ ],
+ [
+  "Surveys module not available",
+  1
+ ],
+ [
+  "Suspense Fallback",
+  1
+ ],
+ [
+  "Switch task",
+  1
+ ],
+ [
+  "Tag a bot",
+  1
+ ],
+ [
+  "Task",
+  1
+ ],
+ [
+  "Tasks go to",
+  1
+ ],
+ [
+  "Team file version ",
+  1
+ ],
+ [
+  "Terminal",
+  1
+ ],
+ [
+  "Test received",
+  1
+ ],
+ [
+  "The Local VM is not ready",
+  1
+ ],
+ [
+  "The Local VM isn't available for this bot",
+  1
+ ],
+ [
+  "The URL must be of scheme file",
+  1
+ ],
+ [
+  "The bot",
+  1
+ ],
+ [
+  "The lead bot",
+  1
+ ],
+ [
+  "The managed VPS computer is stopped",
+  1
+ ],
+ [
+  "The selected provider cannot request approvals for local computer actions.",
+  1
+ ],
+ [
+  "The selected source did not provide a video stream.",
+  1
+ ],
+ [
+  "The speech service is unavailable in this app build. Restart or update OpenMausBot.",
+  1
+ ],
+ [
+  "The task or message sent with each request becomes the MAUS instruction.",
+  1
+ ],
+ [
+  "They keep their history and will not create new runs.",
+  1
+ ],
+ [
+  "This MAUS needs your answer. Open its task to continue the run.",
+  1
+ ],
+ [
+  "This bot will stop and ask before it reaches out to another bot.",
+  1
+ ],
+ [
+  "This bot's computer is off",
+  1
+ ],
+ [
+  "This bot's current engine cannot use connected apps.",
+  1
+ ],
+ [
+  "This capture call is ignored due to client rate limiting.",
+  1
+ ],
+ [
+  "This engine cannot use connected apps",
+  1
+ ],
+ [
+  "This engine doesn't report a price; tokens are counted.",
+  1
+ ],
+ [
+  "This model engine cannot control this computer. Choose Claude or an ACP engine.",
+  1
+ ],
+ [
+  "This model engine cannot use cloud computer tools",
+  1
+ ],
+ [
+  "This model engine cannot use the Local VM",
+  1
+ ],
+ [
+  "This model engine cannot use the Local VM. Choose Claude or an ACP engine.",
+  1
+ ],
+ [
+  "This turns on Companion and opens a short, single-use pairing window in one step.",
+  1
+ ],
+ [
+  "Thought process",
+  1
+ ],
+ [
+  "Title",
+  1
+ ],
+ [
+  "Topic files",
+  1
+ ],
+ [
+  "Triggered by",
+  1
+ ],
+ [
+  "Try a different search.",
+  1
+ ],
+ [
+  "Turn on",
+  1
+ ],
+ [
+  "USB debugging",
+  1
+ ],
+ [
+  "USER-CONFIGURED WEBHOOK INSTRUCTIONS",
+  1
+ ],
+ [
+  "Unable to preload CSS for ",
+  1
+ ],
+ [
+  "Unable to resolve $device_model from userAgentData.getHighEntropyValues",
+  1
+ ],
+ [
+  "Unique user id has not been set in posthog.identify",
+  1
+ ],
+ [
+  "Unknown persistence type ",
+  1
+ ],
+ [
+  "Unreachable",
+  1
+ ],
+ [
+  "Update check failed",
+  1
+ ],
+ [
+  "Update your Composio key",
+  1
+ ],
+ [
+  "Updates",
+  1
+ ],
+ [
+  "Use a distinct voice for calls and spoken replies, or inherit the app default",
+  1
+ ],
+ [
+  "UserId set, identifying with PostHog",
+  1
+ ],
+ [
+  "Uses this MAUS's selected model and computer setting.",
+  1
+ ],
+ [
+  "Using preloaded remote config",
+  1
+ ],
+ [
+  "Value out of range",
+  1
+ ],
+ [
+  "Version number out of range",
+  1
+ ],
+ [
+  "Version value out of range",
+  1
+ ],
+ [
+  "View event payload",
+  1
+ ],
+ [
+  "Waiting for test",
+  1
+ ],
+ [
+  "Wayland",
+  1
+ ],
+ [
+  "Wearable",
+  1
+ ],
+ [
+  "Webhook event data",
+  1
+ ],
+ [
+  "Webhook task",
+  1
+ ],
+ [
+  "Week",
+  1
+ ],
+ [
+  "What should this MAUS do?",
+  1
+ ],
+ [
+  "What this agent is for",
+  1
+ ],
+ [
+  "Where does it run?",
+  1
+ ],
+ [
+  "Where every bot in this room runs its shell and file tools.",
+  1
+ ],
+ [
+  "Where this bot runs its shell and file tools.",
+  1
+ ],
+ [
+  "Where this bot's computer runs",
+  1
+ ],
+ [
+  "Which binary each engine runs. Saved as you go.",
+  1
+ ],
+ [
+  "Which provider and model this bot runs on",
+  1
+ ],
+ [
+  "Who does it?",
+  1
+ ],
+ [
+  "Who receives the tasks?",
+  1
+ ],
+ [
+  "Worker",
+  1
+ ],
+ [
+  "Xorg",
+  1
+ ],
+ [
+  "You",
+  1
+ ],
+ [
+  "You have already initialized PostHog! Re-initializing is a no-op",
+  1
+ ],
+ [
+  "You're on the latest version we know of.",
+  1
+ ],
+ [
+  "You've disabled debug mode.",
+  1
+ ],
+ [
+  "You: ",
+  1
+ ],
+ [
+  "Your browser blocked the connection page. Allow pop-ups, then try again.",
+  1
+ ],
+ [
+  "Your browser blocked the connection page. Click Continue to open it.",
+  1
+ ],
+ [
+  "Your connections",
+  1
+ ],
+ [
+  "Your name",
+  1
+ ],
+ [
+  "Your webhooks",
+  1
+ ],
+ [
+  "[Dead Clicks]",
+  1
+ ],
+ [
+  "[PageViewManager] Session rotated, clearing pageview state",
+  1
+ ],
+ [
+  "[PostHog ExternalIntegrations]",
+  1
+ ],
+ [
+  "[WebExperiments] ",
+  1
+ ],
+ [
+  "[object Array]",
+  1
+ ],
+ [
+  "] with variant [",
+  1
+ ],
+ [
+  "],blur:[rr],breakpoint:[rr],color:[h6],container:[rr],",
+  1
+ ],
+ [
+  "],d3='<path fill=",
+  1
+ ],
+ [
+  "],orderSensitiveModifiers:[",
+  1
+ ],
+ [
+  "],tracking:[{tracking:[a,Te,Ce]}],",
+  1
+ ],
+ [
+  "],zoom:[{zoom:[Mi,Te,Ce]}],accent:[{accent:M()}],appearance:[{appearance:[",
+  1
+ ],
+ [
+  "]},classGroups:{aspect:[{aspect:[",
+  1
+ ],
+ [
+  "]},conflictingClassGroupModifiers:{",
+  1
+ ],
+ [
+  "]},postfixLookupClassGroups:[",
+  1
+ ],
+ [
+  "]}],duration:[{duration:[Xe,",
+  1
+ ],
+ [
+  "]}],indent:[{indent:D()}],",
+  1
+ ],
+ [
+  "]}],perspective:[{perspective:[w,Te,Ce]}],",
+  1
+ ],
+ [
+  "]}],transition:[{transition:[",
+  1
+ ],
+ [
+  "]}],translate:[{translate:Ke()}],",
+  1
+ ],
+ [
+  "]}]},conflictingClassGroups:{",
+  1
+ ],
+ [
+  "_calculate_event_properties",
+  1
+ ],
+ [
+  "_forceAllowLocalhostNetworkCapture",
+  1
+ ],
+ [
+  "_session_registered_properties",
+  1
+ ],
+ [
+  "` cannot be a path: did not expect `",
+  1
+ ],
+ [
+  "` cannot be empty",
+  1
+ ],
+ [
+  "` finished async. Use `",
+  1
+ ],
+ [
+  "` in a splice buffer of size `",
+  1
+ ],
+ [
+  "` requires `path` to be set too",
+  1
+ ],
+ [
+  "` without `compiler`",
+  1
+ ],
+ [
+  "` without `parser`",
+  1
+ ],
+ [
+  "`, or `'`",
+  1
+ ],
+ [
+  "`document` not found. Cannot start.",
+  1
+ ],
+ [
+  "`extname` cannot contain multiple dots",
+  1
+ ],
+ [
+  "`extname` must start with `.`",
+  1
+ ],
+ [
+  "absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent",
+  1
+ ],
+ [
+  "absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-warning ring-2 ring-panel",
+  1
+ ],
+ [
+  "absolute inset-0 z-30 bg-black/50 md:hidden",
+  1
+ ],
+ [
+  "absolute inset-x-0 border-t border-hairline/25",
+  1
+ ],
+ [
+  "absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-app",
+  1
+ ],
+ [
+  "absolute right-2 -translate-y-1/2 text-[10px] tabular-nums text-ink-secondary/65",
+  1
+ ],
+ [
+  "absolute right-3 top-3 rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white",
+  1
+ ],
+ [
+  "adopted cross-tab session id",
+  1
+ ],
+ [
+  "alias matches current distinct_id - skipping api call.",
+  1
+ ],
+ [
+  "application/x-www-form-urlencoded",
+  1
+ ],
+ [
+  "applying feature flags",
+  1
+ ],
+ [
+  "applying transform of variant ",
+  1
+ ],
+ [
+  "bg-accent font-medium text-white hover:brightness-110",
+  1
+ ],
+ [
+  "bg-accent hover:brightness-110",
+  1
+ ],
+ [
+  "bg-danger text-white hover:brightness-110",
+  1
+ ],
+ [
+  "bg-danger/15 text-danger hover:bg-danger/20",
+  1
+ ],
+ [
+  "bg-raised text-ink-secondary hover:bg-raised-hover",
+  1
+ ],
+ [
+  "bg-raised text-ink-secondary hover:text-ink",
+  1
+ ],
+ [
+  "bg-transparent text-success hover:bg-danger/10 hover:text-danger",
+  1
+ ],
+ [
+  "block truncate text-[10.5px] text-ink-secondary",
+  1
+ ],
+ [
+  "block truncate text-[12.5px] font-medium",
+  1
+ ],
+ [
+  "block truncate text-[12.5px] font-medium text-ink",
+  1
+ ],
+ [
+  "border border-danger/40 text-danger hover:bg-danger/10",
+  1
+ ],
+ [
+  "border border-hairline/50 text-ink hover:bg-raised",
+  1
+ ],
+ [
+  "border border-hairline/50 text-ink-secondary",
+  1
+ ],
+ [
+  "border border-warning/25 bg-warning/10 text-warning",
+  1
+ ],
+ [
+  "border-b border-hairline/40 bg-inset/35 p-2.5 md:border-r md:border-b-0",
+  1
+ ],
+ [
+  "border-b border-r border-hairline/40 px-3 py-2.5 text-center last:border-r-0",
+  1
+ ],
+ [
+  "border-hairline/40 bg-panel hover:bg-raised",
+  1
+ ],
+ [
+  "border-hairline/50 bg-inset text-ink-secondary hover:text-ink",
+  1
+ ],
+ [
+  "border-hairline/60 hover:border-hairline hover:bg-raised/50",
+  1
+ ],
+ [
+  "change-includenodeindex-to-includeelementindex",
+  1
+ ],
+ [
+  "change-plugins-to-remarkplugins",
+  1
+ ],
+ [
+  "change-renderers-to-components",
+  1
+ ],
+ [
+  "change-source-to-children",
+  1
+ ],
+ [
+  "continue the conversation",
+  1
+ ],
+ [
+  "couldn't load: ",
+  1
+ ],
+ [
+  "cross-tab refresh kept the session alive",
+  1
+ ],
+ [
+  "cursor-pointer select-none hover:text-ink",
+  1
+ ],
+ [
+  "data-model-picker-content",
+  1
+ ],
+ [
+  "data-ph-capture-attribute",
+  1
+ ],
+ [
+  "data-ph-capture-attribute-",
+  1
+ ],
+ [
+  "definitionDestinationLiteral",
+  1
+ ],
+ [
+  "definitionDestinationLiteralMarker",
+  1
+ ],
+ [
+  "definitionDestinationString",
+  1
+ ],
+ [
+  "document not ready yet, trying again in 500 milliseconds...",
+  1
+ ],
+ [
+  "everyone responds",
+  1
+ ],
+ [
+  "flex -space-x-2",
+  1
+ ],
+ [
+  "flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5",
+  1
+ ],
+ [
+  "flex flex-col",
+  1
+ ],
+ [
+  "flex flex-col gap-0.5 self-end pb-0.5",
+  1
+ ],
+ [
+  "flex flex-col gap-2",
+  1
+ ],
+ [
+  "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
+  1
+ ],
+ [
+  "flex flex-col gap-3",
+  1
+ ],
+ [
+  "flex flex-col gap-5",
+  1
+ ],
+ [
+  "flex flex-wrap gap-1.5",
+  1
+ ],
+ [
+  "flex flex-wrap gap-2",
+  1
+ ],
+ [
+  "flex flex-wrap gap-2.5",
+  1
+ ],
+ [
+  "flex gap-1 overflow-x-auto md:block md:space-y-1 md:overflow-visible",
+  1
+ ],
+ [
+  "flex gap-2 text-[12px] leading-relaxed text-ink-secondary",
+  1
+ ],
+ [
+  "flex gap-2 text-[13px] text-ink-secondary",
+  1
+ ],
+ [
+  "flex gap-2 text-[13px] text-warning",
+  1
+ ],
+ [
+  "flex gap-3",
+  1
+ ],
+ [
+  "flex h-[78px] w-full overflow-hidden rounded-lg bg-app",
+  1
+ ],
+ [
+  "flex h-full flex-col",
+  1
+ ],
+ [
+  "flex h-full min-w-0 flex-1 flex-col bg-app",
+  1
+ ],
+ [
+  "flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-app",
+  1
+ ],
+ [
+  "flex justify-center py-5",
+  1
+ ],
+ [
+  "flex justify-end gap-2",
+  1
+ ],
+ [
+  "flex justify-end gap-2 border-t border-hairline/40 px-5 py-4",
+  1
+ ],
+ [
+  "flex max-h-full w-full flex-col rounded-2xl border border-hairline/40 bg-panel p-8 ",
+  1
+ ],
+ [
+  "flex min-h-0 min-w-0 flex-1 flex-col",
+  1
+ ],
+ [
+  "flex min-w-0 flex-1 flex-col",
+  1
+ ],
+ [
+  "flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]",
+  1
+ ],
+ [
+  "flex overflow-hidden rounded-lg border border-hairline/40",
+  1
+ ],
+ [
+  "flex rounded-lg bg-inset p-0.5",
+  1
+ ],
+ [
+  "flex w-14 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2",
+  1
+ ],
+ [
+  "flex w-[190px] shrink-0 flex-col gap-0.5 border-r border-hairline/40 p-3",
+  1
+ ],
+ [
+  "flex w-[30px] shrink-0 flex-col gap-[3px] border-r border-hairline bg-panel p-[4px]",
+  1
+ ],
+ [
+  "flex w-[88%] flex-col gap-[3px] rounded-md bg-card p-[4px]",
+  1
+ ],
+ [
+  "flex w-fit rounded-xl bg-raised/70 p-1",
+  1
+ ],
+ [
+  "flex w-full justify-end",
+  1
+ ],
+ [
+  "flush interval",
+  1
+ ],
+ [
+  "font-medium underline underline-offset-2",
+  1
+ ],
+ [
+  "for the full catalog.",
+  1
+ ],
+ [
+  "grid gap-2",
+  1
+ ],
+ [
+  "grid gap-4 text-[11.5px] sm:grid-cols-2",
+  1
+ ],
+ [
+  "grid grid-cols-1 gap-x-10 md:grid-cols-2",
+  1
+ ],
+ [
+  "grid grid-cols-2 gap-2 sm:grid-cols-3",
+  1
+ ],
+ [
+  "grid grid-cols-2 gap-3 sm:grid-cols-4",
+  1
+ ],
+ [
+  "grid grid-cols-3 gap-2",
+  1
+ ],
+ [
+  "grid grid-cols-5 gap-2",
+  1
+ ],
+ [
+  "grid-cols-2 sm:grid-cols-3",
+  1
+ ],
+ [
+  "group animate-msg-in flex w-full flex-col",
+  1
+ ],
+ [
+  "group flex w-full flex-col",
+  1
+ ],
+ [
+  "group mt-5 border-t border-hairline/35 pt-4",
+  1
+ ],
+ [
+  "group relative w-[172px] rounded-xl border border-hairline/40 bg-raised px-2.5 py-2",
+  1
+ ],
+ [
+  "group rounded-xl border border-hairline/45 bg-inset/45 px-4 py-3",
+  1
+ ],
+ [
+  "in e?String(e.name):",
+  1
+ ],
+ [
+  "in i?-i.wheelDeltaY:",
+  1
+ ],
+ [
+  "in i?i.deltaX:",
+  1
+ ],
+ [
+  "in i?i.deltaY:",
+  1
+ ],
+ [
+  "just now",
+  1
+ ],
+ [
+  "line-clamp-2 text-[12.5px] text-ink-secondary",
+  1
+ ],
+ [
+  "list-none rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
+  1
+ ],
+ [
+  "max-w-[160px] truncate",
+  1
+ ],
+ [
+  "max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold",
+  1
+ ],
+ [
+  "max-w-[480px] truncate",
+  1
+ ],
+ [
+  "max-w-[70%] rounded-2xl border border-hairline/40",
+  1
+ ],
+ [
+  "mb-1 rounded-lg border border-hairline/40 bg-panel p-2",
+  1
+ ],
+ [
+  "mb-1.5 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  1
+ ],
+ [
+  "mb-2 flex flex-wrap gap-2",
+  1
+ ],
+ [
+  "mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  1
+ ],
+ [
+  "mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card",
+  1
+ ],
+ [
+  "mb-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger",
+  1
+ ],
+ [
+  "mb-2 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  1
+ ],
+ [
+  "min-h-0 flex-1 overflow-y-auto border-t border-hairline/40 p-4 md:p-6",
+  1
+ ],
+ [
+  "min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8",
+  1
+ ],
+ [
+  "min-w-0 flex-1 rounded bg-inset px-1.5 py-0.5 text-[13px] text-ink focus:outline-none",
+  1
+ ],
+ [
+  "min-w-0 flex-1 truncate text-[14px] font-medium text-ink",
+  1
+ ],
+ [
+  "min-w-0 truncate text-[12.5px] text-ink-secondary",
+  1
+ ],
+ [
+  "ml-auto flex rounded-xl bg-panel p-1",
+  1
+ ],
+ [
+  "mr-1.5 inline animate-spin",
+  1
+ ],
+ [
+  "mt-0.5 truncate font-mono text-[10px] text-ink-secondary/85",
+  1
+ ],
+ [
+  "mt-0.5 truncate pl-6 text-[12px] text-ink-secondary/70",
+  1
+ ],
+ [
+  "mt-0.5 truncate text-[11.5px] text-ink-secondary",
+  1
+ ],
+ [
+  "mt-1 flex flex-wrap gap-1",
+  1
+ ],
+ [
+  "mt-1 max-w-[520px] truncate font-mono text-[10px] text-ink-secondary",
+  1
+ ],
+ [
+  "mt-1 truncate font-mono text-[11.5px] text-ink",
+  1
+ ],
+ [
+  "mt-1.5 block text-[10.5px] leading-relaxed text-ink-secondary",
+  1
+ ],
+ [
+  "mt-1.5 block text-[10.5px] text-ink-secondary",
+  1
+ ],
+ [
+  "mt-1.5 inline-block text-[12px] font-medium text-accent hover:underline",
+  1
+ ],
+ [
+  "mt-2 flex overflow-hidden rounded-lg border border-hairline/40",
+  1
+ ],
+ [
+  "mt-2 list-decimal space-y-1.5 pl-4 text-[11.5px] leading-relaxed text-ink-secondary",
+  1
+ ],
+ [
+  "mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger",
+  1
+ ],
+ [
+  "mt-2.5 flex flex-col gap-2",
+  1
+ ],
+ [
+  "mt-3 grid grid-cols-3 gap-3 text-[13px]",
+  1
+ ],
+ [
+  "mt-3 rounded-lg border border-warning/20 bg-warning/5 p-3",
+  1
+ ],
+ [
+  "mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[12px] text-ink",
+  1
+ ],
+ [
+  "mt-4 overflow-hidden rounded-xl border border-hairline/45 bg-[#0d0d0d]",
+  1
+ ],
+ [
+  "mt-5 flex gap-5 border-b border-hairline/35 px-5 md:px-7",
+  1
+ ],
+ [
+  "mt-6 flex flex-col gap-2.5",
+  1
+ ],
+ [
+  "mx-1 rounded-xl border border-dashed border-hairline/50 px-3 py-5 text-center",
+  1
+ ],
+ [
+  "mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8",
+  1
+ ],
+ [
+  "mx-6 mb-1 text-[12px] text-ink-secondary sm:mx-8",
+  1
+ ],
+ [
+  "mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8",
+  1
+ ],
+ [
+  "new session ID generated",
+  1
+ ],
+ [
+  "node (",
+  1
+ ],
+ [
+  "not created",
+  1
+ ],
+ [
+  "not prepared",
+  1
+ ],
+ [
+  "object with keys {",
+  1
+ ],
+ [
+  "onCapture is deprecated. Please use `before_send` instead",
+  1
+ ],
+ [
+  "openmausbot.settings.section",
+  1
+ ],
+ [
+  "opt_out_capturing_by_default",
+  1
+ ],
+ [
+  "overflow-hidden rounded-lg border border-hairline/40",
+  1
+ ],
+ [
+  "overflow-hidden rounded-xl border border-hairline/40 bg-card",
+  1
+ ],
+ [
+  "pasted text",
+  1
+ ],
+ [
+  "pnpm dev:server",
+  1
+ ],
+ [
+  "posthog-js client rate limited: ",
+  1
+ ],
+ [
+  "posthog.capture('$exception')",
+  1
+ ],
+ [
+  "posthog.createPersonProfile",
+  1
+ ],
+ [
+  "posthog.group requires a group type and group key",
+  1
+ ],
+ [
+  "posthog.setGroupPropertiesForFlags",
+  1
+ ],
+ [
+  "posthog.setInternalOrTestUser",
+  1
+ ],
+ [
+  "posthog.setPersonProperties",
+  1
+ ],
+ [
+  "posthog.unsetPersonProperties",
+  1
+ ],
+ [
+  "previewing web experiments ",
+  1
+ ],
+ [
+  "product tour shown",
+  1
+ ],
+ [
+  "property missing ':'",
+  1
+ ],
+ [
+  "push, workflow_run",
+  1
+ ],
+ [
+  "px-2.5 py-1.5 text-[12px] font-medium text-ink hover:text-accent",
+  1
+ ],
+ [
+  "px-3 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  1
+ ],
+ [
+  "relative border-r border-hairline/40",
+  1
+ ],
+ [
+  "relative border-r border-hairline/40 last:border-r-0",
+  1
+ ],
+ [
+  "relative flex min-h-0 flex-1",
+  1
+ ],
+ [
+  "relative grid",
+  1
+ ],
+ [
+  "relative h-[76px] overflow-hidden",
+  1
+ ],
+ [
+  "relative inline-flex rounded-full",
+  1
+ ],
+ [
+  "relative ml-auto",
+  1
+ ],
+ [
+  "relative mx-auto max-w-[900px]",
+  1
+ ],
+ [
+  "relative overflow-hidden border-b border-hairline/40 px-5 py-5",
+  1
+ ],
+ [
+  "relative shrink-0",
+  1
+ ],
+ [
+  "remove it",
+  1
+ ],
+ [
+  "resourceDestinationLiteral",
+  1
+ ],
+ [
+  "resourceDestinationLiteralMarker",
+  1
+ ],
+ [
+  "resourceDestinationString",
+  1
+ ],
+ [
+  "retrieved web experiments from the server",
+  1
+ ],
+ [
+  "rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold",
+  1
+ ],
+ [
+  "rounded bg-raised px-1.5 py-0.5",
+  1
+ ],
+ [
+  "rounded p-0.5 hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-full bg-accent px-3 py-1 text-[13px] font-medium text-white disabled:opacity-40",
+  1
+ ],
+ [
+  "rounded-full px-1 py-0.5 text-[13px] leading-none hover:bg-raised",
+  1
+ ],
+ [
+  "rounded-full px-3 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover",
+  1
+ ],
+ [
+  "rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger",
+  1
+ ],
+ [
+  "rounded-lg border border-hairline/40 bg-inset px-3 py-2",
+  1
+ ],
+ [
+  "rounded-lg border border-success/25 bg-success/10 px-3 py-2 text-[13px] text-success",
+  1
+ ],
+ [
+  "rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-lg p-2 text-ink-secondary hover:bg-danger/10 hover:text-danger",
+  1
+ ],
+ [
+  "rounded-lg px-2 py-1.5 text-[12px] text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-lg px-4 py-1.5 text-[13px] capitalize",
+  1
+ ],
+ [
+  "rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-md px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "rounded-md px-2.5 py-1 text-[12px] font-medium capitalize",
+  1
+ ],
+ [
+  "rounded-xl border border-hairline/40 bg-card p-3.5",
+  1
+ ],
+ [
+  "rounded-xl border border-warning/30 bg-warning/10 px-3.5 py-3 text-[13px] text-warning",
+  1
+ ],
+ [
+  "rounded-xl border p-3 text-left",
+  1
+ ],
+ [
+  "rounded-xl border p-3 text-left disabled:cursor-not-allowed disabled:opacity-45",
+  1
+ ],
+ [
+  "rounded-xl border p-3 text-left transition",
+  1
+ ],
+ [
+  "rounded-xl border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-45",
+  1
+ ],
+ [
+  "rounded-xl border p-4",
+  1
+ ],
+ [
+  "rounded-xl p-2 text-ink-secondary hover:bg-danger/10 hover:text-danger",
+  1
+ ],
+ [
+  "rounded-xl px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "sanitize_properties is deprecated. Use before_send instead",
+  1
+ ],
+ [
+  "self-hosted VPS",
+  1
+ ],
+ [
+  "session ",
+  1
+ ],
+ [
+  "session_idle_timeout_seconds",
+  1
+ ],
+ [
+  "setting flag key ",
+  1
+ ],
+ [
+  "setup guide",
+  1
+ ],
+ [
+  "setup: ",
+  1
+ ],
+ [
+  "shrink-0 rounded bg-accent/10 px-1.5 py-px text-[10px] text-accent",
+  1
+ ],
+ [
+  "shrink-0 rounded bg-inset px-1.5 py-px text-[10px] text-ink-secondary",
+  1
+ ],
+ [
+  "shrink-0 rounded p-0.5",
+  1
+ ],
+ [
+  "shrink-0 rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "shrink-0 rounded px-1 text-[10.5px]",
+  1
+ ],
+ [
+  "shrink-0 rounded-lg border border-hairline/40 px-3 py-1 text-[12px]",
+  1
+ ],
+ [
+  "shrink-0 rounded-md border border-hairline/40 px-1.5 py-0.5 text-[11px] text-ink-secondary",
+  1
+ ],
+ [
+  "shrink-0 rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink",
+  1
+ ],
+ [
+  "shrink-0 text-[11.5px] text-ink-secondary hover:text-ink disabled:opacity-50",
+  1
+ ],
+ [
+  "size-10 rounded-xl border text-[11px] font-medium",
+  1
+ ],
+ [
+  "size-8 rounded-full border-2 border-transparent transition-transform hover:scale-110",
+  1
+ ],
+ [
+  "sticky top-0 z-30 grid bg-app/95 backdrop-blur",
+  1
+ ],
+ [
+  "survey dismissed",
+  1
+ ],
+ [
+  "survey sent",
+  1
+ ],
+ [
+  "survey shown",
+  1
+ ],
+ [
+  "text-[10px] font-medium uppercase tracking-[0.08em] text-ink-secondary",
+  1
+ ],
+ [
+  "text-[10px] font-medium uppercase tracking-[0.12em] text-ink-secondary",
+  1
+ ],
+ [
+  "text-[10px] font-medium uppercase tracking-[0.14em] text-ink-secondary",
+  1
+ ],
+ [
+  "text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary ",
+  1
+ ],
+ [
+  "text-[11px] uppercase tracking-[0.18em] text-ink-secondary",
+  1
+ ],
+ [
+  "text-[12px] font-medium uppercase tracking-wide text-ink-secondary",
+  1
+ ],
+ [
+  "text-[12px] text-ink-secondary hover:text-ink",
+  1
+ ],
+ [
+  "text-[13px] text-accent hover:underline",
+  1
+ ],
+ [
+  "text-[9.5px] font-medium uppercase tracking-wider text-ink-secondary",
+  1
+ ],
+ [
+  "text-accent hover:underline",
+  1
+ ],
+ [
+  "text-ink-secondary hover:bg-raised/55 hover:text-ink",
+  1
+ ],
+ [
+  "text-ink-secondary line-through",
+  1
+ ],
+ [
+  "text-ink-secondary/50 hover:bg-raised hover:text-ink-secondary",
+  1
+ ],
+ [
+  "the Local VM",
+  1
+ ],
+ [
+  "the cloud box selected by Auto",
+  1
+ ],
+ [
+  "the home folder",
+  1
+ ],
+ [
+  "the lead bot",
+  1
+ ],
+ [
+  "the self-hosted VPS selected by Auto",
+  1
+ ],
+ [
+  "thinking-shimmer animate-shimmer",
+  1
+ ],
+ [
+  "this MAUS",
+  1
+ ],
+ [
+  "this cloud box",
+  1
+ ],
+ [
+  "this computer selected by Auto",
+  1
+ ],
+ [
+  "this self-hosted VPS",
+  1
+ ],
+ [
+  "thread.token-usage.updated",
+  1
+ ],
+ [
+  "transition-colors hover:border-hairline",
+  1
+ ],
+ [
+  "triggered on ",
+  1
+ ],
+ [
+  "truncate font-medium text-ink",
+  1
+ ],
+ [
+  "truncate font-mono text-[11.5px] text-accent",
+  1
+ ],
+ [
+  "truncate text-[11px] text-ink-secondary",
+  1
+ ],
+ [
+  "truncate text-[12.5px]",
+  1
+ ],
+ [
+  "truncate text-[12px] font-semibold text-white",
+  1
+ ],
+ [
+  "truncate text-[12px] text-ink",
+  1
+ ],
+ [
+  "truncate text-[13px] text-ink",
+  1
+ ],
+ [
+  "truncate text-[14px] font-medium text-ink",
+  1
+ ],
+ [
+  "truncate text-[15px] font-semibold text-ink",
+  1
+ ],
+ [
+  "truncate text-[17px] font-semibold text-ink",
+  1
+ ],
+ [
+  "truncate text-[20px] font-semibold text-white",
+  1
+ ],
+ [
+  "turn failed",
+  1
+ ],
+ [
+  "turn ok",
+  1
+ ],
+ [
+  "unable to deserialize ",
+  1
+ ],
+ [
+  "unable to serialize ",
+  1
+ ],
+ [
+  "underline underline-offset-2 hover:text-ink",
+  1
+ ],
+ [
+  "use `",
+  1
+ ],
+ [
+  "w-full max-w-[70%] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3",
+  1
+ ],
+ [
+  "w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink focus:outline-none",
+  1
+ ],
+ [
+  "wayland-compositor-unsupported",
+  1
+ ],
+ [
+  "} ${e.description??",
+  1
+ ],
+ [
+  "}),p.classList.add(...pp),r({type:",
+  1
+ ],
+ [
+  "});else if(h===413)a({kind:",
+  1
+ ],
+ [
+  "});else if(u===413)r({kind:",
+  1
+ ],
+ [
+  "},dictation:{available:!1,engine:",
+  1
+ ],
+ [
+  "},localComputer:{available:!1,support:",
+  1
+ ],
+ [
+  "}else c=j9++,s=",
+  1
+ ],
+ [
+  "}}else if(a[1].type===",
+  1
+ ]
+]

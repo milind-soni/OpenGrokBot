@@ -237,6 +237,29 @@ describe("unavailable Linux CUA runtime", () => {
       reasonCode: "bundled-driver-invalid",
     });
   });
+
+  it("clears a durable opt-in when a release safety gate blocks startup", async () => {
+    const preferenceStore = { write: vi.fn() };
+    const runtime = createUnavailableLinuxRuntime({
+      connectionStore: { persist: (connection) => connection },
+      preferenceStore,
+      clearPreference: true,
+      reasonCode: "linux-seat-safety-blocked",
+      message: "Local control is temporarily unavailable on Linux.",
+    });
+
+    await expect(runtime.initialize()).resolves.toMatchObject({
+      enabled: false,
+      status: "unavailable",
+      reasonCode: "linux-seat-safety-blocked",
+    });
+    await expect(runtime.enable()).resolves.toMatchObject({
+      enabled: false,
+      reasonCode: "linux-seat-safety-blocked",
+    });
+    expect(preferenceStore.write).toHaveBeenCalledOnce();
+    expect(preferenceStore.write).toHaveBeenCalledWith(false);
+  });
 });
 
 // Windows does not provide the POSIX executable and Unix-socket semantics this

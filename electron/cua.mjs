@@ -25,6 +25,7 @@ import { pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
 const { createCuaConnectionStore } = require("./cua-connection.cjs");
 const {
+  createLinuxCuaPreferenceStore,
   createLinuxCuaRuntime,
   createUnavailableLinuxRuntime,
 } = require("./cua-linux-runtime.cjs");
@@ -47,8 +48,30 @@ const connectionStore = createCuaConnectionStore({
   getUserData: () => app.getPath("userData"),
 });
 
+// Real GNOME/Xorg validation found that merely starting Cua Driver 0.19.3
+// can capture the user's physical pointer and keyboard before any approved
+// tool action. Simulated/Xvfb readiness cannot prove that boundary safe.
+// Keep Linux fail-closed until a pinned driver passes the real-seat matrix in
+// #345. This is deliberately a source constant, not an environment flag a
+// packaged application could accidentally inherit.
+const LINUX_LOCAL_CONTROL_RELEASE_BLOCKED = true;
+
 function ensureLinuxRuntime() {
   if (!linuxRuntime) {
+    if (LINUX_LOCAL_CONTROL_RELEASE_BLOCKED) {
+      linuxRuntime = createUnavailableLinuxRuntime({
+        connectionStore,
+        preferenceStore: createLinuxCuaPreferenceStore({
+          getUserData: () => app.getPath("userData"),
+        }),
+        clearPreference: true,
+        reasonCode: "linux-seat-safety-blocked",
+        message:
+          "Local control is temporarily unavailable on Linux while an input-safety issue is fixed.",
+        onChange: (connection) => stateListener(connection),
+      });
+      return linuxRuntime;
+    }
     try {
       let bundledDriverPath;
       if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {

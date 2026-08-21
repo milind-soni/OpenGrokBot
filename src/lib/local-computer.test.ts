@@ -4,6 +4,7 @@ import {
   autoSelectsLocalComputer,
   instanceSupportsLocalComputer,
   linuxAutoDescription,
+  localComputerDisabledReason,
   localComputerSelectable,
 } from "./local-computer";
 
@@ -61,6 +62,23 @@ describe("local computer UI eligibility", () => {
         localSelectable: true,
       }),
     ).toBe(false);
+  });
+
+  it("explains the temporary Linux seat-safety block without suggesting setup", () => {
+    const capabilities = {
+      host: { platform: "linux" as const },
+      localComputer: {
+        available: false,
+        enabled: false,
+        reasonCode: "linux-seat-safety-blocked",
+      },
+    } as DesktopCapabilities;
+
+    expect(
+      localComputerDisabledReason({ capabilities, providerSupportsLocal: true }),
+    ).toBe(
+      "Local computer control is temporarily disabled on Linux while an input-safety issue is fixed.",
+    );
   });
 
   it("preserves the ready local fallback on supported non-Linux hosts", () => {

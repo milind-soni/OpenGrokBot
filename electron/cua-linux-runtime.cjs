@@ -439,11 +439,20 @@ function publicRuntimeStatus(connection) {
 
 function createUnavailableLinuxRuntime({
   connectionStore,
+  preferenceStore,
+  clearPreference = false,
   onChange = () => {},
   processId = process.pid,
   reasonCode = "bundled-driver-invalid",
   message = "The bundled Cua Driver failed integrity validation.",
 } = {}) {
+  if (clearPreference) {
+    try {
+      preferenceStore?.write(false);
+    } catch (error) {
+      console.error("[cua] Failed to clear unsafe Linux local-control preference:", error);
+    }
+  }
   const connection = {
     schemaVersion: CONNECTION_SCHEMA_VERSION,
     mode: "unavailable",

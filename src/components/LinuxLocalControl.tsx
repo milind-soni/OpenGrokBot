@@ -24,6 +24,7 @@ export function LinuxLocalControl() {
   if (capabilities.host.platform !== "linux") return null;
   const busy = pending !== null || local.status === "checking" || local.status === "starting";
   const ready = local.available;
+  const safetyBlocked = local.reasonCode === "linux-seat-safety-blocked";
   const wayland = capabilities.host.session === "wayland";
   const bundledDriver = local.driverSource === "bundled";
 
@@ -59,14 +60,30 @@ export function LinuxLocalControl() {
         <span
           className={cn(
             "shrink-0 rounded-full px-2 py-1 text-[10px] font-medium",
-            ready ? "bg-success/10 text-success" : local.enabled ? "bg-warning/10 text-warning" : "bg-raised text-ink-secondary",
+            ready
+              ? "bg-success/10 text-success"
+              : safetyBlocked
+                ? "bg-danger/10 text-danger"
+                : local.enabled
+                  ? "bg-warning/10 text-warning"
+                  : "bg-raised text-ink-secondary",
           )}
         >
-          {ready ? "Ready" : local.enabled ? "Needs attention" : "Off"}
+          {ready ? "Ready" : safetyBlocked ? "Temporarily unavailable" : local.enabled ? "Needs attention" : "Off"}
         </span>
       </div>
 
-      {!local.enabled ? (
+      {safetyBlocked ? (
+        <div className="mt-3 rounded-lg border border-danger/20 bg-danger/5 p-3">
+          <div className="flex gap-2 text-[12px] leading-relaxed text-ink-secondary">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-danger" />
+            <span>
+              Local control is temporarily disabled on Linux while we fix an input-safety issue. Chat, Cloud, Local VM,
+              and screen preview remain available.
+            </span>
+          </div>
+        </div>
+      ) : !local.enabled ? (
         <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 p-3">
           <div className="flex gap-2 text-[12px] leading-relaxed text-ink-secondary">
             <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
@@ -104,7 +121,7 @@ export function LinuxLocalControl() {
 
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
 
-      <div className="mt-3 flex gap-2">
+      {!safetyBlocked && <div className="mt-3 flex gap-2">
         {!local.enabled ? (
           <button
             type="button"
@@ -130,7 +147,7 @@ export function LinuxLocalControl() {
             )}
             <button
               type="button"
-              disabled={busy}
+              disabled={pending === "disable"}
               onClick={() => void run("disable")}
               className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
             >
@@ -139,7 +156,7 @@ export function LinuxLocalControl() {
             </button>
           </>
         )}
-      </div>
+      </div>}
 
       <button
         type="button"

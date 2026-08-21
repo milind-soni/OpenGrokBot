@@ -219,6 +219,15 @@ function GroupListItem({
         e.preventDefault();
         onMenu({ groupId: group.id, x: e.clientX, y: e.clientY });
       }}
+      // the menu must be reachable without a pointer: Shift+F10, and the
+      // dedicated ContextMenu key (whose native event carries no useful
+      // coordinates) both open it centered on the row
+      onKeyDown={(e) => {
+        if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        onMenu({ groupId: group.id, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      }}
       className={cn(
         "relative flex w-full items-center rounded-xl text-left",
         density === "icons" ? "justify-center px-1 py-1.5" : density === "compact" ? "gap-2 px-2 py-1.5" : "gap-3 px-3 py-2.5",

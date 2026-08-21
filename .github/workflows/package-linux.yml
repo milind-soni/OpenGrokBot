@@ -46,6 +46,11 @@ jobs:
         run: pnpm package:linux:offline
       - name: Verify package contents and metadata
         run: node scripts/verify-linux-package.mjs
+      - name: Reproduce and verify an in-place DEB upgrade
+        run: |
+          deb=(release/*.deb)
+          test "${#deb[@]}" -eq 1
+          sudo --preserve-env=CI,RUNNER_TEMP node scripts/smoke-deb-upgrade.mjs "${deb[0]}"
       - name: Configure Chromium sandbox for the unpacked app
         run: |
           sudo chown root:root release/linux-unpacked/chrome-sandbox
@@ -54,7 +59,11 @@ jobs:
       - name: Launch packaged app and verify lifecycle
         env:
           OMB_KEEP_SMOKE_DIR: "1"
+          OMB_SMOKE_INSTALLED_DEB: "1"
         run: pnpm smoke:linux-package
+      - name: Remove the installed upgrade fixture
+        if: always()
+        run: sudo dpkg --purge openmausbot || true
       - name: Prepare release assets
         id: release
         shell: bash

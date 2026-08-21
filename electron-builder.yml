@@ -157,6 +157,9 @@ linux:
 deb:
   packageCategory: utils
   priority: optional
+  # dpkg can preserve legacy directory modes during an upgrade. This
+  # idempotent hook repairs only the exact package-owned CUA path.
+  afterInstall: build/linux-after-install.sh
 
 # Static AppImage runtime: Ubuntu 24.04 can launch it without legacy FUSE 2.
 toolsets:

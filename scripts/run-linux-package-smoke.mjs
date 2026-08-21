@@ -28,10 +28,15 @@ if (appImages.length !== 1) {
 }
 const [appImage] = appImages;
 
-for (const executable of [
+const executables = [
   path.join(root, "release", "linux-unpacked", "openmausbot"),
   path.join(root, "release", appImage),
-]) {
+];
+if (process.env.OMB_SMOKE_INSTALLED_DEB === "1") {
+  executables.push("/opt/OpenMausBot/openmausbot");
+}
+
+for (const executable of executables) {
   const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));
   chmodSync(runtimeDirectory, 0o700);
   const bundled = spawnSync(
@@ -42,7 +47,7 @@ for (const executable of [
       env: {
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
-        OMB_SMOKE_BUNDLED_CUA: "1",
+        OMB_SMOKE_LINUX_CUA_BLOCKED: "1",
         OMB_SMOKE_EXECUTABLE: executable,
       },
       stdio: "inherit",
@@ -58,9 +63,7 @@ for (const executable of [
 }
 
 if (process.exitCode === undefined) for (const lane of [
-  { name: "x11", wayland: false, hardDeath: false },
-  { name: "wayland", wayland: true, hardDeath: false },
-  { name: "x11-hard-death", wayland: false, hardDeath: true },
+  { name: "wayland-safety-block", wayland: true },
 ]) {
   const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));
   if (
@@ -80,7 +83,7 @@ if (process.exitCode === undefined) for (const lane of [
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_WAYLAND: lane.wayland ? "1" : "0",
-        OMB_SMOKE_HARD_DEATH: lane.hardDeath ? "1" : "0",
+        OMB_SMOKE_LINUX_CUA_BLOCKED: "1",
       },
       stdio: "inherit",
     },

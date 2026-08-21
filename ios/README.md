@@ -182,7 +182,7 @@ the host computer remain unreachable through the companion.
 - **Haptic and Audio Feedback.** Subtle tactile and sound cues for sent messages,
   streaming token arrival, and answered approvals (`SoundEffects`, `Haptics`).
 
-## Not in this version
+## Limits in this version
 
 The live connection is foreground-only. Notification frames produce native
 banners, sounds, time-sensitive approval alerts, and an app badge while connected;

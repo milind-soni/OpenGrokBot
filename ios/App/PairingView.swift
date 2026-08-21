@@ -147,14 +147,14 @@ struct PairingView: View {
             VStack(spacing: 4) {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(accentTint)
+                        .fill(discovery.failure == nil ? accentTint : Color(hex: "#EF4444"))
                         .frame(width: 7, height: 7)
                     Text("LOCAL NETWORK RADAR")
                         .font(.system(size: 11, weight: .heavy, design: .monospaced))
                         .foregroundColor(accentTint)
                 }
 
-                Text(discovery.found.isEmpty ? "Searching for OpenMausBot hosts…" : "Found \(discovery.found.count) available host\(discovery.found.count == 1 ? "" : "s")")
+                Text(discoveryStatus)
                     .font(.headline)
                     .foregroundColor(isDark ? .white : Color(hex: "#0F172A"))
 
@@ -179,7 +179,9 @@ struct PairingView: View {
 
     @ViewBuilder
     private var discoveredHostsSection: some View {
-        if !discovery.found.isEmpty {
+        if let discoveryFailure = discovery.failure {
+            errorBanner(discoveryFailure)
+        } else if !discovery.found.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("DISCOVERED COMPUTERS")
                     .font(.system(size: 10, weight: .heavy, design: .monospaced))
@@ -380,7 +382,7 @@ struct PairingView: View {
                 Circle()
                     .fill(Color(hex: "#10B981").opacity(0.15))
                     .frame(width: 72, height: 72)
-                Image(systemName: "lock.shield.fill")
+                Image(systemName: "checkmark.shield.fill")
                     .font(.system(size: 32, weight: .bold))
                     .foregroundColor(Color(hex: "#10B981"))
             }
@@ -396,7 +398,7 @@ struct PairingView: View {
             }
 
             if let credential = scannedCredential {
-                Text("Confirm to establish a secure, encrypted companion channel with this computer.")
+                Text("Confirm this computer to establish an authenticated companion connection. Use a trusted Wi-Fi network or a tailnet; OpenMausBot does not encrypt local Wi-Fi traffic.")
                     .font(.caption)
                     .foregroundColor(isDark ? Color(hex: "#94A3B8") : Color(hex: "#64748B"))
                     .multilineTextAlignment(.center)
@@ -555,6 +557,16 @@ struct PairingView: View {
     }
 
     // MARK: - Helpers
+
+    private var discoveryStatus: String {
+        if discovery.failure != nil {
+            return "Local discovery needs attention"
+        }
+        if discovery.found.isEmpty {
+            return discovery.browsing ? "Searching for OpenMausBot hosts…" : "Starting local discovery…"
+        }
+        return "Found \(discovery.found.count) available host\(discovery.found.count == 1 ? "" : "s")"
+    }
 
     static func deviceName() -> String {
         #if canImport(UIKit)

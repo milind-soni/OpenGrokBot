@@ -4,6 +4,7 @@ const generatedPaths = [
   "dist",
   "dist-electron",
   "dist-native",
+  "dist-companion",
   "dist-server",
   "release",
   "electron/resources/speech-helper",

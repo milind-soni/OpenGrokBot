@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: typecheck + test (${{ matrix.os }})
+    name: verify (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -32,9 +32,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm check:electron
+      - run: pnpm verify
       - name: production UI build
         if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vite build

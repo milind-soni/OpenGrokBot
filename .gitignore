@@ -1,5 +1,6 @@
 node_modules
 .worktrees/
+.cursor/
 dist
 dist-electron
 dist-native
@@ -8,6 +9,9 @@ dist-native
 dist-companion
 dist-server
 *.local
+.env
+.env.*
+!.env.example
 .DS_Store
 *.tsbuildinfo
 electron/resources/speech-helper

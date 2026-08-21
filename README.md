@@ -257,6 +257,7 @@ Composio and Box are third-party services with their own accounts and terms. Box
 its trial, and using a cloud computer may incur charges.
 
 ```sh
+pnpm verify        # typecheck + full tests + Electron syntax checks
 pnpm typecheck     # app + server
 pnpm test          # unit, driver, API, and desktop capability tests
 pnpm build         # typecheck + production build

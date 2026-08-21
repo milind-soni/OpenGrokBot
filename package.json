@@ -30,6 +30,7 @@
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "node scripts/test-floor.mjs && pnpm broker:test && pnpm test:updater && pnpm test:packaged-server",
+    "verify": "pnpm typecheck && pnpm test && pnpm check:electron",
     "test:updater": "node --test electron/updater-coordinator.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",

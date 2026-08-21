@@ -12,6 +12,7 @@
     ".roo/**",
     ".windsurf/**",
     "dist/**",
+    "dist-companion/**",
     "dist-electron/**",
     "dist-native/**",
     "dist-server/**",

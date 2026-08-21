@@ -47,7 +47,7 @@ for (const executable of executables) {
       env: {
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
-        OMB_SMOKE_LINUX_CUA_BLOCKED: "1",
+        OMB_SMOKE_BUNDLED_CUA: "1",
         OMB_SMOKE_EXECUTABLE: executable,
       },
       stdio: "inherit",
@@ -63,7 +63,8 @@ for (const executable of executables) {
 }
 
 if (process.exitCode === undefined) for (const lane of [
-  { name: "wayland-safety-block", wayland: true },
+  { name: "x11-overlay-free-crash-retry", wayland: false, blocked: false },
+  { name: "wayland-safety-block", wayland: true, blocked: true },
 ]) {
   const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));
   if (
@@ -83,7 +84,7 @@ if (process.exitCode === undefined) for (const lane of [
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_WAYLAND: lane.wayland ? "1" : "0",
-        OMB_SMOKE_LINUX_CUA_BLOCKED: "1",
+        OMB_SMOKE_LINUX_CUA_BLOCKED: lane.blocked ? "1" : "0",
       },
       stdio: "inherit",
     },

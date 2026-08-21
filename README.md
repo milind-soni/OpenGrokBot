@@ -182,7 +182,7 @@ flowchart LR
 | API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
 | Voice | `server/tts/` | ElevenLabs, bring your own key. Runs on the harness so the key never reaches the UI; markdown is rewritten into something worth hearing before it is spoken. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
-| Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and platform capabilities; Apple speech stays macOS-only, and Ubuntu local control currently fails closed while its real-seat safety blocker is resolved. |
+| Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and platform capabilities; Apple speech stays macOS-only, Ubuntu Xorg has opt-in local control, and Wayland remains fail-closed. |
 
 ## Quick start
 
@@ -227,13 +227,13 @@ pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 | Packaged app, embedded harness, local agent CLIs | Supported | Beta | Beta |
 | Composio and Box/cloud computers | Supported | Beta | Beta |
 | Explicit preview-only local screen capture | Supported | Beta | Beta |
-| Bot control of this computer | Supported | Temporarily disabled: input-safety hold | Temporarily disabled: input-safety hold |
+| Bot control of this computer | Supported | Beta, explicit opt-in | Disabled: Wayland safety gate |
 | Native on-device dictation | Supported | Planned | Planned |
 
-The Linux preview is user-initiated and never enables local bot control or Auto routing. Packaged Linux builds still
-contain the reviewed Cua Driver 0.19.3 runtime, but the app does not start it and clears legacy opt-ins while the
-real-seat input-safety blocker is unresolved. Chat, preview, Cloud, and Local VM remain available. Do not bypass the
-hold by starting the bundled driver manually. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and tracking
+The Linux preview is user-initiated and never enables local bot control or Auto routing. On Xorg, the reviewed Cua
+Driver 0.19.3 runtime starts only after explicit opt-in and without its full-screen cursor overlay. On Wayland the
+app never starts it and clears legacy opt-ins while that real-seat safety gate remains unresolved. Chat, preview,
+Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and tracking
 issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29),
 [#345](https://github.com/milind-soni/OpenMausBot/issues/345), and
 [#113](https://github.com/milind-soni/OpenMausBot/issues/113).

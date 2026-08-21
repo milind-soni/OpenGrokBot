@@ -30,6 +30,7 @@ const {
   createUnavailableLinuxRuntime,
 } = require("./cua-linux-runtime.cjs");
 const { cleanupAppImageCuaBundle, stageAppImageCuaBundle } = require("./cua-linux-bundle.cjs");
+const { linuxLocalControlSupport } = require("./capabilities.cjs");
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -48,26 +49,18 @@ const connectionStore = createCuaConnectionStore({
   getUserData: () => app.getPath("userData"),
 });
 
-// Real GNOME/Xorg validation found that merely starting Cua Driver 0.19.3
-// can capture the user's physical pointer and keyboard before any approved
-// tool action. Simulated/Xvfb readiness cannot prove that boundary safe.
-// Keep Linux fail-closed until a pinned driver passes the real-seat matrix in
-// #345. This is deliberately a source constant, not an environment flag a
-// packaged application could accidentally inherit.
-const LINUX_LOCAL_CONTROL_RELEASE_BLOCKED = true;
-
 function ensureLinuxRuntime() {
   if (!linuxRuntime) {
-    if (LINUX_LOCAL_CONTROL_RELEASE_BLOCKED) {
+    const support = linuxLocalControlSupport(process.platform, process.env);
+    if (!support.available) {
       linuxRuntime = createUnavailableLinuxRuntime({
         connectionStore,
         preferenceStore: createLinuxCuaPreferenceStore({
           getUserData: () => app.getPath("userData"),
         }),
         clearPreference: true,
-        reasonCode: "linux-seat-safety-blocked",
-        message:
-          "Local control is temporarily unavailable on Linux while an input-safety issue is fixed.",
+        reasonCode: support.reasonCode,
+        message: support.message,
         onChange: (connection) => stateListener(connection),
       });
       return linuxRuntime;

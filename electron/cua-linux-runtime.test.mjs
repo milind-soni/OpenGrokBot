@@ -238,24 +238,24 @@ describe("unavailable Linux CUA runtime", () => {
     });
   });
 
-  it("clears a durable opt-in when a release safety gate blocks startup", async () => {
+  it("clears a durable opt-in when the Wayland safety gate blocks startup", async () => {
     const preferenceStore = { write: vi.fn() };
     const runtime = createUnavailableLinuxRuntime({
       connectionStore: { persist: (connection) => connection },
       preferenceStore,
       clearPreference: true,
-      reasonCode: "linux-seat-safety-blocked",
-      message: "Local control is temporarily unavailable on Linux.",
+      reasonCode: "linux-wayland-seat-safety-blocked",
+      message: "Local control is not available on Wayland yet.",
     });
 
     await expect(runtime.initialize()).resolves.toMatchObject({
       enabled: false,
       status: "unavailable",
-      reasonCode: "linux-seat-safety-blocked",
+      reasonCode: "linux-wayland-seat-safety-blocked",
     });
     await expect(runtime.enable()).resolves.toMatchObject({
       enabled: false,
-      reasonCode: "linux-seat-safety-blocked",
+      reasonCode: "linux-wayland-seat-safety-blocked",
     });
     expect(preferenceStore.write).toHaveBeenCalledOnce();
     expect(preferenceStore.write).toHaveBeenCalledWith(false);
@@ -346,9 +346,18 @@ describe.skipIf(process.platform === "win32")("Linux CUA opt-in and lifecycle", 
     expect(context.spawnProcess).toHaveBeenCalledTimes(1);
     expect(context.spawnProcess).toHaveBeenCalledWith(
       context.binary,
-      expect.arrayContaining(["serve", "--embedded", "--socket", "--permission-mode", "standard"]),
+      expect.arrayContaining([
+        "serve",
+        "--embedded",
+        "--no-overlay",
+        "--socket",
+        "--permission-mode",
+        "standard",
+      ]),
       expect.objectContaining({ shell: false, stdio: ["pipe", "ignore", "pipe"] }),
     );
+    const daemonArgs = context.spawnProcess.mock.calls[0][1];
+    expect(daemonArgs.filter((argument) => argument === "--no-overlay")).toHaveLength(1);
     const spawnOptions = context.spawnProcess.mock.calls[0][2];
     expect(spawnOptions.env).toMatchObject({
       CUA_DRIVER_EMBEDDED: "1",

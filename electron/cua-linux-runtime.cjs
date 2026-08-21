@@ -697,6 +697,10 @@ function createLinuxCuaRuntime({
       const args = [
         "serve",
         "--embedded",
+        // The driver's visual cursor is a full-screen X11 overlay. It is not
+        // needed for inspection or input delivery, and a compositor/renderer
+        // failure must never leave that surface between the user and desktop.
+        "--no-overlay",
         "--socket",
         socketPath,
         "--pid-file",

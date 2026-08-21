@@ -28,6 +28,34 @@ function linuxSession(platform, env) {
   return "headless";
 }
 
+function linuxLocalControlSupport(platform, env) {
+  if (platform !== "linux") {
+    return Object.freeze({
+      available: false,
+      session: "unknown",
+      reasonCode: "unsupported-platform",
+      message: "Local control is not available on this platform.",
+    });
+  }
+  const session = linuxSession(platform, env);
+  if (session === "x11") return Object.freeze({ available: true, session });
+  if (session === "wayland") {
+    return Object.freeze({
+      available: false,
+      session,
+      reasonCode: "linux-wayland-seat-safety-blocked",
+      message:
+        "Local control is not available on Wayland yet. Sign out and choose Ubuntu on Xorg to use This computer.",
+    });
+  }
+  return Object.freeze({
+    available: false,
+    session,
+    reasonCode: "headless-session",
+    message: "Local control needs an active Ubuntu Xorg desktop session.",
+  });
+}
+
 function localComputerReady(platform, connection) {
   if (platform === "darwin") {
     return connection?.mode === "embedded" || connection?.mode === "standalone";
@@ -44,11 +72,7 @@ function localComputerReady(platform, connection) {
   if (connection.mode === "linux-x11-supervised") {
     return connection.session === "x11";
   }
-  return (
-    connection.mode === "linux-wayland-gnome-supervised" &&
-    connection.session === "wayland" &&
-    connection.compositor === "gnome-mutter"
-  );
+  return false;
 }
 
 function desktopCapabilities({
@@ -149,6 +173,7 @@ function connectionEnabled(platform, connection) {
 module.exports = {
   connectionEnabled,
   desktopCapabilities,
+  linuxLocalControlSupport,
   linuxSession,
   localComputerReady,
   nativeDesktopActions,

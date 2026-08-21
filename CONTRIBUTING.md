@@ -119,10 +119,12 @@ The SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately small. A
   independent capabilities.
 - Test Ubuntu platform claims on a real GNOME session. Xvfb proves packaging and fake-driver orchestration, not
   Wayland portal behavior or real CUA inspection/input delivery.
-- Linux local control currently has a release safety hold from #345: packaged and development desktop launches
-  must not start Cua, must clear a legacy durable opt-in, and must report `linux-seat-safety-blocked`. Do not add an
-  environment bypass. Re-enabling it requires real GNOME/Xorg and GNOME/Wayland evidence that an unrelated app
-  remains clickable/typeable before any approved action. After re-enablement, global opt-in plus per-bot
+- Linux local control is enabled only on GNOME/Xorg after explicit opt-in. The owned daemon must start with
+  `--no-overlay`: the decorative full-screen Cua cursor surface is not part of the product contract and must never
+  sit between the person and their desktop. GNOME/Wayland must clear a legacy durable opt-in, report
+  `linux-wayland-seat-safety-blocked`, and never start Cua until it independently passes the real-seat matrix in
+  #345. Xvfb proves the overlay-free arguments, lifecycle, and input routing; it does not waive real-seat evidence.
+  An unrelated app must remain clickable/typeable before any approved action. Global opt-in plus per-bot
   **This computer** remains mandatory; Linux Auto, full-auto/bypass modes, remembered grants, and cloud approvals
   must never authorize the user's desktop.
 - Keep CUA discovery shell-free and pin accepted archive, inner-file, manifest, and driver contracts. Packaged Linux

@@ -64,20 +64,20 @@ describe("local computer UI eligibility", () => {
     ).toBe(false);
   });
 
-  it("explains the temporary Linux seat-safety block without suggesting setup", () => {
+  it("explains the Wayland seat-safety block and names the supported session", () => {
     const capabilities = {
       host: { platform: "linux" as const },
       localComputer: {
         available: false,
         enabled: false,
-        reasonCode: "linux-seat-safety-blocked",
+        reasonCode: "linux-wayland-seat-safety-blocked",
       },
     } as DesktopCapabilities;
 
     expect(
       localComputerDisabledReason({ capabilities, providerSupportsLocal: true }),
     ).toBe(
-      "Local computer control is temporarily disabled on Linux while an input-safety issue is fixed.",
+      "Local computer control is not available on Wayland yet. Sign out and choose Ubuntu on Xorg to use This computer.",
     );
   });
 

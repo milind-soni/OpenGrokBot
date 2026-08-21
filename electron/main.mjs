@@ -36,8 +36,14 @@ let desktopViewerOwner = null;
 let desktopViewerContextId = null;
 
 // GNOME groups the window with its installed desktop entry only when both
-// identities match. This must run before Electron becomes ready.
-if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.desktop");
+// identities match. This must run before Electron becomes ready. Ubuntu also
+// uses Chromium's software renderer: the supported machine reproduced two
+// NVIDIA/libGLES GPU-process crashes that left an invisible focused window
+// intercepting input. This app is not graphics-heavy, so reliability wins.
+if (process.platform === "linux") {
+  app.disableHardwareAcceleration();
+  app.setDesktopName("com.openmausbot.app.desktop");
+}
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -527,6 +533,7 @@ function createWindow() {
             mcpEnv: connection?.mcp?.env,
           };
         }
+        result.hardwareAccelerationEnabled = app.isHardwareAccelerationEnabled();
         result.displayMediaRequests = displayMediaRequestCount;
         console.log(`[smoke] renderer-ready ${JSON.stringify(result)}`);
       } catch (error) {

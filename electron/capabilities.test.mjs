@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 const {
   desktopCapabilities,
+  linuxLocalControlSupport,
   linuxSession,
   localComputerReady,
   nativeDesktopActions,
@@ -95,6 +96,28 @@ describe("desktop capabilities", () => {
     expect(linuxSession("linux", {})).toBe("headless");
   });
 
+  it("re-enables local control only on X11 and keeps Wayland/headless fail-closed", () => {
+    expect(
+      linuxLocalControlSupport("linux", { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" }),
+    ).toEqual({ available: true, session: "x11" });
+    expect(
+      linuxLocalControlSupport("linux", {
+        XDG_SESSION_TYPE: "wayland",
+        WAYLAND_DISPLAY: "wayland-0",
+        DISPLAY: ":0",
+      }),
+    ).toMatchObject({
+      available: false,
+      session: "wayland",
+      reasonCode: "linux-wayland-seat-safety-blocked",
+    });
+    expect(linuxLocalControlSupport("linux", {})).toMatchObject({
+      available: false,
+      session: "headless",
+      reasonCode: "headless-session",
+    });
+  });
+
   it("never treats an embedded-looking Linux connection as local control", () => {
     expect(localComputerReady("linux", { mode: "embedded" })).toBe(false);
     expect(localComputerReady("darwin", { mode: "unavailable" })).toBe(false);
@@ -134,7 +157,7 @@ describe("desktop capabilities", () => {
     expect(localComputerReady("linux", { ...connection, schemaVersion: 2 })).toBe(false);
   });
 
-  it("enables GNOME Wayland control only for the exact supervised contract", () => {
+  it("rejects even a forged ready Wayland contract until its real-seat gate is lifted", () => {
     const connection = {
       schemaVersion: 1,
       mode: "linux-wayland-gnome-supervised",
@@ -144,7 +167,7 @@ describe("desktop capabilities", () => {
       enabled: true,
       status: "ready",
     };
-    expect(localComputerReady("linux", connection)).toBe(true);
+    expect(localComputerReady("linux", connection)).toBe(false);
     expect(localComputerReady("linux", { ...connection, compositor: undefined })).toBe(false);
     expect(localComputerReady("linux", { ...connection, session: "x11" })).toBe(false);
     expect(
@@ -154,8 +177,8 @@ describe("desktop capabilities", () => {
         localConnection: connection,
       }).localComputer,
     ).toMatchObject({
-      available: true,
-      support: "limited",
+      available: false,
+      support: "unsupported",
       session: "wayland",
       compositor: "gnome-mutter",
     });

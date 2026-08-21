@@ -13,11 +13,15 @@ of Linux desktop on your own server instead of this machine, see [byo-vps.md](by
 - External documentation and OAuth links in the default browser.
 - An explicit, view-only local screen preview on GNOME Xorg and GNOME Wayland. The Wayland path uses the
   native portal chooser and keeps the selected PipeWire stream open until the user stops sharing.
-- A fail-closed Linux local-control state while the real-seat input-safety blocker in issue #345 is resolved.
+- Explicit opt-in local computer control on GNOME Xorg using the bundled, pinned Cua Driver without its
+  decorative full-screen cursor overlay.
+- A fail-closed local-control state on GNOME Wayland while its separate real-seat input-safety gate in issue #345
+  is resolved.
 
-The local preview does **not** give the bot control of this computer by itself. Linux local control is temporarily
-disabled and legacy opt-ins are cleared automatically; do not start the bundled driver manually as a workaround.
-Automatic Wayland helper installation, Linux dictation, and ARM64 remain unavailable and fail closed; follow their
+The local preview does **not** give the bot control of this computer by itself. On Xorg, local control requires both
+the global **Enable local control** choice and assigning a bot to **This computer**; every action still enters the
+approval flow. On Wayland, local control is disabled and legacy opt-ins are cleared automatically. Automatic Wayland
+helper installation, Linux dictation, and ARM64 remain unavailable and fail closed; follow their
 progress in [issue #29](https://github.com/milind-soni/OpenMausBot/issues/29) and the safety hold in
 [issue #345](https://github.com/milind-soni/OpenMausBot/issues/345). Bundled
 CUA supply-chain work is tracked in [issue #113](https://github.com/milind-soni/OpenMausBot/issues/113). Xorg is tracked in
@@ -142,20 +146,22 @@ Cancelling or ending Wayland sharing returns to a calm **Try again** state and n
 automatically. OpenMausBot does not capture screen audio, remember the selected monitor after restart, or
 offer an **Open Settings** action on Linux.
 
-Local computer control is independent from preview and currently fails closed on both sessions. The app never
-starts Cua from a legacy preference. XWayland's `DISPLAY` never bypasses this release safety hold.
+Local computer control is independent from preview. It is available after explicit opt-in on Xorg and remains
+fail-closed on Wayland. XWayland's `DISPLAY` never bypasses the Wayland safety gate.
 
-## Local control safety hold
+## Enable local control
 
 Installed `.deb` and AppImage builds include the certified **Cua Driver 0.19.3** CLI and cursor-theme sidecar.
-The app deliberately does not start that runtime while #345 is open: real GNOME/Xorg validation found that merely
-starting it could capture the physical pointer and keyboard before an approved action. Xvfb readiness, a successful
-handshake, and driver diagnostics do not prove that human-input boundary safe. The UI reports the safety hold,
-**This computer** remains unavailable, and an older persisted opt-in is reset to off with private file permissions.
+On GNOME Xorg, open Settings, choose **Enable local control (Beta)**, wait for **Ready**, then explicitly assign a bot
+to **This computer**. No driver download, terminal command, `chmod`, or daemon setup is required. The owned daemon
+starts with `--no-overlay`, so Cua's decorative full-screen X11 cursor surface is never created. OpenMausBot also
+uses Electron software rendering on Linux to avoid the reproduced NVIDIA/libGLES GPU-process failure that could
+leave an invisible focused app window receiving input.
 
-There is no supported manual enable flow during this hold. Continue using Chat, preview-only capture, Cloud, or
-Local VM. Re-enablement requires evidence on real GNOME/Xorg and GNOME/Wayland seats; it will not be controlled by
-an environment override.
+On GNOME Wayland, **This computer** remains unavailable and an older persisted opt-in is reset to off with private
+file permissions. Sign out and choose **Ubuntu on Xorg** from the login-screen session menu, or continue using Chat,
+preview-only capture, Cloud, or Local VM. Wayland re-enablement requires its own real-seat evidence and will not be
+controlled by an environment override.
 
 The upstream release has no signature or GitHub artifact attestation and is not immutable, so the build uses an
 explicit reviewed digest as its trust anchor:
@@ -174,16 +180,16 @@ requires glibc 2.30 or newer plus the standard Ubuntu X11/XInput/xkbcommon libra
 Ubuntu 24.04 desktop; the package verifier executes the exact binary from every artifact layout.
 
 AppImage's pinned SquashFS toolchain can emit root-owned directories as `0755` or `0775`; the package verifier
-requires one of those modes consistently across the reviewed resource tree. The dormant runtime retains a private
-`0700` staging design for a future re-enabled AppImage, while the current release hold prevents copying or executing
-either binary. DEB upgrades repair their exact package-owned path to `root:root 0755` automatically.
+requires one of those modes consistently across the reviewed resource tree. Before execution, AppImage copies only
+the pinned binaries into a private `0700` stage and verifies their hashes again. DEB upgrades repair their exact
+package-owned path to `root:root 0755` automatically.
 
-The packaged runtime remains outside ASAR only for deterministic provenance and future validation. Neither a
-`CUA_DRIVER_PATH` value nor an ambient PATH candidate bypasses the current release hold.
+The packaged runtime remains outside ASAR for deterministic provenance and validation. In packaged builds neither a
+`CUA_DRIVER_PATH` value nor an ambient PATH candidate can replace it; on Wayland neither can bypass the safety gate.
 
-The dormant runtime code retains private sockets, standard permission mode, per-action OpenMausBot approvals,
-telemetry/update-check suppression, strict driver identity, and lifecycle cleanup tests. Those defenses remain
-necessary, but none substitutes for the real-seat acceptance evidence required to remove the safety hold. Linux
+The Xorg runtime uses private sockets, standard permission mode, per-action OpenMausBot approvals,
+telemetry/update-check suppression, strict driver identity, overlay-free startup, and lifecycle cleanup tests. Those
+defenses remain necessary, but none substitutes for the real-seat acceptance evidence required to enable Wayland. Linux
 **Auto** never routes to the user's desktop, and no Cloud or Local VM approval can authorize it.
 
 ## Validate a package change
@@ -193,6 +199,7 @@ pnpm typecheck
 pnpm test
 pnpm check:electron
 pnpm build:cua:linux          # networked, checksum-pinned staging
+dbus-run-session -- xvfb-run -a pnpm smoke:cua-x11-input
 pnpm package:linux:offline    # CUA staging is offline; builder caches must already be available
 node scripts/verify-linux-package.mjs
 pnpm smoke:linux-package
@@ -217,13 +224,13 @@ considered for automatic discovery.
 ### A bot needs computer tools
 
 Choose **Cloud box** and add a Box token in App Settings, or use Local VM. Linux **This computer** remains disabled
-under the input-safety hold; it has no supported manual workaround.
+on Wayland. On Xorg, enable it from the **Local control** card first.
 
 ### Local control is not ready
 
-The in-app card should say that Linux local control is temporarily unavailable. If it instead offers **Enable local
-control**, close the app and report the package version on #345; do not click it or run the bundled driver manually.
-An upgraded DEB repairs its own package directory modes automatically—no user `chmod` is required.
+On Xorg, press **Try again** and use the reason shown in the card. The bundled package requires no manual driver
+installation or `chmod`; an upgraded DEB repairs its exact package-owned directory modes automatically. On Wayland,
+the card directs you to Ubuntu on Xorg and intentionally offers no enable button.
 
 ### Screen preview does not start
 

@@ -17,8 +17,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wayland = process.env.OMB_SMOKE_WAYLAND === "1";
 const hardDeath = process.env.OMB_SMOKE_HARD_DEATH === "1";
 const bundled = process.env.OMB_SMOKE_BUNDLED_CUA === "1";
-const releaseBlocked = process.env.OMB_SMOKE_LINUX_CUA_BLOCKED === "1";
-if ([hardDeath, bundled, releaseBlocked].filter(Boolean).length > 1) {
+const sessionBlocked = process.env.OMB_SMOKE_LINUX_CUA_BLOCKED === "1";
+if ([hardDeath, bundled, sessionBlocked].filter(Boolean).length > 1) {
   throw new Error("hard-death, bundled, and release-safety smoke modes are mutually exclusive");
 }
 const executable = path.resolve(
@@ -96,7 +96,7 @@ if (args[0] === "doctor" && args.includes("--json")) {
 if (args[0] !== "serve") process.exit(64);
 const socketPath = after("--socket");
 const pidFile = after("--pid-file");
-if (!socketPath || !pidFile || !args.includes("--embedded") || after("--permission-mode") !== "standard") {
+if (!socketPath || !pidFile || !args.includes("--embedded") || !args.includes("--no-overlay") || after("--permission-mode") !== "standard") {
   process.exit(64);
 }
 if ((process.env.CUA_DRIVER_RS_ENABLE_WAYLAND === "1") !== wayland) process.exit(64);
@@ -189,7 +189,7 @@ const desktopEnv = {
   CUA_DRIVER_PATH: sentinel,
   OMB_COMPOSIO_BROKER_URL: `http://127.0.0.1:${brokerAddress.port}`,
   OMB_SMOKE_TEST: "1",
-  OMB_SMOKE_CUA: hardDeath || bundled || releaseBlocked ? "0" : "1",
+  OMB_SMOKE_CUA: hardDeath || bundled || sessionBlocked ? "0" : "1",
   OMB_SMOKE_BUNDLED_CUA: bundled ? "1" : "0",
   ...(hardDeath ? { OMB_SMOKE_KEEP_OPEN: "1" } : {}),
 };
@@ -289,11 +289,11 @@ try {
     throw new Error(`${wayland ? "Wayland" : "X11"} screen preview capability was not available`);
   }
   if (capabilities.dictation.available) throw new Error("dictation must be unavailable on Linux");
-  if (releaseBlocked) {
+  if (sessionBlocked) {
     if (
       initialCapabilities.localComputer.available ||
       initialCapabilities.localComputer.enabled ||
-      initialCapabilities.localComputer.reasonCode !== "linux-seat-safety-blocked"
+      initialCapabilities.localComputer.reasonCode !== "linux-wayland-seat-safety-blocked"
     ) {
       throw new Error(
         `Linux release did not fail closed: ${JSON.stringify(initialCapabilities.localComputer)}`,
@@ -317,9 +317,12 @@ try {
       }
     }
   }
+  if (result.hardwareAccelerationEnabled !== false) {
+    throw new Error("Linux package did not disable hardware acceleration before startup");
+  }
   if (displayMediaRequests !== 0) throw new Error("launch triggered display capture without user intent");
   await until(async () => brokerRequests > 0, "the optional slow-broker request");
-  if (releaseBlocked) {
+  if (sessionBlocked) {
     await waitForExit();
     if (existsSync(marker)) throw new Error("release safety block still invoked a CUA executable");
     const activeUserData = ["openmausbot", "OpenMausBot"]
@@ -333,7 +336,7 @@ try {
       throw new Error("release safety block did not clear the durable Linux opt-in");
     }
     console.log(
-      `[smoke-linux-package] OK (${wayland ? "GNOME/Wayland" : path.basename(executable)}): slow optional broker did not block first paint and Linux CUA failed closed`,
+      `[smoke-linux-package] OK (${wayland ? "GNOME/Wayland" : path.basename(executable)}): slow optional broker did not block first paint and Wayland CUA failed closed`,
     );
   } else if (bundled) {
     await waitForExit();

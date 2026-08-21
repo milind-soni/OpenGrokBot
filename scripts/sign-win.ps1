@@ -26,8 +26,10 @@ if (-not $Pfx) { $Pfx = Join-Path $PSScriptRoot '..\build\omb-selfsigned.pfx' }
 if (-not $Password) { $Password = 'omb-test-2026' }
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
+$ver = (node -p "require('./package.json').version" 2>$null)
+if (-not $ver) { $ver = '0.1.27' }   # fallback if node unavailable
 $files = @(
-  (Join-Path $root 'release\OpenMausBot-0.1.27-setup.exe'),
+  (Join-Path $root "release\OpenMausBot-$ver-setup.exe"),
   (Join-Path $root 'release\win-unpacked\OpenMausBot.exe')
 )
 

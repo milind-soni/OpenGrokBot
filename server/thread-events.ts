@@ -159,6 +159,9 @@ const stringOrMissing = (value: unknown) => value === undefined || typeof value 
 const stringOrNullOrMissing = (value: unknown) => value === undefined || value === null || typeof value === "string";
 const numberOrNullOrMissing = (value: unknown) => value === undefined || value === null || typeof value === "number";
 const stringsOrMissing = (value: unknown) => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
+const booleanOrMissing = (value: unknown) => value === undefined || typeof value === "boolean";
+const stringRecordOrMissing = (value: unknown) =>
+  value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === "string"));
 
 function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (
@@ -202,7 +205,9 @@ function isRuntimeEvent(value: unknown): value is RuntimeEvent {
         (value.requestType === "permission" || value.requestType === "question") &&
         typeof value.tool === "string" &&
         typeof value.summary === "string" &&
-        stringsOrMissing(value.choices)
+        stringsOrMissing(value.choices) &&
+        stringRecordOrMissing(value.choiceHints) &&
+        booleanOrMissing(value.multiSelect)
       );
     case "request.resolved":
       return (

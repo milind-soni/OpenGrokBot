@@ -99,6 +99,27 @@ describe("readThreadEvents", () => {
     expect(page.total).toEqual({ runtime: 3, native: 2 });
   });
 
+  it("keeps a question's choices, their explanations, and multi-select — and drops malformed ones", () => {
+    const eventsDir = tmp();
+    const nativeDir = tmp();
+    const base = { provider: "claude", threadId: "t1", type: "request.opened", requestType: "question", tool: "AskUserQuestion", summary: "Which framework?" };
+    writeFileSync(
+      join(eventsDir, "t1.ndjson"),
+      line({ ...base, eventId: "rich", createdAt: "1", choices: ["React", "Vue"], choiceHints: { React: "already used" }, multiSelect: true }) +
+        // a hint map whose values are not strings is not the contract
+        line({ ...base, eventId: "bad-hints", createdAt: "2", choiceHints: { React: 7 } }) +
+        line({ ...base, eventId: "bad-multi", createdAt: "3", multiSelect: "yes" }),
+    );
+    writeFileSync(join(nativeDir, "t1.ndjson"), "");
+    const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1" });
+    expect(page.entries.map((entry) => (entry.data as { eventId?: string }).eventId)).toEqual(["rich"]);
+    expect(page.entries[0]!.data).toMatchObject({
+      choices: ["React", "Vue"],
+      choiceHints: { React: "already used" },
+      multiSelect: true,
+    });
+  });
+
   it("keeps walking backward when a corrupt tail record would otherwise consume the limit", () => {
     const eventsDir = tmp();
     const nativeDir = tmp();

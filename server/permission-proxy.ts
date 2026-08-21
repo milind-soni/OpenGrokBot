@@ -10,6 +10,13 @@
 //   ask_user  — the agent can pose a question mid-run and wait; the
 //               human's words come back verbatim.
 //
+// One tool arrives through `approve` that is not a permission at all: the
+// CLI's own AskUserQuestion. It is the tool the model actually reaches for
+// when it wants a person to choose, and acceptEdits will not run it unasked,
+// so it lands here looking like "may I run a tool?" — which is how a question
+// ended up on screen as an Allow/Deny box over a JSON blob. It is intercepted
+// below and asked as what it is.
+//
 // stdout is the MCP channel — never console.log here.
 import { connect } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -54,6 +61,129 @@ conn.on("data", (chunk) => {
 });
 
 const send = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
+
+/** Hand one ask to the broker and wait for the human's answer. */
+function askBroker(ask: Record<string, unknown>): Promise<any> {
+  return new Promise((resolve) => {
+    waiting.set(String(ask.id), resolve);
+    if (conn.destroyed) return dead();
+    try {
+      conn.write(JSON.stringify(ask) + "\n");
+    } catch {
+      dead();
+    }
+  });
+}
+
+// ── the CLI's own AskUserQuestion ──────────────────────────────────────
+const ASK_USER_QUESTION = "AskUserQuestion";
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+/** A non-blank string, or null. */
+const nonBlank = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value : null);
+
+/** One question, in the shape the broker and the option card understand. */
+interface NativeQuestion {
+  question: string;
+  choices: string[];
+  /** label → that option's own explanation, shown under it on the card */
+  optionHints: Record<string, string>;
+  multiSelect: boolean;
+}
+
+/**
+ * The answerable questions in an AskUserQuestion call.
+ *
+ * Unanswerable entries are SKIPPED, not fatal: one bad entry must not cost
+ * the user the good questions beside it. An empty result means the whole
+ * call was unanswerable, which the caller turns into a denial.
+ *
+ * There is deliberately no "fall through to the permission path" here. That
+ * path cannot answer this tool: allowing it makes the CLI run
+ * AskUserQuestion in a headless session with no dialog, and the model is
+ * told "The user did not answer the questions." — so the fallback offered a
+ * person an Allow/Deny box over raw JSON whose Allow silently threw their
+ * click away. That box is the bug this file exists to remove.
+ */
+function nativeQuestions(input: unknown): NativeQuestion[] {
+  const raw = asRecord(input)?.questions;
+  if (!Array.isArray(raw)) return [];
+  const questions: NativeQuestion[] = [];
+  for (const entry of raw) {
+    const question = parseQuestion(entry);
+    if (question) questions.push(question);
+  }
+  return questions;
+}
+
+/** One `questions[]` entry, or null when it has no question or nothing to pick. */
+function parseQuestion(entry: unknown): NativeQuestion | null {
+  const fields = asRecord(entry);
+  const question = nonBlank(fields?.question);
+  if (!question) return null;
+  const choices: string[] = [];
+  const optionHints: Record<string, string> = {};
+  const options = Array.isArray(fields?.options) ? fields.options : [];
+  for (const option of options) {
+    // an object with a label is the documented form; a bare string is
+    // accepted too, so a looser caller degrades to plain buttons
+    const label = typeof option === "string" ? nonBlank(option) : nonBlank(asRecord(option)?.label);
+    if (!label || choices.includes(label)) continue;
+    choices.push(label);
+    const description = nonBlank(asRecord(option)?.description);
+    if (description) optionHints[label] = description;
+  }
+  if (!choices.length) return null;
+  return { question, choices, optionHints, multiSelect: fields?.multiSelect === true };
+}
+
+/**
+ * Ask a person each question, then answer the tool the way it documents.
+ *
+ * The answer is NOT a bare allow. A bare allow tells the CLI to go and run
+ * AskUserQuestion, and a headless run has no dialog to collect anything —
+ * the model gets "The user did not answer the questions." back and the
+ * click is thrown away. The `answers` object is the field the tool's own
+ * schema calls "User answers collected by the permission component":
+ * keyed by the question's text, one comma-joined string per question.
+ */
+async function answerNativeQuestions(input: unknown): Promise<string> {
+  const questions = nativeQuestions(input);
+  if (!questions.length) {
+    return JSON.stringify({
+      behavior: "deny",
+      message:
+        "OpenMausBot: this AskUserQuestion call had no answerable question (each one needs question text and at least one option), so nobody was shown it. Ask again with a well-formed call, or continue without it.",
+    });
+  }
+  const answers: Record<string, string> = {};
+  for (const q of questions) {
+    const answer = await askBroker({
+      t: "ask",
+      id: randomUUID(),
+      kind: "question",
+      tool: ASK_USER_QUESTION,
+      input: { question: q.question, choices: q.choices, optionHints: q.optionHints, multiSelect: q.multiSelect },
+    });
+    // A question is only ever denied when the broker is gone. It cannot
+    // collect the rest either, so stop and say so instead of asking into
+    // a socket nobody is reading.
+    if (answer.behavior === "deny") {
+      return JSON.stringify({ behavior: "deny", message: answer.message || "Denied from OpenMausBot" });
+    }
+    const chosen = typeof answer.message === "string" ? answer.message.trim() : "";
+    // A question nobody answered is left OUT, and that turns on WHO answered,
+    // not on whether there are words. The broker's own notes are words — the
+    // timeout's "nobody answered in time, use your best judgment" is a whole
+    // sentence — so filing anything non-blank under `answers` hands the model
+    // system text in the slot reserved for what the person chose. Omitted, the
+    // CLI simply reports that question as unanswered, which is the truth.
+    if (answer.source === "user" && chosen) answers[q.question] = chosen;
+  }
+  return JSON.stringify({ behavior: "allow", updatedInput: { ...(asRecord(input) ?? {}), answers } });
+}
 
 const TOOLS = [
   {
@@ -104,6 +234,12 @@ async function handle(msg: any) {
   if (msg.method === "tools/call") {
     const name = msg.params?.name;
     const args = msg.params?.arguments ?? {};
+    const reply = (text: string) => send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }] } });
+    // AskUserQuestion is a question wearing a permission's clothes. It never
+    // continues into the permission path below — see nativeQuestions.
+    if (name === "approve" && args.tool_name === ASK_USER_QUESTION) {
+      return reply(await answerNativeQuestions(args.input));
+    }
     const askId = randomUUID();
     const isQuestion = name === "ask_user";
     // the CLI may include its own suggested permission rules; on allow we
@@ -114,18 +250,11 @@ async function handle(msg: any) {
       : Array.isArray(args.suggestions)
         ? args.suggestions
         : null;
-    const answer: any = await new Promise((resolve) => {
-      waiting.set(askId, resolve);
-      if (conn.destroyed) return dead();
-      const ask = isQuestion
+    const answer: any = await askBroker(
+      isQuestion
         ? { t: "ask", id: askId, kind: "question", tool: "ask_user", input: { question: args.question, choices: args.choices } }
-        : { t: "ask", id: askId, tool: args.tool_name, input: args.input };
-      try {
-        conn.write(JSON.stringify(ask) + "\n");
-      } catch {
-        dead();
-      }
-    });
+        : { t: "ask", id: askId, tool: args.tool_name, input: args.input },
+    );
     let text = answer.message || "No answer was given — use your best judgment.";
     if (!isQuestion) {
       if (answer.behavior === "allow") {
@@ -136,7 +265,7 @@ async function handle(msg: any) {
         text = JSON.stringify({ behavior: "deny", message: answer.message || "Denied from OpenMausBot" });
       }
     }
-    return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }] } });
+    return reply(text);
   }
   if (String(msg.method ?? "").startsWith("notifications/")) return;
   if (msg.id != null) {

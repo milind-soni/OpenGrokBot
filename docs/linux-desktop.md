@@ -158,6 +158,10 @@ starts with `--no-overlay`, so Cua's decorative full-screen X11 cursor surface i
 uses Electron software rendering on Linux to avoid the reproduced NVIDIA/libGLES GPU-process failure that could
 leave an invisible focused app window receiving input.
 
+Cua actions use a private logical cursor. With the decorative overlay disabled, `move_cursor` does not move the
+user's physical pointer; approved click and typing actions still target the requested window, while the user's own
+mouse remains under their control.
+
 On GNOME Wayland, **This computer** remains unavailable and an older persisted opt-in is reset to off with private
 file permissions. Sign out and choose **Ubuntu on Xorg** from the login-screen session menu, or continue using Chat,
 preview-only capture, Cloud, or Local VM. Wayland re-enablement requires its own real-seat evidence and will not be

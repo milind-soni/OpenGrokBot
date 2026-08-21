@@ -22,16 +22,24 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $Pfx) { $Pfx = Join-Path $PSScriptRoot '..\build\omb-selfsigned.pfx' }
+if (-not $Pfx) { $Pfx = Join-Path $PSScriptRoot '..uild\omb-selfsigned.pfx' }
 if (-not $Password) { $Password = 'omb-test-2026' }
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $ver = (node -p "require('./package.json').version" 2>$null)
-if (-not $ver) { $ver = '0.1.27' }   # fallback if node unavailable
-$files = @(
-  (Join-Path $root "release\OpenMausBot-$ver-setup.exe"),
-  (Join-Path $root 'release\win-unpacked\OpenMausBot.exe')
-)
+if (-not $ver) { throw "Could not read package version from package.json" }
+
+$installerPath = Join-Path $root "release\OpenMausBot-$ver-setup.exe"
+$unpackedAppPath = Join-Path $root 'release\win-unpacked\OpenMausBot.exe'
+
+$files = @($installerPath, $unpackedAppPath)
+
+# Throw immediately if any of the required files are missing before signing
+foreach ($f in $files) {
+  if (-not (Test-Path $f)) {
+    throw "Missing required build artifact for signing: $f"
+  }
+}
 
 if ($Thumbprint) {
   $cert = Get-ChildItem "cert:\CurrentUser\My" | Where-Object { $_.Thumbprint -eq $Thumbprint }
@@ -42,7 +50,6 @@ if ($Thumbprint) {
 }
 
 foreach ($f in $files) {
-  if (-not (Test-Path $f)) { Write-Warning "skip (missing): $f"; continue }
   $r = Set-AuthenticodeSignature -FilePath $f -Certificate $cert -TimestampServer $TimestampServer
   Write-Host ("{0,-60} {1}" -f $f, $r.Status)
   if ($r.Status -ne 'Valid') { throw ("signing failed: " + $r.StatusMessage) }

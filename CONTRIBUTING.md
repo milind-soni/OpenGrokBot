@@ -45,7 +45,8 @@ For Ubuntu installation and real desktop checks, see [`docs/linux-desktop.md`](d
 
 Ubuntu release packages must come from the manual **Package Ubuntu** workflow on an exact release commit or tag,
 not from a developer workstation. The Ubuntu 24.04 runner builds and verifies both formats, launches the unpacked
-app and AppImage, exercises the bundled Cua lifecycle, and produces one release artifact containing:
+app and AppImage, exercises the overlay-free bundled Cua lifecycle on Xorg and the fail-closed Wayland CUA smoke,
+and produces one release artifact containing:
 
 - the versioned `.deb` and AppImage;
 - stable `OpenMausBot-amd64.deb` and `OpenMausBot.AppImage` copies used by the latest-download links;

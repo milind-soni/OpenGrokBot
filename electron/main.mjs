@@ -9,6 +9,12 @@ import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
+import {
+  ensureManagedComposioCredentials,
+  managedComposioAccess,
+  managedComposioChildEnvironment,
+  normalizeManagedComposioBrokerUrl,
+} from "./managed-composio.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
@@ -32,8 +38,14 @@ let desktopViewerOwner = null;
 let desktopViewerContextId = null;
 
 // GNOME groups the window with its installed desktop entry only when both
-// identities match. This must run before Electron becomes ready.
-if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.desktop");
+// identities match. This must run before Electron becomes ready. Ubuntu also
+// uses Chromium's software renderer: the supported machine reproduced two
+// NVIDIA/libGLES GPU-process crashes that left an invisible focused window
+// intercepting input. This app is not graphics-heavy, so reliability wins.
+if (process.platform === "linux") {
+  app.disableHardwareAcceleration();
+  app.setDesktopName("com.openmausbot.app.desktop");
+}
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -133,50 +145,9 @@ async function secureWorkspaceConfig() {
 
 function composioBrokerUrl() {
   const configured = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
-  return configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : "");
-}
-
-async function ensureManagedComposioCredentials() {
-  const brokerUrl = composioBrokerUrl();
-  if (!brokerUrl) return;
-  if (/^[0-9a-f]{64}$/.test(secureCredentials.composioBrokerToken ?? "")) {
-    try {
-      const check = await fetch(`${brokerUrl}/v1/me`, {
-        headers: { authorization: `Bearer ${secureCredentials.composioBrokerToken}` },
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (check.ok) return;
-      // Only a definitive auth failure rotates the credential. A transient
-      // outage keeps the existing identity so reconnecting cannot strand
-      // the user's already-authorized accounts under a new installation.
-      if (check.status !== 401) return;
-      delete secureCredentials.composioBrokerToken;
-      delete secureCredentials.composioInstallationId;
-    } catch {
-      return;
-    }
-  }
-  try {
-    const response = await fetch(`${brokerUrl}/v1/installations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(15_000),
-    });
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
-    if (!/^[0-9a-f]{64}$/.test(body?.token ?? "") || typeof body?.installationId !== "string") {
-      throw new Error("the connected-apps service returned invalid credentials");
-    }
-    secureCredentials.composioBrokerToken = body.token;
-    secureCredentials.composioInstallationId = body.installationId;
-    await saveSecureCredentials(secureCredentials);
-    slog("connected-apps installation registered");
-  } catch (error) {
-    // Never block app startup on a hosted integration. A user running their
-    // own Composio project key still has the local fallback below.
-    slog(`connected-apps registration failed: ${error?.message ?? error}`);
-  }
+  return normalizeManagedComposioBrokerUrl(
+    configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : ""),
+  );
 }
 
 // The packaged app has no terminal: everything about the server child's life
@@ -211,29 +182,24 @@ function slog(line) {
 
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
+  const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
+    ...process.env,
+    OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+    OMB_RESOURCES_PATH: process.resourcesPath,
+    OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
+    OMB_PORT: String(port),
+    OMB_USER_DATA: app.getPath("userData"),
+    ...(secureCredentials.composioApiKey
+      ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
+      : {}),
+    // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
+    // the server prefers these over config.json, whose plaintext fields
+    // the boot migration has deleted
+    ...workspaceCredentialEnv(secureCredentials),
+  });
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
-    env: {
-      ...process.env,
-      OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_RESOURCES_PATH: process.resourcesPath,
-      OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
-      OMB_PORT: String(port),
-      OMB_USER_DATA: app.getPath("userData"),
-      ...(secureCredentials.composioApiKey
-        ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
-        : {}),
-      // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
-      // the server prefers these over config.json, whose plaintext fields
-      // the boot migration has deleted
-      ...workspaceCredentialEnv(secureCredentials),
-      ...(composioBrokerUrl() && secureCredentials.composioBrokerToken
-        ? {
-            OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
-            OMB_COMPOSIO_BROKER_TOKEN: secureCredentials.composioBrokerToken,
-          }
-        : {}),
-    },
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));
@@ -283,6 +249,18 @@ async function startServerPackaged() {
     await new Promise((r) => setTimeout(r, 2500));
   }
   return false;
+}
+
+function syncManagedComposioCredentials() {
+  if (!serverProc) return;
+  try {
+    serverProc.postMessage({
+      type: "openmausbot:managed-composio",
+      access: managedComposioAccess(composioBrokerUrl(), secureCredentials),
+    });
+  } catch (error) {
+    slog(`connected-apps credential sync failed: ${error?.message ?? error}`);
+  }
 }
 
 const ERROR_PAGE =
@@ -554,6 +532,7 @@ function createWindow() {
             mcpEnv: connection?.mcp?.env,
           };
         }
+        result.hardwareAccelerationEnabled = app.isHardwareAccelerationEnabled();
         result.displayMediaRequests = displayMediaRequestCount;
         console.log(`[smoke] renderer-ready ${JSON.stringify(result)}`);
       } catch (error) {
@@ -804,7 +783,6 @@ app.whenReady().then(async () => {
     secureCredentials = await loadSecureCredentials();
     await secureComposioConfig();
     await secureWorkspaceConfig();
-    await ensureManagedComposioCredentials();
   }
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
@@ -880,6 +858,17 @@ app.whenReady().then(async () => {
     void startCompanion({ resourcesPath: process.resourcesPath, harnessPort: SERVER_PORT, log: slog });
   }
   const win = createWindow();
+  // Registration is optional network work. Start it only after the local
+  // server and first window are usable, then update the server child over its
+  // private parent port so Connected Apps becomes available without restart.
+  if (app.isPackaged && composioBrokerUrl()) {
+    void ensureManagedComposioCredentials({
+      brokerUrl: composioBrokerUrl(),
+      credentials: secureCredentials,
+      saveCredentials: saveSecureCredentials,
+      log: slog,
+    }).finally(syncManagedComposioCredentials);
+  }
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
   // the user's click, installs on "Restart to update"
   startUpdater(win);
@@ -897,6 +886,22 @@ app.on("window-all-closed", () => {
 // Cap the defer so a wedged daemon cannot keep the app alive forever.
 const CUA_STOP_TIMEOUT_MS = 2500;
 let cuaCleanedUp = false;
+let signalQuitRequested = false;
+
+// Package managers, desktop watchdogs, and terminal launchers commonly stop
+// Linux apps with SIGTERM/SIGINT. Convert the first signal into Electron's
+// normal quit path so the embedded server, Cua descriptor/socket, and private
+// AppImage stage receive the same bounded cleanup as a window close. A second
+// signal keeps Node's default force-quit behavior because these are `once`
+// listeners.
+const requestSignalQuit = () => {
+  if (signalQuitRequested) return;
+  signalQuitRequested = true;
+  app.quit();
+};
+process.once("SIGINT", requestSignalQuit);
+process.once("SIGTERM", requestSignalQuit);
+
 app.on("before-quit", (e) => {
   if (cuaCleanedUp) return;
   e.preventDefault();

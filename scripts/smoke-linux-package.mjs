@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import {
   chmodSync,
   existsSync,
@@ -16,7 +17,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wayland = process.env.OMB_SMOKE_WAYLAND === "1";
 const hardDeath = process.env.OMB_SMOKE_HARD_DEATH === "1";
 const bundled = process.env.OMB_SMOKE_BUNDLED_CUA === "1";
-if (hardDeath && bundled) throw new Error("hard-death and bundled smoke modes are mutually exclusive");
+const sessionBlocked = process.env.OMB_SMOKE_LINUX_CUA_BLOCKED === "1";
+const signalShutdown = process.env.OMB_SMOKE_SIGNAL_SHUTDOWN === "1";
+if ([hardDeath, bundled, sessionBlocked].filter(Boolean).length > 1) {
+  throw new Error("hard-death, bundled, and release-safety smoke modes are mutually exclusive");
+}
+if (signalShutdown && !bundled) {
+  throw new Error("signal-shutdown smoke requires the bundled runtime mode");
+}
 const executable = path.resolve(
   process.env.OMB_SMOKE_EXECUTABLE ?? path.join(root, "release", "linux-unpacked", "openmausbot"),
 );
@@ -43,7 +51,9 @@ for (const appName of ["openmausbot", "OpenMausBot"]) {
   chmodSync(userData, 0o700);
   writeFileSync(
     path.join(userData, "cua-local-control.json"),
-    JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true }),
+    // Keep this explicit: schema 2 prevents a safe build's opt-in from arming
+    // an older Linux package that started Cua without the seat-safety flags.
+    JSON.stringify({ schemaVersion: 2, linuxLocalControlEnabled: true }),
     { mode: 0o600 },
   );
 }
@@ -92,7 +102,7 @@ if (args[0] === "doctor" && args.includes("--json")) {
 if (args[0] !== "serve") process.exit(64);
 const socketPath = after("--socket");
 const pidFile = after("--pid-file");
-if (!socketPath || !pidFile || !args.includes("--embedded") || after("--permission-mode") !== "standard") {
+if (!socketPath || !pidFile || !args.includes("--embedded") || !args.includes("--no-overlay") || after("--permission-mode") !== "standard") {
   process.exit(64);
 }
 if ((process.env.CUA_DRIVER_RS_ENABLE_WAYLAND === "1") !== wayland) process.exit(64);
@@ -154,6 +164,27 @@ process.on("SIGTERM", shutdown);
 );
 chmodSync(sentinel, 0o755);
 
+// Accept the optional managed-Composio request but never answer it. The
+// renderer must still become ready and close normally while this request is
+// pending, proving hosted integration latency is outside first paint.
+let brokerRequests = 0;
+const brokerSockets = new Set();
+const slowBroker = createServer(() => {
+  brokerRequests += 1;
+});
+slowBroker.on("connection", (socket) => {
+  brokerSockets.add(socket);
+  socket.once("close", () => brokerSockets.delete(socket));
+});
+await new Promise((resolve, reject) => {
+  slowBroker.once("error", reject);
+  slowBroker.listen(0, "127.0.0.1", resolve);
+});
+const brokerAddress = slowBroker.address();
+if (!brokerAddress || typeof brokerAddress === "string") {
+  throw new Error("could not start the deterministic slow Composio broker");
+}
+
 const desktopEnv = {
   ...process.env,
   HOME: home,
@@ -162,11 +193,12 @@ const desktopEnv = {
   XDG_SESSION_TYPE: wayland ? "wayland" : "x11",
   XDG_CURRENT_DESKTOP: "GNOME",
   CUA_DRIVER_PATH: sentinel,
+  OMB_COMPOSIO_BROKER_URL: `http://127.0.0.1:${brokerAddress.port}`,
   OMB_SMOKE_TEST: "1",
-  OMB_SMOKE_CUA: hardDeath || bundled ? "0" : "1",
+  OMB_SMOKE_CUA: hardDeath || bundled || sessionBlocked ? "0" : "1",
   OMB_SMOKE_BUNDLED_CUA: bundled ? "1" : "0",
-  ...(hardDeath ? { OMB_SMOKE_KEEP_OPEN: "1" } : {}),
 };
+if (hardDeath || signalShutdown) desktopEnv.OMB_SMOKE_KEEP_OPEN = "1";
 if (bundled) delete desktopEnv.CUA_DRIVER_PATH;
 if (wayland) desktopEnv.WAYLAND_DISPLAY = "wayland-smoke";
 else delete desktopEnv.WAYLAND_DISPLAY;
@@ -263,24 +295,61 @@ try {
     throw new Error(`${wayland ? "Wayland" : "X11"} screen preview capability was not available`);
   }
   if (capabilities.dictation.available) throw new Error("dictation must be unavailable on Linux");
-  if (!initialCapabilities.localComputer.available) throw new Error("initial Linux CUA runtime was not ready");
-  if (initialCapabilities.localComputer.support !== "limited") throw new Error("Linux CUA was not marked beta/limited");
-  if (wayland && (
-    initialCapabilities.localComputer.session !== "wayland" ||
-    initialCapabilities.localComputer.compositor !== "gnome-mutter"
-  )) {
-    throw new Error("initial Linux CUA runtime did not publish the guarded GNOME Wayland contract");
+  if (sessionBlocked) {
+    if (
+      initialCapabilities.localComputer.available ||
+      initialCapabilities.localComputer.enabled ||
+      initialCapabilities.localComputer.reasonCode !== "linux-wayland-seat-safety-blocked"
+    ) {
+      throw new Error(
+        `Linux release did not fail closed: ${JSON.stringify(initialCapabilities.localComputer)}`,
+      );
+    }
+  } else {
+    if (!initialCapabilities.localComputer.available) {
+      throw new Error(
+        `initial Linux CUA runtime was not ready: ${JSON.stringify(initialCapabilities.localComputer)}`,
+      );
+    }
+    if (initialCapabilities.localComputer.support !== "limited") throw new Error("Linux CUA was not marked beta/limited");
+    if (wayland && (
+      initialCapabilities.localComputer.session !== "wayland" ||
+      initialCapabilities.localComputer.compositor !== "gnome-mutter"
+    )) {
+      throw new Error("initial Linux CUA runtime did not publish the guarded GNOME Wayland contract");
+    }
+    if (!bundled && !hardDeath) {
+      if (cuaCrashReason !== "daemon-exited") {
+        throw new Error("daemon crash did not invalidate local control");
+      }
+      if (cuaRetryStatus?.status !== "ready" || !capabilities.localComputer.available) {
+        throw new Error("explicit CUA retry did not create a ready generation");
+      }
+    }
   }
-  if (!bundled && !hardDeath) {
-    if (cuaCrashReason !== "daemon-exited") {
-      throw new Error("daemon crash did not invalidate local control");
-    }
-    if (cuaRetryStatus?.status !== "ready" || !capabilities.localComputer.available) {
-      throw new Error("explicit CUA retry did not create a ready generation");
-    }
+  if (result.hardwareAccelerationEnabled !== false) {
+    throw new Error("Linux package did not disable hardware acceleration before startup");
   }
   if (displayMediaRequests !== 0) throw new Error("launch triggered display capture without user intent");
-  if (bundled) {
+  await until(async () => brokerRequests > 0, "the optional slow-broker request");
+  if (sessionBlocked) {
+    await waitForExit();
+    if (existsSync(marker)) throw new Error("release safety block still invoked a CUA executable");
+    const activeUserData = ["openmausbot", "OpenMausBot"]
+      .map((name) => path.join(xdgConfig, name))
+      .find((directory) => existsSync(path.join(directory, "cua-connection.json")));
+    if (!activeUserData) throw new Error("release safety smoke could not locate the CUA descriptor");
+    const preference = JSON.parse(
+      readFileSync(path.join(activeUserData, "cua-local-control.json"), "utf8"),
+    );
+    if (preference.linuxLocalControlEnabled !== false) {
+      throw new Error("release safety block did not clear the durable Linux opt-in");
+    }
+    console.log(
+      `[smoke-linux-package] OK (${wayland ? "GNOME/Wayland" : path.basename(executable)}): slow optional broker did not block first paint and Wayland CUA failed closed`,
+    );
+  } else if (bundled) {
+    if (signalShutdown) child.kill("SIGTERM");
     await waitForExit();
     const staleHealth = await fetch(new URL("/api/health", location)).catch(() => null);
     if (staleHealth?.ok) throw new Error("embedded harness remained reachable after Electron quit");
@@ -313,6 +382,28 @@ try {
     if (existsSync(marker)) {
       throw new Error(`packaged app invoked the ambient driver:\n${readFileSync(marker, "utf8")}`);
     }
+    const userData = ["openmausbot", "OpenMausBot"]
+      .map((name) => path.join(xdgConfig, name))
+      .find((directory) => existsSync(path.join(directory, "cua-connection.json")));
+    if (!userData) throw new Error("bundled smoke could not locate the CUA descriptor");
+    const persistedConnection = JSON.parse(
+      readFileSync(path.join(userData, "cua-connection.json"), "utf8"),
+    );
+    if (
+      persistedConnection.mode !== "unavailable" ||
+      persistedConnection.status !== "stopped" ||
+      persistedConnection.reasonCode !== "app-stopped"
+    ) {
+      throw new Error(
+        `packaged CUA descriptor did not record a clean shutdown: ${JSON.stringify(persistedConnection)}`,
+      );
+    }
+    const { readCuaConnection } = await import(
+      new URL("../dist-server/local-computer.js", import.meta.url)
+    );
+    if (readCuaConnection({ platform: "linux", userData }) !== null) {
+      throw new Error("packaged CUA descriptor remained usable after shutdown");
+    }
     try {
       process.kill(cuaRuntime.daemonPid, 0);
       throw new Error(`packaged CUA daemon remained alive after quit: ${cuaRuntime.daemonPid}`);
@@ -320,7 +411,7 @@ try {
       if (error?.code !== "ESRCH") throw error;
     }
     console.log(
-      `[smoke-linux-package] OK (bundled ${path.basename(executable)}): packaged resolver, descriptor, harness, and cleanup`,
+      `[smoke-linux-package] OK (bundled ${path.basename(executable)}${signalShutdown ? " SIGTERM" : ""}): packaged resolver, descriptor, harness, and cleanup`,
     );
   } else {
     const invocations = readFileSync(marker, "utf8")
@@ -498,6 +589,8 @@ try {
   }
 } finally {
   await stopProcess();
+  for (const socket of brokerSockets) socket.destroy();
+  await new Promise((resolve) => slowBroker.close(resolve));
   if (process.env.OMB_KEEP_SMOKE_DIR !== "1") rmSync(sandbox, { recursive: true, force: true });
   else console.log(`[smoke-linux-package] kept ${sandbox}`);
 }

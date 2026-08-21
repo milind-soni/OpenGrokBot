@@ -64,6 +64,18 @@ export function mergeCompleteConnectorStatus(
   return mergeCurrentConnectorStatus(next, incoming, latestGenerations, requestGenerations);
 }
 
+export function onlyLatestConnectorResponses(
+  incoming: Record<string, ConnectorStatus>,
+  latestRequests: ReadonlyMap<string, number>,
+  requestIds: ReadonlyMap<string, number>,
+) {
+  return Object.fromEntries(
+    Object.entries(incoming).filter(
+      ([slug]) => (latestRequests.get(slug) ?? 0) === (requestIds.get(slug) ?? 0),
+    ),
+  );
+}
+
 function ServiceIcon({ card }: { card: ToolkitCard }) {
   // 0 = official logo, 1 = favicon by domain, 2 = monogram
   const [stage, setStage] = useState(card.logo ? 0 : card.domain ? 1 : 2);
@@ -99,21 +111,32 @@ export function PluginsPanel() {
   const [aliasSlug, setAliasSlug] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
   const [busySlug, setBusySlug] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [connectedRefreshing, setConnectedRefreshing] = useState(false);
+  const [connectedInventoryError, setConnectedInventoryError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
   const statusGenerations = useRef(new Map<string, number>());
+  const latestStatusRequests = useRef(new Map<string, number>());
+  const latestConnectedRequest = useRef(0);
 
   const refreshStatus = useCallback((slugs: string[]): Promise<Record<string, ConnectorStatus>> => {
     if (!slugs.length) return Promise.resolve({});
     const requestGenerations = new Map(slugs.map((slug) => [slug, statusGenerations.current.get(slug) ?? 0]));
-    setRefreshing(true);
+    const requestIds = new Map(slugs.map((slug) => {
+      const requestId = (latestStatusRequests.current.get(slug) ?? 0) + 1;
+      latestStatusRequests.current.set(slug, requestId);
+      return [slug, requestId];
+    }));
     return api(`/api/connectors?services=${slugs.join(",")}`)
       .then((r) => {
-        const services: Record<string, ConnectorStatus> = r.services ?? {};
+        const services = onlyLatestConnectorResponses(
+          r.services ?? {},
+          latestStatusRequests.current,
+          requestIds,
+        );
         // A one-service OAuth poll must not erase every other app's state.
         // A request that began before Connect must also not erase the newer
         // local INITIATED state when its stale not_connected result arrives.
@@ -134,15 +157,18 @@ export function PluginsPanel() {
         }
         return services;
       })
-      .catch(() => ({}))
-      .finally(() => setRefreshing(false));
+      .catch(() => ({}));
   }, []);
 
   const refreshConnectedStatus = useCallback((): Promise<Record<string, ConnectorStatus>> => {
+    const requestId = latestConnectedRequest.current + 1;
+    latestConnectedRequest.current = requestId;
     const requestGenerations = new Map(statusGenerations.current);
-    setRefreshing(true);
+    setConnectedRefreshing(true);
     return api("/api/connectors/connected")
       .then((r) => {
+        if (requestId !== latestConnectedRequest.current) return {};
+        setConnectedInventoryError(null);
         const services: Record<string, ConnectorStatus> = r.services ?? {};
         setStatus((current) => mergeCompleteConnectorStatus(
           current,
@@ -161,8 +187,15 @@ export function PluginsPanel() {
         }
         return services;
       })
-      .catch(() => ({}))
-      .finally(() => setRefreshing(false));
+      .catch((reason) => {
+        if (requestId === latestConnectedRequest.current) {
+          setConnectedInventoryError(reason instanceof Error ? reason.message : String(reason));
+        }
+        return {};
+      })
+      .finally(() => {
+        if (requestId === latestConnectedRequest.current) setConnectedRefreshing(false);
+      });
   }, []);
 
   useEffect(() => () => {
@@ -305,6 +338,7 @@ export function PluginsPanel() {
     tab === "marketplace" || status[card.slug]?.connected || Boolean(status[card.slug]?.accounts?.length)
   );
   const connectedCount = Object.values(status).filter((service) => service.connected || service.accounts?.length).length;
+  const visibleError = error ?? connectedInventoryError;
   const close = () => dispatch({ type: "togglePlugins", open: false });
 
   return (
@@ -328,10 +362,11 @@ export function PluginsPanel() {
           <div className="flex items-center gap-1">
             <button
               onClick={() => refreshConnectedStatus()}
-              className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
+              disabled={connectedRefreshing}
+              className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
               title="Refresh connection status"
             >
-              <RefreshCw size={17} className={cn(refreshing && "animate-spin")} />
+              <RefreshCw size={17} className={cn(connectedRefreshing && "animate-spin")} />
             </button>
             <button
               onClick={close}
@@ -409,7 +444,7 @@ export function PluginsPanel() {
             for the full catalog.
           </div>
         )}
-        {error && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{error}</div>}
+        {visibleError && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{visibleError}</div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
           {cards === null ? (
@@ -547,11 +582,30 @@ export function PluginsPanel() {
           {cards !== null && visible.length === 0 && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
-                {tab === "connected" ? "No connected apps yet" : "No apps found"}
+                {tab === "connected"
+                  ? connectedInventoryError
+                    ? "Connections couldn't be loaded"
+                    : "No connected apps yet"
+                  : "No apps found"}
               </div>
               <div className="mt-1 text-[12.5px] text-ink-secondary">
-                {tab === "connected" ? "Connect an app from Marketplace and it will appear here." : "Try a different search."}
+                {tab === "connected"
+                  ? connectedInventoryError
+                    ? "The service did not return your connection list. Try again."
+                    : "Connect an app from Marketplace and it will appear here."
+                  : "Try a different search."}
               </div>
+              {tab === "connected" && connectedInventoryError && (
+                <button
+                  type="button"
+                  disabled={connectedRefreshing}
+                  onClick={() => void refreshConnectedStatus()}
+                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={cn(connectedRefreshing && "animate-spin")} />
+                  Try again
+                </button>
+              )}
             </div>
           )}
         </div>

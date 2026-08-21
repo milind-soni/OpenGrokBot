@@ -4,6 +4,7 @@ import {
   autoSelectsLocalComputer,
   instanceSupportsLocalComputer,
   linuxAutoDescription,
+  localComputerDisabledReason,
   localComputerSelectable,
 } from "./local-computer";
 
@@ -61,6 +62,23 @@ describe("local computer UI eligibility", () => {
         localSelectable: true,
       }),
     ).toBe(false);
+  });
+
+  it("explains the Wayland seat-safety block and names the supported session", () => {
+    const capabilities = {
+      host: { platform: "linux" as const },
+      localComputer: {
+        available: false,
+        enabled: false,
+        reasonCode: "linux-wayland-seat-safety-blocked",
+      },
+    } as DesktopCapabilities;
+
+    expect(
+      localComputerDisabledReason({ capabilities, providerSupportsLocal: true }),
+    ).toBe(
+      "Local computer control is not available on Wayland yet. Sign out and choose Ubuntu on Xorg to use This computer.",
+    );
   });
 
   it("preserves the ready local fallback on supported non-Linux hosts", () => {

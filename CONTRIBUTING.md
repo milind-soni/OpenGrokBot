@@ -45,7 +45,9 @@ For Ubuntu installation and real desktop checks, see [`docs/linux-desktop.md`](d
 
 Ubuntu release packages must come from the manual **Package Ubuntu** workflow on an exact release commit or tag,
 not from a developer workstation. The Ubuntu 24.04 runner builds and verifies both formats, launches the unpacked
-app and AppImage, exercises the bundled Cua lifecycle, and produces one release artifact containing:
+app and AppImage, routes `click` and `type_text` through the overlay-free bundled Cua runtime on Xorg, runs the
+fail-closed Wayland CUA smoke,
+and produces one release artifact containing:
 
 - the versioned `.deb` and AppImage;
 - stable `OpenMausBot-amd64.deb` and `OpenMausBot.AppImage` copies used by the latest-download links;
@@ -119,8 +121,14 @@ The SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately small. A
   independent capabilities.
 - Test Ubuntu platform claims on a real GNOME session. Xvfb proves packaging and fake-driver orchestration, not
   Wayland portal behavior or real CUA inspection/input delivery.
-- Linux local control must remain explicit: global opt-in plus per-bot **This computer**. Linux Auto, provider
-  full-auto/bypass modes, remembered grants, and cloud approvals must never authorize the user's desktop.
+- Linux local control is enabled only on GNOME/Xorg after explicit opt-in. The owned daemon must start with
+  `--no-overlay`: the decorative full-screen Cua cursor surface is not part of the product contract and must never
+  sit between the person and their desktop. GNOME/Wayland must clear a legacy durable opt-in, report
+  `linux-wayland-seat-safety-blocked`, and never start Cua until it independently passes the real-seat matrix in
+  #345. Xvfb proves the overlay-free arguments, lifecycle, and input routing; it does not waive real-seat evidence.
+  An unrelated app must remain clickable/typeable before any approved action. Global opt-in plus per-bot
+  **This computer** remains mandatory; Linux Auto, full-auto/bypass modes, remembered grants, and cloud approvals
+  must never authorize the user's desktop.
 - Keep CUA discovery shell-free and pin accepted archive, inner-file, manifest, and driver contracts. Packaged Linux
   builds must prefer their reviewed outside-ASAR runtime and fail closed instead of executing ambient PATH code;
   source/dev builds may use the validated explicit/user-local paths. Never add a runtime downloader/self-updater or

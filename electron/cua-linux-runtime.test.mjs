@@ -237,6 +237,29 @@ describe("unavailable Linux CUA runtime", () => {
       reasonCode: "bundled-driver-invalid",
     });
   });
+
+  it("clears a durable opt-in when the Wayland safety gate blocks startup", async () => {
+    const preferenceStore = { write: vi.fn() };
+    const runtime = createUnavailableLinuxRuntime({
+      connectionStore: { persist: (connection) => connection },
+      preferenceStore,
+      clearPreference: true,
+      reasonCode: "linux-wayland-seat-safety-blocked",
+      message: "Local control is not available on Wayland yet.",
+    });
+
+    await expect(runtime.initialize()).resolves.toMatchObject({
+      enabled: false,
+      status: "unavailable",
+      reasonCode: "linux-wayland-seat-safety-blocked",
+    });
+    await expect(runtime.enable()).resolves.toMatchObject({
+      enabled: false,
+      reasonCode: "linux-wayland-seat-safety-blocked",
+    });
+    expect(preferenceStore.write).toHaveBeenCalledOnce();
+    expect(preferenceStore.write).toHaveBeenCalledWith(false);
+  });
 });
 
 // Windows does not provide the POSIX executable and Unix-socket semantics this
@@ -323,9 +346,18 @@ describe.skipIf(process.platform === "win32")("Linux CUA opt-in and lifecycle", 
     expect(context.spawnProcess).toHaveBeenCalledTimes(1);
     expect(context.spawnProcess).toHaveBeenCalledWith(
       context.binary,
-      expect.arrayContaining(["serve", "--embedded", "--socket", "--permission-mode", "standard"]),
+      expect.arrayContaining([
+        "serve",
+        "--embedded",
+        "--no-overlay",
+        "--socket",
+        "--permission-mode",
+        "standard",
+      ]),
       expect.objectContaining({ shell: false, stdio: ["pipe", "ignore", "pipe"] }),
     );
+    const daemonArgs = context.spawnProcess.mock.calls[0][1];
+    expect(daemonArgs.filter((argument) => argument === "--no-overlay")).toHaveLength(1);
     const spawnOptions = context.spawnProcess.mock.calls[0][2];
     expect(spawnOptions.env).toMatchObject({
       CUA_DRIVER_EMBEDDED: "1",
@@ -547,7 +579,15 @@ describe.skipIf(process.platform === "win32")("Linux CUA private data", () => {
     const file = path.join(userData, "cua-local-control.json");
     expect(store.read()).toBe(true);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true, extra: true }), {
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      schemaVersion: 2,
+      linuxLocalControlEnabled: true,
+    });
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true }), {
+      mode: 0o600,
+    });
+    expect(store.read()).toBe(false);
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, linuxLocalControlEnabled: true, extra: true }), {
       mode: 0o600,
     });
     expect(store.read()).toBe(false);

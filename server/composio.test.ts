@@ -3,14 +3,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AppConfig } from "./config.ts";
 import {
+  applyManagedBrokerMessage,
   authorizeService,
   connectedServices,
+  connectionMode,
   connectionStatus,
   mcpIntegration,
   normalizeAccountAlias,
   prepareProjectSession,
   removeAccount,
   removeService,
+  setManagedBrokerAccess,
 } from "./composio.ts";
 
 let api: Server;
@@ -124,11 +127,60 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  setManagedBrokerAccess(null);
   delete process.env.OMB_COMPOSIO_API;
   await new Promise<void>((resolve) => api.close(() => resolve()));
 });
 
 describe.sequential("Composio Sessions", () => {
+  it("rejects broker URL components and invalid tokens from the environment", () => {
+    process.env.OMB_COMPOSIO_BROKER_TOKEN = "a".repeat(64);
+    try {
+      for (const url of [
+        "https://user:secret@broker.example/root",
+        "https://broker.example/root?redirect=evil",
+        "https://broker.example/root#fragment",
+      ]) {
+        process.env.OMB_COMPOSIO_BROKER_URL = url;
+        expect(() => connectionMode({})).toThrow(/must not include/);
+      }
+      process.env.OMB_COMPOSIO_BROKER_URL = "http://[::1]:3210/root/";
+      expect(connectionMode({})).toBe("managed");
+      process.env.OMB_COMPOSIO_BROKER_TOKEN = "short";
+      expect(() => connectionMode({})).toThrow(/token is invalid/);
+    } finally {
+      delete process.env.OMB_COMPOSIO_BROKER_URL;
+      delete process.env.OMB_COMPOSIO_BROKER_TOKEN;
+    }
+  });
+  it("accepts a private desktop credential update and rejects unsafe broker URLs", () => {
+    setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
+    expect(connectionMode({})).toBe("managed");
+    setManagedBrokerAccess({ url: "http://[::1]:3210/", token: "a".repeat(64) });
+    expect(connectionMode({})).toBe("managed");
+    expect(() =>
+      setManagedBrokerAccess({ url: "http://broker.example", token: "a".repeat(64) }),
+    ).toThrow(/HTTPS/);
+    for (const url of [
+      "https://user:secret@broker.example/root",
+      "https://broker.example/root?redirect=evil",
+      "https://broker.example/root#fragment",
+    ]) {
+      expect(() => setManagedBrokerAccess({ url, token: "a".repeat(64) })).toThrow(/must not include/);
+    }
+    expect(() => setManagedBrokerAccess({ url: "https://broker.example", token: "short" })).toThrow();
+    setManagedBrokerAccess(null);
+  });
+  it("ignores credential sync without access and clears only on explicit null", () => {
+    const messageType = "openmausbot:managed-composio";
+    setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
+
+    expect(applyManagedBrokerMessage({ type: messageType })).toBe(false);
+    expect(connectionMode({})).toBe("managed");
+
+    expect(applyManagedBrokerMessage({ type: messageType, access: null })).toBe(true);
+    expect(connectionMode({})).toBe("unavailable");
+  });
   it("accepts only project API keys", async () => {
     await expect(prepareProjectSession("old_key")).rejects.toThrow(/start with ak_/i);
     await expect(prepareProjectSession("ak_wrong")).rejects.toThrow(/invalid project key/i);

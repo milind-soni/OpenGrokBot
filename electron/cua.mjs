@@ -25,10 +25,16 @@ import { pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
 const { createCuaConnectionStore } = require("./cua-connection.cjs");
 const {
+  createLinuxCuaPreferenceStore,
   createLinuxCuaRuntime,
   createUnavailableLinuxRuntime,
 } = require("./cua-linux-runtime.cjs");
-const { cleanupAppImageCuaBundle, stageAppImageCuaBundle } = require("./cua-linux-bundle.cjs");
+const {
+  cleanupAppImageCuaBundle,
+  reapStaleAppImageCuaBundles,
+  stageAppImageCuaBundle,
+} = require("./cua-linux-bundle.cjs");
+const { linuxLocalControlSupport } = require("./capabilities.cjs");
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -49,6 +55,20 @@ const connectionStore = createCuaConnectionStore({
 
 function ensureLinuxRuntime() {
   if (!linuxRuntime) {
+    const support = linuxLocalControlSupport(process.platform, process.env);
+    if (!support.available) {
+      linuxRuntime = createUnavailableLinuxRuntime({
+        connectionStore,
+        preferenceStore: createLinuxCuaPreferenceStore({
+          getUserData: () => app.getPath("userData"),
+        }),
+        clearPreference: true,
+        reasonCode: support.reasonCode,
+        message: support.message,
+        onChange: (connection) => stateListener(connection),
+      });
+      return linuxRuntime;
+    }
     try {
       let bundledDriverPath;
       if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
@@ -58,6 +78,7 @@ function ensureLinuxRuntime() {
         // process-owned directory and verify their hashes after the copy, so
         // every AppImage follows the same execution invariant.
         if (process.env.APPIMAGE) {
+          reapStaleAppImageCuaBundles();
           linuxBundleStage ??= stageAppImageCuaBundle({ resourcesPath: process.resourcesPath });
           bundledDriverPath = linuxBundleStage.driverPath;
         }

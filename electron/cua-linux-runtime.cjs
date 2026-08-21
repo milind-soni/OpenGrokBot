@@ -14,7 +14,10 @@ const {
 } = require("./cua-linux.cjs");
 
 const CONNECTION_SCHEMA_VERSION = 1;
-const SETTINGS_SCHEMA_VERSION = 1;
+// Schema 2 is intentionally incompatible with early Linux desktop builds.
+// Those builds could start Cua without the Xorg seat-safety flags; keeping the
+// opt-in versioned makes a newer build unable to arm an older installed copy.
+const SETTINGS_SCHEMA_VERSION = 2;
 const HOST_BUNDLE_ID = "com.openmausbot.app";
 const CERTIFIED_CONTRACT_VERSION = "0.6.0";
 const CERTIFIED_TOOLS_LIST_SCHEMA_VERSION = "1";
@@ -439,11 +442,20 @@ function publicRuntimeStatus(connection) {
 
 function createUnavailableLinuxRuntime({
   connectionStore,
+  preferenceStore,
+  clearPreference = false,
   onChange = () => {},
   processId = process.pid,
   reasonCode = "bundled-driver-invalid",
   message = "The bundled Cua Driver failed integrity validation.",
 } = {}) {
+  if (clearPreference) {
+    try {
+      preferenceStore?.write(false);
+    } catch (error) {
+      console.error("[cua] Failed to clear unsafe Linux local-control preference:", error);
+    }
+  }
   const connection = {
     schemaVersion: CONNECTION_SCHEMA_VERSION,
     mode: "unavailable",
@@ -688,6 +700,10 @@ function createLinuxCuaRuntime({
       const args = [
         "serve",
         "--embedded",
+        // The driver's visual cursor is a full-screen X11 overlay. It is not
+        // needed for inspection or input delivery, and a compositor/renderer
+        // failure must never leave that surface between the user and desktop.
+        "--no-overlay",
         "--socket",
         socketPath,
         "--pid-file",

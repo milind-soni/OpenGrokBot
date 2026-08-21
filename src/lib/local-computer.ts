@@ -38,6 +38,9 @@ export function localComputerDisabledReason({
   }
   if (capabilities.localComputer.available) return null;
   if (capabilities.host.platform === "linux") {
+    if (capabilities.localComputer.reasonCode === "linux-wayland-seat-safety-blocked") {
+      return "Local computer control is not available on Wayland yet. Sign out and choose Ubuntu on Xorg to use This computer.";
+    }
     if (capabilities.localComputer.reasonCode === "wayland-compositor-unsupported") {
       return "Wayland local control is currently limited to GNOME. Xorg remains available on supported desktops.";
     }

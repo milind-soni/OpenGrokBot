@@ -36,7 +36,7 @@ afterEach(() => {
   }
 });
 
-describe.skipIf(process.platform === "win32")("Linux DEB upgrade hook", () => {
+describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
   it("repairs legacy directory and executable modes idempotently", () => {
     const { appRoot, resources, cuaRoot } = fixture();
 
@@ -76,7 +76,7 @@ describe.skipIf(process.platform === "win32")("Linux DEB upgrade hook", () => {
   });
 
   it("rejects a test override outside the private temporary root", () => {
-    const result = runHook("/opt/OpenMausBot");
+    const result = runHook(root);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("must stay under /tmp");
   });

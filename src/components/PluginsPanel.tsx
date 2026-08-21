@@ -100,6 +100,7 @@ export function PluginsPanel() {
   const [aliasDraft, setAliasDraft] = useState("");
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [connectedInventoryError, setConnectedInventoryError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
@@ -143,6 +144,7 @@ export function PluginsPanel() {
     setRefreshing(true);
     return api("/api/connectors/connected")
       .then((r) => {
+        setConnectedInventoryError(null);
         const services: Record<string, ConnectorStatus> = r.services ?? {};
         setStatus((current) => mergeCompleteConnectorStatus(
           current,
@@ -161,7 +163,10 @@ export function PluginsPanel() {
         }
         return services;
       })
-      .catch(() => ({}))
+      .catch((reason) => {
+        setConnectedInventoryError(reason instanceof Error ? reason.message : String(reason));
+        return {};
+      })
       .finally(() => setRefreshing(false));
   }, []);
 
@@ -305,6 +310,7 @@ export function PluginsPanel() {
     tab === "marketplace" || status[card.slug]?.connected || Boolean(status[card.slug]?.accounts?.length)
   );
   const connectedCount = Object.values(status).filter((service) => service.connected || service.accounts?.length).length;
+  const visibleError = error ?? connectedInventoryError;
   const close = () => dispatch({ type: "togglePlugins", open: false });
 
   return (
@@ -409,7 +415,7 @@ export function PluginsPanel() {
             for the full catalog.
           </div>
         )}
-        {error && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{error}</div>}
+        {visibleError && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{visibleError}</div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
           {cards === null ? (
@@ -547,11 +553,30 @@ export function PluginsPanel() {
           {cards !== null && visible.length === 0 && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
-                {tab === "connected" ? "No connected apps yet" : "No apps found"}
+                {tab === "connected"
+                  ? connectedInventoryError
+                    ? "Connections couldn't be loaded"
+                    : "No connected apps yet"
+                  : "No apps found"}
               </div>
               <div className="mt-1 text-[12.5px] text-ink-secondary">
-                {tab === "connected" ? "Connect an app from Marketplace and it will appear here." : "Try a different search."}
+                {tab === "connected"
+                  ? connectedInventoryError
+                    ? "The service did not return your connection list. Try again."
+                    : "Connect an app from Marketplace and it will appear here."
+                  : "Try a different search."}
               </div>
+              {tab === "connected" && connectedInventoryError && (
+                <button
+                  type="button"
+                  disabled={refreshing}
+                  onClick={() => void refreshConnectedStatus()}
+                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={cn(refreshing && "animate-spin")} />
+                  Try again
+                </button>
+              )}
             </div>
           )}
         </div>

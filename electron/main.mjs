@@ -9,6 +9,10 @@ import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
+import {
+  ensureManagedComposioCredentials,
+  managedComposioAccess,
+} from "./managed-composio.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
@@ -136,49 +140,6 @@ function composioBrokerUrl() {
   return configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : "");
 }
 
-async function ensureManagedComposioCredentials() {
-  const brokerUrl = composioBrokerUrl();
-  if (!brokerUrl) return;
-  if (/^[0-9a-f]{64}$/.test(secureCredentials.composioBrokerToken ?? "")) {
-    try {
-      const check = await fetch(`${brokerUrl}/v1/me`, {
-        headers: { authorization: `Bearer ${secureCredentials.composioBrokerToken}` },
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (check.ok) return;
-      // Only a definitive auth failure rotates the credential. A transient
-      // outage keeps the existing identity so reconnecting cannot strand
-      // the user's already-authorized accounts under a new installation.
-      if (check.status !== 401) return;
-      delete secureCredentials.composioBrokerToken;
-      delete secureCredentials.composioInstallationId;
-    } catch {
-      return;
-    }
-  }
-  try {
-    const response = await fetch(`${brokerUrl}/v1/installations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(15_000),
-    });
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
-    if (!/^[0-9a-f]{64}$/.test(body?.token ?? "") || typeof body?.installationId !== "string") {
-      throw new Error("the connected-apps service returned invalid credentials");
-    }
-    secureCredentials.composioBrokerToken = body.token;
-    secureCredentials.composioInstallationId = body.installationId;
-    await saveSecureCredentials(secureCredentials);
-    slog("connected-apps installation registered");
-  } catch (error) {
-    // Never block app startup on a hosted integration. A user running their
-    // own Composio project key still has the local fallback below.
-    slog(`connected-apps registration failed: ${error?.message ?? error}`);
-  }
-}
-
 // The packaged app has no terminal: everything about the server child's life
 // goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
 // Console.app-visible; %APPDATA%\OpenMausBot\logs on Windows), which is also
@@ -283,6 +244,18 @@ async function startServerPackaged() {
     await new Promise((r) => setTimeout(r, 2500));
   }
   return false;
+}
+
+function syncManagedComposioCredentials() {
+  if (!serverProc) return;
+  try {
+    serverProc.postMessage({
+      type: "openmausbot:managed-composio",
+      access: managedComposioAccess(composioBrokerUrl(), secureCredentials),
+    });
+  } catch (error) {
+    slog(`connected-apps credential sync failed: ${error?.message ?? error}`);
+  }
 }
 
 const ERROR_PAGE =
@@ -804,7 +777,6 @@ app.whenReady().then(async () => {
     secureCredentials = await loadSecureCredentials();
     await secureComposioConfig();
     await secureWorkspaceConfig();
-    await ensureManagedComposioCredentials();
   }
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
@@ -880,6 +852,17 @@ app.whenReady().then(async () => {
     void startCompanion({ resourcesPath: process.resourcesPath, harnessPort: SERVER_PORT, log: slog });
   }
   const win = createWindow();
+  // Registration is optional network work. Start it only after the local
+  // server and first window are usable, then update the server child over its
+  // private parent port so Connected Apps becomes available without restart.
+  if (app.isPackaged && composioBrokerUrl()) {
+    void ensureManagedComposioCredentials({
+      brokerUrl: composioBrokerUrl(),
+      credentials: secureCredentials,
+      saveCredentials: saveSecureCredentials,
+      log: slog,
+    }).finally(syncManagedComposioCredentials);
+  }
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
   // the user's click, installs on "Restart to update"
   startUpdater(win);

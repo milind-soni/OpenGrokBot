@@ -113,7 +113,23 @@ interface IntegrationContext {
   threadId: string;
 }
 
+let managedBrokerAccess: { url: string; token: string } | null | undefined;
+
+export function setManagedBrokerAccess(access: unknown): void {
+  if (access === null) {
+    managedBrokerAccess = null;
+    return;
+  }
+  const parsed = z.object({ url: z.string().url(), token: z.string().regex(/^[0-9a-f]{64}$/) }).strict().parse(access);
+  const url = new URL(parsed.url);
+  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+    throw new Error("The connected-apps service must use HTTPS");
+  }
+  managedBrokerAccess = { url: url.toString().replace(/\/$/, ""), token: parsed.token };
+}
+
 function brokerAccess(): { url: string; token: string } | null {
+  if (managedBrokerAccess !== undefined) return managedBrokerAccess;
   const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim().replace(/\/$/, "");
   const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;

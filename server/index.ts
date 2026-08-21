@@ -128,6 +128,25 @@ const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
 const bundledSkills = loadBundledSkills();
 
+// Electron's utility-process parent port is private to the desktop main
+// process. It lets a slow first-time managed Composio registration arrive
+// after first paint without putting the credential in the renderer or
+// restarting the embedded server. Plain Node/dev launches have no parentPort.
+type UtilityParentPort = {
+  on(event: "message", listener: (event: { data?: unknown }) => void): void;
+};
+const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityParentPort }).parentPort;
+utilityParentPort?.on("message", (event) => {
+  const message = event?.data;
+  if (!message || typeof message !== "object" || Array.isArray(message)) return;
+  if ((message as { type?: unknown }).type !== "openmausbot:managed-composio") return;
+  try {
+    composio.setManagedBrokerAccess((message as { access?: unknown }).access ?? null);
+  } catch (error) {
+    console.error(`[connected-apps] rejected desktop credential sync: ${error instanceof Error ? error.message : String(error)}`);
+  }
+});
+
 const bus = new EventBus();
 bus.attach(registry.instances());
 

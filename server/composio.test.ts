@@ -5,12 +5,14 @@ import type { AppConfig } from "./config.ts";
 import {
   authorizeService,
   connectedServices,
+  connectionMode,
   connectionStatus,
   mcpIntegration,
   normalizeAccountAlias,
   prepareProjectSession,
   removeAccount,
   removeService,
+  setManagedBrokerAccess,
 } from "./composio.ts";
 
 let api: Server;
@@ -124,11 +126,21 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  setManagedBrokerAccess(null);
   delete process.env.OMB_COMPOSIO_API;
   await new Promise<void>((resolve) => api.close(() => resolve()));
 });
 
 describe.sequential("Composio Sessions", () => {
+  it("accepts a private desktop credential update and rejects unsafe broker URLs", () => {
+    setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
+    expect(connectionMode({} as AppConfig)).toBe("managed");
+    expect(() =>
+      setManagedBrokerAccess({ url: "http://broker.example", token: "a".repeat(64) }),
+    ).toThrow(/HTTPS/);
+    expect(() => setManagedBrokerAccess({ url: "https://broker.example", token: "short" })).toThrow();
+    setManagedBrokerAccess(null);
+  });
   it("accepts only project API keys", async () => {
     await expect(prepareProjectSession("old_key")).rejects.toThrow(/start with ak_/i);
     await expect(prepareProjectSession("ak_wrong")).rejects.toThrow(/invalid project key/i);

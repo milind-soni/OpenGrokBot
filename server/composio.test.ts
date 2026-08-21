@@ -133,6 +133,26 @@ afterAll(async () => {
 });
 
 describe.sequential("Composio Sessions", () => {
+  it("rejects broker URL components and invalid tokens from the environment", () => {
+    process.env.OMB_COMPOSIO_BROKER_TOKEN = "a".repeat(64);
+    try {
+      for (const url of [
+        "https://user:secret@broker.example/root",
+        "https://broker.example/root?redirect=evil",
+        "https://broker.example/root#fragment",
+      ]) {
+        process.env.OMB_COMPOSIO_BROKER_URL = url;
+        expect(() => connectionMode({})).toThrow(/must not include/);
+      }
+      process.env.OMB_COMPOSIO_BROKER_URL = "http://[::1]:3210/root/";
+      expect(connectionMode({})).toBe("managed");
+      process.env.OMB_COMPOSIO_BROKER_TOKEN = "short";
+      expect(() => connectionMode({})).toThrow(/token is invalid/);
+    } finally {
+      delete process.env.OMB_COMPOSIO_BROKER_URL;
+      delete process.env.OMB_COMPOSIO_BROKER_TOKEN;
+    }
+  });
   it("accepts a private desktop credential update and rejects unsafe broker URLs", () => {
     setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
     expect(connectionMode({})).toBe("managed");
@@ -141,6 +161,13 @@ describe.sequential("Composio Sessions", () => {
     expect(() =>
       setManagedBrokerAccess({ url: "http://broker.example", token: "a".repeat(64) }),
     ).toThrow(/HTTPS/);
+    for (const url of [
+      "https://user:secret@broker.example/root",
+      "https://broker.example/root?redirect=evil",
+      "https://broker.example/root#fragment",
+    ]) {
+      expect(() => setManagedBrokerAccess({ url, token: "a".repeat(64) })).toThrow(/must not include/);
+    }
     expect(() => setManagedBrokerAccess({ url: "https://broker.example", token: "short" })).toThrow();
     setManagedBrokerAccess(null);
   });

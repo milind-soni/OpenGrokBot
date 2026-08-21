@@ -116,6 +116,19 @@ interface IntegrationContext {
 let managedBrokerAccess: { url: string; token: string } | null | undefined;
 
 const managedBrokerMessageSchema = z.record(z.string(), z.unknown());
+const managedBrokerToken = /^[0-9a-f]{64}$/;
+
+function normalizeManagedBrokerUrl(value: string): string {
+  const url = new URL(value);
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("The connected-apps service URL must not include credentials, a query, or a fragment");
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("The connected-apps service must use HTTPS");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}
 
 export function applyManagedBrokerMessage(message: unknown): boolean {
   const parsed = managedBrokerMessageSchema.safeParse(message);
@@ -135,34 +148,17 @@ export function setManagedBrokerAccess(access: unknown): void {
     managedBrokerAccess = null;
     return;
   }
-  const parsed = z.object({ url: z.string().url(), token: z.string().regex(/^[0-9a-f]{64}$/) }).strict().parse(access);
-  const url = new URL(parsed.url);
-  if (
-    url.protocol !== "https:" &&
-    url.hostname !== "127.0.0.1" &&
-    url.hostname !== "localhost" &&
-    url.hostname !== "[::1]"
-  ) {
-    throw new Error("The connected-apps service must use HTTPS");
-  }
-  managedBrokerAccess = { url: url.toString().replace(/\/$/, ""), token: parsed.token };
+  const parsed = z.object({ url: z.string().url(), token: z.string().regex(managedBrokerToken) }).strict().parse(access);
+  managedBrokerAccess = { url: normalizeManagedBrokerUrl(parsed.url), token: parsed.token };
 }
 
 function brokerAccess(): { url: string; token: string } | null {
   if (managedBrokerAccess !== undefined) return managedBrokerAccess;
-  const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim().replace(/\/$/, "");
+  const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
   const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;
-  const parsed = new URL(url);
-  if (
-    parsed.protocol !== "https:" &&
-    parsed.hostname !== "127.0.0.1" &&
-    parsed.hostname !== "localhost" &&
-    parsed.hostname !== "[::1]"
-  ) {
-    throw new Error("The connected-apps service must use HTTPS");
-  }
-  return { url, token };
+  if (!managedBrokerToken.test(token)) throw new Error("The connected-apps service token is invalid");
+  return { url: normalizeManagedBrokerUrl(url), token };
 }
 
 export function connectionMode(cfg: AppConfig): "managed" | "self-hosted" | "unavailable" {

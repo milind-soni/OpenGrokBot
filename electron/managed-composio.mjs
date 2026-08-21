@@ -1,10 +1,36 @@
 const TOKEN = /^[0-9a-f]{64}$/;
 
+export function normalizeManagedComposioBrokerUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return "";
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return "";
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return "";
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) return "";
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+}
+
 export function managedComposioAccess(brokerUrl, credentials) {
-  const url = typeof brokerUrl === "string" ? brokerUrl.trim().replace(/\/$/, "") : "";
+  const url = normalizeManagedComposioBrokerUrl(brokerUrl);
   const token = credentials?.composioBrokerToken;
   if (!url || !TOKEN.test(token ?? "")) return null;
   return { url, token };
+}
+
+export function managedComposioChildEnvironment(brokerUrl, credentials, environment) {
+  const next = { ...environment };
+  delete next.OMB_COMPOSIO_BROKER_URL;
+  delete next.OMB_COMPOSIO_BROKER_TOKEN;
+  const access = managedComposioAccess(brokerUrl, credentials);
+  if (access) {
+    next.OMB_COMPOSIO_BROKER_URL = access.url;
+    next.OMB_COMPOSIO_BROKER_TOKEN = access.token;
+  }
+  return next;
 }
 
 export async function ensureManagedComposioCredentials({
@@ -17,11 +43,16 @@ export async function ensureManagedComposioCredentials({
   existingCredentialTimeoutMs = 8_000,
   registrationTimeoutMs = 15_000,
 }) {
-  if (!brokerUrl) return credentials;
+  const url = normalizeManagedComposioBrokerUrl(brokerUrl);
+  if (!url) {
+    if (brokerUrl) log("connected-apps broker URL rejected: HTTPS or a loopback HTTP URL is required");
+    return credentials;
+  }
   if (TOKEN.test(credentials.composioBrokerToken ?? "")) {
     try {
-      const check = await fetchImpl(`${brokerUrl}/v1/me`, {
+      const check = await fetchImpl(`${url}/v1/me`, {
         headers: { authorization: `Bearer ${credentials.composioBrokerToken}` },
+        redirect: "error",
         signal: timeoutSignal(existingCredentialTimeoutMs),
       });
       if (check.ok) return credentials;
@@ -36,10 +67,11 @@ export async function ensureManagedComposioCredentials({
     }
   }
   try {
-    const response = await fetchImpl(`${brokerUrl}/v1/installations`, {
+    const response = await fetchImpl(`${url}/v1/installations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
+      redirect: "error",
       signal: timeoutSignal(registrationTimeoutMs),
     });
     const body = await response.json().catch(() => null);

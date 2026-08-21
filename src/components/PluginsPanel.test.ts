@@ -4,6 +4,7 @@ import {
   disconnectAccountConfirmation,
   mergeCompleteConnectorStatus,
   mergeCurrentConnectorStatus,
+  onlyLatestConnectorResponses,
   type ConnectorStatus,
 } from "./PluginsPanel";
 
@@ -42,6 +43,21 @@ describe("connected-app status races", () => {
     );
 
     expect(merged.gmail).toEqual({ connected: true, pending: false, status: "ACTIVE" });
+  });
+
+  it("drops an older status response when a newer request for the same app has started", () => {
+    const latestRequests = new Map([["gmail", 2], ["slack", 1]]);
+    const requestIds = new Map([["gmail", 1], ["slack", 1]]);
+    expect(
+      onlyLatestConnectorResponses(
+        {
+          gmail: { connected: false, status: "not_connected" },
+          slack: { connected: true, status: "ACTIVE" },
+        },
+        latestRequests,
+        requestIds,
+      ),
+    ).toEqual({ slack: { connected: true, status: "ACTIVE" } });
   });
 
   it("keeps a connected account beyond the first 40 marketplace cards", () => {

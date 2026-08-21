@@ -12,6 +12,8 @@ import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace
 import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
+  managedComposioChildEnvironment,
+  normalizeManagedComposioBrokerUrl,
 } from "./managed-composio.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
@@ -143,7 +145,9 @@ async function secureWorkspaceConfig() {
 
 function composioBrokerUrl() {
   const configured = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
-  return configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : "");
+  return normalizeManagedComposioBrokerUrl(
+    configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : ""),
+  );
 }
 
 // The packaged app has no terminal: everything about the server child's life
@@ -178,29 +182,24 @@ function slog(line) {
 
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
+  const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
+    ...process.env,
+    OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+    OMB_RESOURCES_PATH: process.resourcesPath,
+    OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
+    OMB_PORT: String(port),
+    OMB_USER_DATA: app.getPath("userData"),
+    ...(secureCredentials.composioApiKey
+      ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
+      : {}),
+    // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
+    // the server prefers these over config.json, whose plaintext fields
+    // the boot migration has deleted
+    ...workspaceCredentialEnv(secureCredentials),
+  });
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
-    env: {
-      ...process.env,
-      OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_RESOURCES_PATH: process.resourcesPath,
-      OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
-      OMB_PORT: String(port),
-      OMB_USER_DATA: app.getPath("userData"),
-      ...(secureCredentials.composioApiKey
-        ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
-        : {}),
-      // one env var per stored workspace secret (xai/box/voice/OpenCode Go);
-      // the server prefers these over config.json, whose plaintext fields
-      // the boot migration has deleted
-      ...workspaceCredentialEnv(secureCredentials),
-      ...(composioBrokerUrl() && secureCredentials.composioBrokerToken
-        ? {
-            OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
-            OMB_COMPOSIO_BROKER_TOKEN: secureCredentials.composioBrokerToken,
-          }
-        : {}),
-    },
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));

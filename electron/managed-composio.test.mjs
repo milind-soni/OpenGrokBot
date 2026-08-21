@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
+  managedComposioChildEnvironment,
+  normalizeManagedComposioBrokerUrl,
 } from "./managed-composio.mjs";
 
 const TOKEN = "a".repeat(64);
@@ -14,6 +16,39 @@ describe("managed Composio desktop registration", () => {
     });
     expect(managedComposioAccess("https://broker.example", {})).toBeNull();
     expect(managedComposioAccess("", { composioBrokerToken: TOKEN })).toBeNull();
+  });
+
+  it("accepts HTTPS and loopback development brokers but rejects insecure remote URLs", async () => {
+    expect(normalizeManagedComposioBrokerUrl("https://broker.example/root/")).toBe(
+      "https://broker.example/root",
+    );
+    expect(normalizeManagedComposioBrokerUrl("http://127.0.0.1:8787/")).toBe(
+      "http://127.0.0.1:8787",
+    );
+    expect(normalizeManagedComposioBrokerUrl("http://localhost:8787")).toBe(
+      "http://localhost:8787",
+    );
+    expect(normalizeManagedComposioBrokerUrl("http://broker.example")).toBe("");
+    expect(normalizeManagedComposioBrokerUrl("https://user:secret@broker.example")).toBe("");
+    expect(normalizeManagedComposioBrokerUrl("https://broker.example?redirect=evil")).toBe("");
+
+    const fetchImpl = vi.fn();
+    const credentials = { composioBrokerToken: TOKEN };
+    await ensureManagedComposioCredentials({
+      brokerUrl: "http://broker.example",
+      credentials,
+      fetchImpl,
+      saveCredentials: vi.fn(),
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(managedComposioAccess("http://broker.example", credentials)).toBeNull();
+    expect(
+      managedComposioChildEnvironment("http://broker.example", credentials, {
+        PATH: "/usr/bin",
+        OMB_COMPOSIO_BROKER_URL: "http://attacker.example",
+        OMB_COMPOSIO_BROKER_TOKEN: "attacker-controlled",
+      }),
+    ).toEqual({ PATH: "/usr/bin" });
   });
 
   it("registers a new installation and persists it", async () => {
@@ -33,7 +68,7 @@ describe("managed Composio desktop registration", () => {
 
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://broker.example/v1/installations",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({ method: "POST", redirect: "error" }),
     );
     expect(credentials).toEqual({
       composioBrokerToken: TOKEN,

@@ -640,6 +640,145 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  it("carries a question's choices, their explanations, and multi-select through to the card", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-q", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-q"));
+    const nextAnswer = answerQueue(conn);
+    conn.write(
+      JSON.stringify({
+        t: "ask",
+        id: "ask-q",
+        kind: "question",
+        tool: "AskUserQuestion",
+        input: {
+          question: "Which framework should we use?",
+          choices: ["React", "Vue"],
+          optionHints: { React: "What the app already uses" },
+          multiSelect: true,
+        },
+      }) + "\n",
+    );
+
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    expect(opened).toMatchObject({
+      requestType: "question",
+      tool: "AskUserQuestion",
+      summary: "Which framework should we use?",
+      choices: ["React", "Vue"],
+      choiceHints: { React: "What the app already uses" },
+      multiSelect: true,
+    });
+
+    // a question takes an answer, never an allow
+    await expect(
+      instance.adapter.respondToRequest("t-perm-q", "ask-q", { behavior: "answer", message: "React, Vue" }),
+    ).resolves.toBe("answered");
+    expect(await nextAnswer()).toMatchObject({ behavior: "answer", message: "React, Vue" });
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-q");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("reads a QUESTION's nested questions[] instead of showing it as raw JSON", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-nest", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-nest"));
+    // permission-proxy normalizes this shape before the broker sees it; if
+    // anything ever gets past it, the card must still be readable rather than
+    // a truncated `{"questions":[{"question":"…` blob with Allow/Deny under it
+    conn.write(
+      JSON.stringify({
+        t: "ask",
+        id: "ask-nest",
+        kind: "question",
+        tool: "AskUserQuestion",
+        input: {
+          questions: [
+            {
+              question: "What role are you targeting?",
+              options: [
+                { label: "Software Engineer", description: "General SWE" },
+                { label: "Product", description: "PM track" },
+              ],
+            },
+          ],
+        },
+      }) + "\n",
+    );
+
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    expect(opened).toMatchObject({
+      summary: "What role are you targeting?",
+      choices: ["Software Engineer", "Product"],
+      choiceHints: { "Software Engineer": "General SWE", Product: "PM track" },
+    });
+    expect((opened as { summary: string }).summary).not.toContain("{");
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-nest");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("never lets a PERMISSION take its buttons or its summary from a nested questions[]", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-lbl", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-lbl"));
+    // A permission ask whose arguments happen to carry `questions`. The
+    // companion renders card.options AS the decision and maps every label
+    // that is not "Allow" to a denial, so model-authored labels here mean
+    // both buttons deny while "Always allow" writes a real grant first.
+    conn.write(
+      JSON.stringify({
+        t: "ask",
+        id: "ask-lbl",
+        tool: "mcp__x__wire",
+        input: {
+          questions: [{ question: "Send the payroll export?", options: [{ label: "Yes" }, { label: "No" }] }],
+          to: "acct-9",
+          amount: 4200,
+        },
+      }) + "\n",
+    );
+
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    expect(opened).toMatchObject({ requestType: "permission" });
+    expect((opened as { choices?: string[] }).choices).toBeUndefined();
+    // and the arguments a person is actually deciding on are still shown
+    expect((opened as { summary: string }).summary).toContain("acct-9");
+    expect((opened as { summary: string }).summary).toContain("4200");
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-lbl");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("still shows an unknown permission tool's raw arguments — they are the whole decision", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-raw", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = await connectSocket(permissionSocketPath("t-perm-raw"));
+    conn.write(
+      JSON.stringify({ t: "ask", id: "ask-raw", tool: "mcp__x__wire", input: { amount: 4200, to: "acct-9" } }) + "\n",
+    );
+
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    expect(opened).toMatchObject({ requestType: "permission", summary: '{"amount":4200,"to":"acct-9"}' });
+    expect((opened as { choices?: string[] }).choices).toBeUndefined();
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-raw");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
   it("answers to unknown or already-resolved asks resolve `unavailable` — typed, never a throw", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-perm-2", text: "go" });

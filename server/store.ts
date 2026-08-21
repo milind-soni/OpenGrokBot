@@ -38,6 +38,15 @@ export interface OptionCardData {
   title: string;
   subtitle: string;
   options: string[];
+  /** what each option means, keyed by its label — a question that came with
+   * explanations (AskUserQuestion) shows them under the buttons. Kept beside
+   * `options` rather than inside it so every existing reader of the plain
+   * label list — the phone, call-mode narration, the sidebar preview — keeps
+   * working untouched. */
+  optionHints?: Record<string, string>;
+  /** the question takes more than one option; `answered` is then the chosen
+   * labels joined with ", ", which is the format the asking tool expects */
+  multiSelect?: boolean;
   answered?: string;
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */

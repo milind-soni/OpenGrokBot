@@ -109,6 +109,10 @@ export type RuntimeEvent = RuntimeEventBase &
         tool: string;
         summary: string;
         choices?: string[];
+        /** questions: what each choice means, keyed by the choice's label */
+        choiceHints?: Record<string, string>;
+        /** questions: more than one choice may be picked (answers join with ", ") */
+        multiSelect?: boolean;
         approvalScope?: "local-computer";
       }
     | {

@@ -879,6 +879,10 @@ bus.subscribe((event: RuntimeEvent) => {
                 : "Your bot has a question",
           subtitle: event.summary,
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
+          // questions only: an Allow/Deny box has nothing to explain, and
+          // nothing to multi-select
+          optionHints: !permission ? event.choiceHints : undefined,
+          multiSelect: !permission && event.multiSelect ? true : undefined,
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
           // the exact grant "always allow" would remember, decided here so

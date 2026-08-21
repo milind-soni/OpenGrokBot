@@ -30,6 +30,16 @@ const SENSITIVE = [
   /\bcredentials?\.json\b|\bserviceaccount\b/i,
 ];
 
+// Tools that ask a PERSON something. A question exists so that a human
+// decides; auto mode answering one on their behalf defeats the only reason
+// it was asked. They normally arrive typed as questions and never reach a
+// verdict at all — this is the backstop for the path where one arrives
+// mis-typed as a permission (a malformed AskUserQuestion call falls back to
+// the permission path in permission-proxy). Auto-approving it there does not
+// produce an answer: the CLI runs the tool with none and the model is told
+// "The user did not answer the questions." — a question silently lost.
+const ASKS_A_PERSON = new Set(["askuserquestion", "ask_user"]);
+
 /** First matching pattern's source, so a verdict can NAME the rule that
  * made it — the decision log's whole value is "which rule", and deriving
  * the match a second time at the call site is how the log and the verdict
@@ -118,6 +128,10 @@ export function autoVerdict(
   // into them
   const destructive = matchFirst(DESTRUCTIVE, summary) ?? matchFirst(DESTRUCTIVE, tool);
   const sensitive = destructive ? null : matchFirst(SENSITIVE, summary);
+  // A question is for a person, whatever channel it arrived on.
+  if (ASKS_A_PERSON.has(tool.replace(/^mcp__[^_]+__/, "").toLowerCase())) {
+    return { approve: null, source: "no-grant" };
+  }
   // The grant is computed even when a hard block will refuse it: the row
   // worth auditing is "this WOULD have auto-approved, and only the block
   // stood in the way", which cannot be told apart from an ordinary

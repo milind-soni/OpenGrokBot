@@ -18,6 +18,7 @@ import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { BotAvatarCrop } from "../../shared/bot-avatar";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
+import { answerResponse, dismissResponse } from "@/lib/card-answer";
 import { currentCall } from "@/lib/call";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
@@ -29,6 +30,15 @@ export interface OptionCardData {
   title: string;
   subtitle: string;
   options: string[];
+  /** what each option means, keyed by its label — a question that came with
+   * explanations (AskUserQuestion) shows them under the buttons. Kept beside
+   * `options` rather than inside it so every existing reader of the plain
+   * label list — the phone, call-mode narration, the sidebar preview — keeps
+   * working untouched. */
+  optionHints?: Record<string, string>;
+  /** the question takes more than one option; `answered` is then the chosen
+   * labels joined with ", ", which is the format the asking tool expects */
+  multiSelect?: boolean;
   answered?: string;
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */
@@ -398,8 +408,10 @@ export type Action =
   | { type: "editMessage"; botId: string; messageId: string; text: string }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
-  | { type: "answerCard"; botId: string; messageId: string; answer: string }
-  | { type: "dismissCard"; botId: string; messageId: string }
+  // `groupId` when the card is in a room: the message lives on the room's
+  // list, and the answer goes to the room's thread
+  | { type: "answerCard"; botId: string; messageId: string; answer: string; groupId?: string }
+  | { type: "dismissCard"; botId: string; messageId: string; groupId?: string }
   // permission cards answer by THREAD, so a request raised inside a room
   // can be answered the same way as one in a 1:1 chat
   | {
@@ -486,13 +498,21 @@ function withMascotMotion(
   };
 }
 
+function withPatchedCard(messages: Message[], messageId: string, patch: Partial<OptionCardData>): Message[] {
+  return messages.map((m) => (m.id === messageId && m.card ? { ...m, card: { ...m.card, ...patch } } : m));
+}
+
 function patchCard(state: AppState, botId: string, messageId: string, patch: Partial<OptionCardData>): AppState {
-  return updateBot(state, botId, (b) => ({
-    ...b,
-    messages: b.messages.map((m) =>
-      m.id === messageId && m.card ? { ...m, card: { ...m.card, ...patch } } : m,
+  return updateBot(state, botId, (b) => ({ ...b, messages: withPatchedCard(b.messages, messageId, patch) }));
+}
+
+function patchGroupCard(state: AppState, groupId: string, messageId: string, patch: Partial<OptionCardData>): AppState {
+  return {
+    ...state,
+    groups: state.groups.map((g) =>
+      g.id === groupId ? { ...g, messages: withPatchedCard(g.messages, messageId, patch) } : g,
     ),
-  }));
+  };
 }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -595,12 +615,14 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     // optimistic card settle; the server's message.patch confirms it later
     case "answerCard":
+      if (action.groupId) return patchGroupCard(state, action.groupId, action.messageId, { answered: action.answer });
       return withMascotMotion(
         patchCard(state, action.botId, action.messageId, { answered: action.answer }),
         action.botId,
         "working",
       );
     case "dismissCard":
+      if (action.groupId) return patchGroupCard(state, action.groupId, action.messageId, { dismissed: true });
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "decideRequest":
       return state; // the server's request.resolved patch settles the card
@@ -1070,6 +1092,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
       setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
     };
+    /** Where a card action's message lives, and the card on it. A card asked
+     * inside a room belongs to the room's list, never to one member's. */
+    const cardTarget = (action: { botId: string; messageId: string; groupId?: string }) => {
+      const host = action.groupId
+        ? stateRef.current.groups.find((g) => g.id === action.groupId)
+        : stateRef.current.bots.find((b) => b.id === action.botId);
+      return { host, card: host?.messages.find((m) => m.id === action.messageId)?.card, inRoom: !!action.groupId };
+    };
     // fire-and-forget card persistence; the route is optional server-side
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
       fetch(`/api/bots/${botId}/cards/${messageId}`, {
@@ -1156,20 +1186,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerCard": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.botId);
-          const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
-          if (card?.requestId) {
-            const behavior =
-              action.answer === "Allow" ? "allow" : action.answer === "Deny" ? "deny" : "answer";
-            api(`/api/bots/${action.botId}/respond`, {
+          const { host, card, inRoom } = cardTarget(action);
+          if (card?.requestId && host) {
+            // allow/deny for a permission, the chosen text for a question —
+            // decided from the card, never from the label (see card-answer.ts).
+            // by THREAD, so a card raised inside a room answers the same way
+            // a 1:1 one does
+            api(`/api/threads/${host.threadId}/respond`, {
               method: "POST",
               body: JSON.stringify({
                 requestId: card.requestId,
-                behavior,
-                message: behavior === "answer" ? action.answer : undefined,
+                ...answerResponse(card, action.answer),
               }),
             }).catch(showError);
-          } else {
+          } else if (!inRoom) {
             persistCard(action.botId, action.messageId, { answered: action.answer });
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1179,14 +1209,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "dismissCard": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.botId);
-          const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
-          if (card?.requestId) {
-            api(`/api/bots/${action.botId}/respond`, {
+          const { host, card, inRoom } = cardTarget(action);
+          if (card?.requestId && host) {
+            // a question is DECLINED rather than denied — the broker refuses
+            // a deny on one (see card-answer.ts)
+            api(`/api/threads/${host.threadId}/respond`, {
               method: "POST",
-              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user." }),
+              body: JSON.stringify({ requestId: card.requestId, ...dismissResponse(card) }),
             }).catch(() => {});
-          } else {
+          } else if (!inRoom) {
             persistCard(action.botId, action.messageId, { dismissed: true });
           }
           break;

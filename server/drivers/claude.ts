@@ -214,15 +214,96 @@ function systemEndedReply(kind: Ask["kind"]): { behavior: AskBehavior; message: 
     : { behavior: "deny", message: "OpenMausBot: the turn ended" };
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask: Ask): string {
   const input = ask.input ?? {};
   if (typeof input.question === "string") return input.question.slice(0, 300);
   if (typeof input.command === "string") return input.command.slice(0, 200);
   if (typeof input.url === "string") return input.url.slice(0, 200);
+  // A QUESTION can also carry its text one level down, under `questions`
+  // (the CLI's own AskUserQuestion shape). permission-proxy normalizes that
+  // before it reaches the broker, so this is the belt to that braces.
+  //
+  // Gated on the kind on purpose. A PERMISSION whose arguments happen to
+  // contain a `questions` array must never have the rest of them summarized
+  // away: you would be approving an action having read one friendly sentence
+  // instead of what it does.
+  if (ask.kind === "question") {
+    const nested = nestedQuestions(input);
+    if (nested.length) return nested.map((question) => question.question).join(" · ").slice(0, 300);
+  }
+  // Last resort, and deliberately still the raw arguments: for a permission
+  // ask on an unknown tool, its arguments are the only thing a person has to
+  // decide with, and hiding them behind a tidy label would make the decision
+  // worse rather than the card prettier.
   const text = JSON.stringify(input);
   return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, 200);
 }
+
+/** `questions[]` entries with a readable question and labelled options. */
+function nestedQuestions(input: Record<string, unknown>): Array<{ question: string; options: unknown[] }> {
+  if (!Array.isArray(input.questions)) return [];
+  const out: Array<{ question: string; options: unknown[] }> = [];
+  for (const entry of input.questions) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { question, options } = entry as Record<string, unknown>;
+    if (typeof question === "string" && question.trim()) {
+      out.push({ question, options: Array.isArray(options) ? options : [] });
+    }
+  }
+  return out;
+}
+
+/**
+ * The answer buttons a QUESTION card offers, and what each one means.
+ *
+ * Two shapes arrive: the flat `choices` list ask_user sends, and the
+ * `questions[].options[]` objects the CLI's AskUserQuestion uses — a label
+ * plus its own explanation. Reading only the flat one is why a native
+ * question arrived with no choices at all and fell back to Allow/Deny.
+ *
+ * Only ever called for a question. A permission's buttons are Allow/Deny and
+ * must not come from anything the model wrote: the companion renders
+ * `card.options` AS the decision, and it maps every label that is not "Allow"
+ * to a denial — so model-authored labels there mean both buttons deny while
+ * "Always allow" writes a real grant and then denies.
+ */
+function askChoices(input: Record<string, unknown>): {
+  choices?: string[];
+  choiceHints?: Record<string, string>;
+  multiSelect?: boolean;
+} {
+  const hints: Record<string, string> = {};
+  const labels: string[] = [];
+  // one loop over either shape: flat strings, or objects carrying the label
+  // and its explanation
+  const options = Array.isArray(input.choices) ? input.choices : (nestedQuestions(input)[0]?.options ?? []);
+  for (const option of options) {
+    if (typeof option === "string") {
+      labels.push(option);
+      continue;
+    }
+    if (!isRecord(option) || typeof option.label !== "string") continue;
+    labels.push(option.label);
+    if (typeof option.description === "string" && option.description.trim()) hints[option.label] = option.description;
+  }
+  if (isRecord(input.optionHints)) {
+    for (const [label, hint] of Object.entries(input.optionHints)) {
+      if (typeof hint === "string" && hint.trim()) hints[label] = hint;
+    }
+  }
+  const choices = labels.slice(0, 5);
+  const choiceHints = Object.fromEntries(Object.entries(hints).filter(([label]) => choices.includes(label)));
+  return {
+    choices: choices.length ? choices : undefined,
+    choiceHints: Object.keys(choiceHints).length ? choiceHints : undefined,
+    multiSelect: input.multiSelect === true ? true : undefined,
+  };
+}
+
 
 export function permissionSocketPath(threadId: string) {
   // A readable prefix alone is not unique: ids that agree on their first
@@ -321,7 +402,10 @@ function createPermissionBroker(opts: {
           if (!pending.delete(askId)) return;
           clearTimeout(timer);
           try {
-            conn.write(JSON.stringify({ t: "answer", id: askId, behavior, message }) + "\n");
+            // `source` travels with the answer: a proxy that cannot tell the
+            // human's words from a timeout note will file the timeout note as
+            // the human's words.
+            conn.write(JSON.stringify({ t: "answer", id: askId, behavior, message, source }) + "\n");
           } catch {}
           opts.onResolve({ ...ask, behavior, source });
         };
@@ -672,7 +756,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               tool: ask.tool,
               summary: askSummary(ask),
               approvalScope: controlsHost ? "local-computer" : undefined,
-              choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
+              ...(ask.kind === "question" ? askChoices(ask.input ?? {}) : {}),
             });
           },
           onResolve: (resolved) => {

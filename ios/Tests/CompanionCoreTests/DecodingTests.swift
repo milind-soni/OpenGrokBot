@@ -153,10 +153,13 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(card.allowKey, "Bash:rm")
         XCTAssertEqual(card.responseBehavior(for: "Allow"), "allow")
         XCTAssertEqual(card.responseBehavior(for: "Approve"), "allow")
+        XCTAssertEqual(card.responseBehavior(for: "Yes"), "allow")
         XCTAssertEqual(card.responseBehavior(for: "Always allow"), "allow")
         XCTAssertEqual(card.responseBehavior(for: "Deny"), "deny")
+        XCTAssertEqual(card.responseBehavior(for: " deny "), "deny")
         XCTAssertTrue(card.shouldRememberPermission(for: "Always allow"))
         XCTAssertFalse(card.shouldRememberPermission(for: "Allow"))
+        XCTAssertFalse(card.shouldRememberPermission(for: " deny "))
 
         var answered = card
         answered.answered = "Allow"

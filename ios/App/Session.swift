@@ -439,9 +439,9 @@ final class Session: ObservableObject {
         }
     }
 
-    func answer(chat: Chat, card: OptionCard, choice: String) async {
+    func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {
         guard let requestId = card.requestId else { return }
-        if card.shouldRememberPermission(for: choice), case let .bot(bot) = chat {
+        if rememberingPermission, card.shouldRememberPermission(for: choice), case let .bot(bot) = chat {
             await alwaysAllow(bot: bot, card: card)
         }
         await answer(

@@ -875,7 +875,12 @@ struct CardView: View {
                             answering = true
                             Task {
                                 await session.alwaysAllow(bot: bot, card: card)
-                                await session.answer(chat: chat, card: card, choice: allow)
+                                await session.answer(
+                                    chat: chat,
+                                    card: card,
+                                    choice: allow,
+                                    rememberingPermission: false
+                                )
                                 answering = false
                             }
                         }

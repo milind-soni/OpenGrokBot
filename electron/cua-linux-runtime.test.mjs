@@ -579,7 +579,15 @@ describe.skipIf(process.platform === "win32")("Linux CUA private data", () => {
     const file = path.join(userData, "cua-local-control.json");
     expect(store.read()).toBe(true);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true, extra: true }), {
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      schemaVersion: 2,
+      linuxLocalControlEnabled: true,
+    });
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true }), {
+      mode: 0o600,
+    });
+    expect(store.read()).toBe(false);
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, linuxLocalControlEnabled: true, extra: true }), {
       mode: 0o600,
     });
     expect(store.read()).toBe(false);

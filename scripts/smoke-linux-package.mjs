@@ -47,7 +47,9 @@ for (const appName of ["openmausbot", "OpenMausBot"]) {
   chmodSync(userData, 0o700);
   writeFileSync(
     path.join(userData, "cua-local-control.json"),
-    JSON.stringify({ schemaVersion: 1, linuxLocalControlEnabled: true }),
+    // Keep this explicit: schema 2 prevents a safe build's opt-in from arming
+    // an older Linux package that started Cua without the seat-safety flags.
+    JSON.stringify({ schemaVersion: 2, linuxLocalControlEnabled: true }),
     { mode: 0o600 },
   );
 }

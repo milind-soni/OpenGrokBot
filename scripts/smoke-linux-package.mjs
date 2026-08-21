@@ -306,7 +306,11 @@ try {
       );
     }
   } else {
-    if (!initialCapabilities.localComputer.available) throw new Error("initial Linux CUA runtime was not ready");
+    if (!initialCapabilities.localComputer.available) {
+      throw new Error(
+        `initial Linux CUA runtime was not ready: ${JSON.stringify(initialCapabilities.localComputer)}`,
+      );
+    }
     if (initialCapabilities.localComputer.support !== "limited") throw new Error("Linux CUA was not marked beta/limited");
     if (wayland && (
       initialCapabilities.localComputer.session !== "wayland" ||

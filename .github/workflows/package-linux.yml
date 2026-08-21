@@ -97,8 +97,8 @@ jobs:
         with:
           name: openmausbot-ubuntu-smoke-diagnostics
           path: |
-            ${{ runner.temp }}/omb-linux-smoke-*
-            ${{ runner.temp }}/omb-linux-smoke-runtime-*
+            /tmp/omb-linux-smoke-*
+            /tmp/omb-linux-smoke-runtime-*
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 7

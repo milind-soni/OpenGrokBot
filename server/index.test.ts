@@ -799,6 +799,7 @@ describe("harness HTTP API", () => {
 
     expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
     for (const bot of imported.body.bots) await api("DELETE", `/api/bots/${bot.id}`);
+    rmSync(folder, { recursive: true, force: true });
   });
 
   it("team import is additive-only: smuggled grants, claimed ids, and re-imports never touch existing records", async () => {

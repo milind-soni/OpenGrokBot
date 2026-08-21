@@ -23,8 +23,9 @@ export type ScoutRole =
 
 export interface ProjectSignal {
   role: ScoutRole;
-  /** the files and dependencies that argued for this role, for the human
-   * reviewing the suggestion — never shown to a model */
+  /** the files and dependencies that argued for this role: shown to the
+   * human reviewing the suggestion, and quoted in the suggested member's
+   * description — which becomes persona text and reaches the provider */
   evidence: string[];
 }
 

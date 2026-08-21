@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { parseTeamManifest } from "./team-manifest.ts";
@@ -39,7 +39,7 @@ describe("scoutProject", () => {
     const fromPkg = scoutProject(project({ "package.json": JSON.stringify({ name: "pkg-name" }) }));
     expect(fromPkg.name).toBe("pkg-name");
     const bare = project({});
-    expect(scoutProject(bare).name).toBe(bare.split("/").at(-1));
+    expect(scoutProject(bare).name).toBe(basename(bare));
   });
 
   it("detects roles from dependencies and folders, with evidence", () => {

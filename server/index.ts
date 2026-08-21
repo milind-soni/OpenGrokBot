@@ -3026,8 +3026,10 @@ const server = createServer(async (req, res) => {
       let directory: MatchedDirectoryBot[] = [];
       try {
         directory = matchDirectoryBots(scoutProject(validated.cwd), await fetchBotDirectory());
-      } catch {
-        // an unreachable directory is a fact of life, not an error
+      } catch (error) {
+        // an unreachable directory is a fact of life, not an error — but an
+        // empty section should still be diagnosable from the server log
+        console.warn("bot directory lookup failed:", error instanceof Error ? error.message : String(error));
       }
       return json(res, 200, { directory });
     }

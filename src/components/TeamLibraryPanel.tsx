@@ -133,11 +133,18 @@ export function TeamLibraryPanel({
   const [scoutFolder, setScoutFolder] = useState("");
   const [scouting, setScouting] = useState(false);
   const [scouted, setScouted] = useState<ScoutResult | null>(null);
+  // the folder the current `scouted` result was actually read from — the
+  // import must pin the room to THIS, not to whatever the input says now
+  const [scoutedFolder, setScoutedFolder] = useState("");
   // null = not asked yet or still loading; [] = asked, nothing (or offline)
   const [directory, setDirectory] = useState<DirectoryCandidate[] | null>(null);
   const [pickedDirectory, setPickedDirectory] = useState<Set<string>>(new Set());
   const [roomName, setRoomName] = useState("");
   const [creating, setCreating] = useState(false);
+  // monotonically increasing scout token: a late response from an older
+  // scout (including its lazy directory call) must never overwrite state
+  // that belongs to a newer one
+  const scoutRequest = useRef(0);
 
   const currentBotCount = state.bots.filter((bot) => !bot.hidden).length;
 
@@ -273,6 +280,7 @@ export function TeamLibraryPanel({
   const scoutTarget = scoutFolder.trim();
 
   const runScout = async (folder: string) => {
+    const request = ++scoutRequest.current;
     setScouting(true);
     setError("");
     setScouted(null);
@@ -281,19 +289,26 @@ export function TeamLibraryPanel({
     try {
       // SAFETY: this endpoint is owned by the app and returns ScoutResult.
       const result = (await api(`/api/teams/scout?cwd=${encodeURIComponent(folder)}`)) as ScoutResult;
+      if (request !== scoutRequest.current) return;
       setScouted(result);
+      setScoutedFolder(folder);
       setRoomName(result.suggestion.roomName);
       track("team_scouted", { signals: result.suggestion.manifest.team.members.length - 1 });
       // community candidates arrive lazily; an unreachable directory just
       // leaves this section empty
       void api(`/api/teams/scout/directory?cwd=${encodeURIComponent(folder)}`)
         // SAFETY: this endpoint is owned by the app and returns candidates.
-        .then((extra) => setDirectory((extra as { directory: DirectoryCandidate[] }).directory))
-        .catch(() => setDirectory([]));
+        .then((extra) => {
+          if (request === scoutRequest.current) setDirectory((extra as { directory: DirectoryCandidate[] }).directory);
+        })
+        .catch(() => {
+          if (request === scoutRequest.current) setDirectory([]);
+        });
     } catch (cause) {
+      if (request !== scoutRequest.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setScouting(false);
+      if (request === scoutRequest.current) setScouting(false);
     }
   };
 
@@ -331,7 +346,7 @@ export function TeamLibraryPanel({
       const room = roomName.trim() || scouted.suggestion.roomName;
       // SAFETY: this endpoint is owned by the app and returns imported bots.
       const response = (await api(
-        `/api/teams/import?mode=project&cwd=${encodeURIComponent(scoutTarget)}&room=${encodeURIComponent(room)}`,
+        `/api/teams/import?mode=project&cwd=${encodeURIComponent(scoutedFolder)}&room=${encodeURIComponent(room)}`,
         { method: "POST", body: JSON.stringify(manifest) },
       )) as { bots: Bot[]; group?: Group };
       for (const bot of response.bots) dispatch({ type: "botAdded", bot });
@@ -741,40 +756,40 @@ export function TeamLibraryPanel({
                           <div className="mt-5 text-[12px] font-medium text-ink-secondary">From the community directory — tick to add</div>
                           <div className="mt-1 flex flex-col">
                             {directory.map((candidate) => (
-                              <label key={candidate.slug} className="flex cursor-pointer items-center gap-3 border-b border-hairline/35 px-1 py-3">
-                                <input
-                                  type="checkbox"
-                                  checked={pickedDirectory.has(candidate.slug)}
-                                  onChange={() =>
-                                    setPickedDirectory((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(candidate.slug)) next.delete(candidate.slug);
-                                      else next.add(candidate.slug);
-                                      return next;
-                                    })
-                                  }
-                                  className="size-4 accent-accent"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate text-[13.5px] font-medium text-ink">
-                                    {candidate.name}
-                                    {candidate.category && <span className="font-normal text-ink-secondary"> · {candidate.category}</span>}
+                              <div key={candidate.slug} className="flex items-center gap-3 border-b border-hairline/35 px-1 py-3">
+                                <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={pickedDirectory.has(candidate.slug)}
+                                    onChange={() =>
+                                      setPickedDirectory((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(candidate.slug)) next.delete(candidate.slug);
+                                        else next.add(candidate.slug);
+                                        return next;
+                                      })
+                                    }
+                                    className="size-4 accent-accent"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-[13.5px] font-medium text-ink">
+                                      {candidate.name}
+                                      {candidate.category && <span className="font-normal text-ink-secondary"> · {candidate.category}</span>}
+                                    </div>
+                                    <div className="mt-0.5 truncate text-[12px] text-ink-secondary">
+                                      Matches {candidate.matched.join(", ")}
+                                    </div>
                                   </div>
-                                  <div className="mt-0.5 truncate text-[12px] text-ink-secondary">
-                                    Matches {candidate.matched.join(", ")}
-                                  </div>
-                                </div>
+                                </label>
                                 <button
-                                  onClick={(event) => {
-                                    event.preventDefault();
-                                    void openExternal(candidate.detailUrl);
-                                  }}
-                                  className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+                                  onClick={() => void openExternal(candidate.detailUrl)}
+                                  aria-label={`Open ${candidate.name} on botdirectory.ai`}
                                   title="Read this bot's page before adding it"
+                                  className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
                                 >
                                   <ExternalLink size={14} />
                                 </button>
-                              </label>
+                              </div>
                             ))}
                           </div>
                         </>

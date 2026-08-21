@@ -68,6 +68,33 @@ export function parseBotDirectory(value: unknown): DirectoryBot[] {
   return bots;
 }
 
+/** Read the body in bounded chunks: an oversized or endless response is
+ * rejected the moment it crosses the cap, never buffered whole first. */
+async function readBounded(response: Response, maxBytes: number): Promise<string> {
+  const oversized = () => new Error("The bot directory response is too large");
+  const announced = Number(response.headers.get("content-length") ?? 0);
+  if (announced > maxBytes) throw oversized();
+  if (!response.body) {
+    const raw = await response.text();
+    if (Buffer.byteLength(raw) > maxBytes) throw oversized();
+    return raw;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw oversized();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export async function fetchBotDirectory(fetcher: Fetcher = fetch): Promise<DirectoryBot[]> {
   const response = await fetcher(BOT_DIRECTORY_API_URL, {
     headers: { accept: "application/json" },
@@ -75,9 +102,7 @@ export async function fetchBotDirectory(fetcher: Fetcher = fetch): Promise<Direc
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`The bot directory returned HTTP ${response.status}`);
-  const raw = await response.text();
-  if (Buffer.byteLength(raw) > MAX_DIRECTORY_BYTES) throw new Error("The bot directory response is too large");
-  return parseBotDirectory(parseJson(raw));
+  return parseBotDirectory(parseJson(await readBounded(response, MAX_DIRECTORY_BYTES)));
 }
 
 /** Rank directory bots against a scouted project: overlap between the
@@ -102,7 +127,12 @@ export function matchDirectoryBots(
   limit = 5,
 ): MatchedDirectoryBot[] {
   const terms = new Set<string>();
-  for (const stack of profile.stacks) terms.add(stack.toLowerCase());
+  for (const stack of profile.stacks) {
+    const term = stack.toLowerCase();
+    // a two- or three-letter stack ("go", "php") substring-matches half the
+    // directory — "google", "django", "logo" are not Go affinity
+    if (term.length >= 4) terms.add(term);
+  }
   for (const signal of profile.signals) terms.add(signal.role);
   // "." and "#" stay word-internal for the likes of next.js and C#, but a
   // sentence-final "payments." must still match "Payments"

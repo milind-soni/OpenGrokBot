@@ -64,6 +64,34 @@ describe("fetchBotDirectory", () => {
     const down = vi.fn(async () => new Response("nope", { status: 503 }));
     await expect(fetchBotDirectory(down as unknown as typeof fetch)).rejects.toThrow("HTTP 503");
   });
+
+  it("rejects an oversized response while reading, not after buffering it whole", async () => {
+    // no content-length header on purpose: the announced-size shortcut must
+    // not be the only guard. The stream never ends on its own — the fetch
+    // has to bail the moment the cap is crossed, or this test times out.
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    let sent = 0;
+    let cancelled = false;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const big = vi.fn(async () => new Response(endless));
+    await expect(fetchBotDirectory(big as unknown as typeof fetch)).rejects.toThrow("too large");
+    expect(cancelled).toBe(true);
+    // barely past the 1 MB cap — nowhere near what an unbounded read would take
+    expect(sent).toBeLessThan(2_000_000);
+
+    const announced = vi.fn(async () =>
+      new Response("{}", { headers: { "content-length": String(50_000_000) } }),
+    );
+    await expect(fetchBotDirectory(announced as unknown as typeof fetch)).rejects.toThrow("too large");
+  });
 });
 
 describe("matchDirectoryBots", () => {
@@ -88,5 +116,11 @@ describe("matchDirectoryBots", () => {
 
   it("honors the limit", () => {
     expect(matchDirectoryBots(profile, bots, 1)).toHaveLength(1);
+  });
+
+  it("ignores stack names too short to mean anything as substrings", () => {
+    const goProfile: ProjectProfile = { name: "svc", summary: "", stacks: ["Go"], signals: [] };
+    const google = { ...entry(), slug: "google-helper", name: "Google Helper", category: "Ops", integrations: [] } as DirectoryBot;
+    expect(matchDirectoryBots(goProfile, [google])).toEqual([]);
   });
 });

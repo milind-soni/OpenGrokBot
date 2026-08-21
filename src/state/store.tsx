@@ -111,6 +111,8 @@ export interface Group {
   pinnedCwd?: string | null;
   /** the one message pinned to the top of this room's transcript */
   pinnedMessageId?: string;
+  /** sidebar section heading this room is filed under (shared with bots) */
+  section?: string;
   messages: Message[];
 }
 
@@ -386,7 +388,7 @@ export type Action =
   | {
       type: "patchGroup";
       groupId: string;
-      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId">>;
+      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section">>;
     }
   | { type: "deleteGroup"; groupId: string }
   | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string }

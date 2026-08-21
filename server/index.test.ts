@@ -455,6 +455,21 @@ describe("harness HTTP API", () => {
     const clearedEmpty = await api("PATCH", `/api/bots/${bot.id}`, { section: "   " });
     expect(clearedEmpty.status).toBe(200);
     expect(clearedEmpty.body.bot).not.toHaveProperty("section");
+
+    // rooms file under the same sidebar sections, with the same contract
+    const sectionRoom = (await api("POST", "/api/groups", { name: "Filed", memberIds: [bot.id] })).body.group;
+    const roomSectioned = await api("PATCH", `/api/groups/${sectionRoom.id}`, { section: "  Clients  " });
+    expect(roomSectioned.status).toBe(200);
+    expect(roomSectioned.body.group).toMatchObject({ section: "Clients" });
+    expect((await api("PATCH", `/api/groups/${sectionRoom.id}`, { section: 7 })).status).toBe(400);
+    expect((await api("PATCH", `/api/groups/${sectionRoom.id}`, { section: "S".repeat(61) })).status).toBe(400);
+    const roomSectionCleared = await api("PATCH", `/api/groups/${sectionRoom.id}`, { section: null });
+    expect(roomSectionCleared.status).toBe(200);
+    expect(roomSectionCleared.body.group).not.toHaveProperty("section");
+    const roomSectionEmpty = await api("PATCH", `/api/groups/${sectionRoom.id}`, { section: "   " });
+    expect(roomSectionEmpty.status).toBe(200);
+    expect(roomSectionEmpty.body.group).not.toHaveProperty("section");
+    expect((await api("DELETE", `/api/groups/${sectionRoom.id}`)).status).toBe(200);
     expect(gated.body.bot.composio).toBe(false);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).body.bot.composio).toBe(true);
 

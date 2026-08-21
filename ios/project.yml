@@ -30,7 +30,9 @@ targets:
         product: CompanionCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.openmausbot.companion
+        PRODUCT_BUNDLE_IDENTIFIER: com.willsigmon.openmauscompanion
+        DEVELOPMENT_TEAM: 49HAGQE8FB
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
@@ -54,7 +56,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
-          - CFBundleURLName: com.openmausbot.companion.pairing
+          - CFBundleURLName: com.willsigmon.openmauscompanion.pairing
             CFBundleURLSchemes:
               - openmausbot
         # REQUIRED, and easy to lose. Without a launch screen iOS runs the
@@ -68,6 +70,12 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortraitUpsideDown
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         # Without these two, NWBrowser returns no results at all — silently.

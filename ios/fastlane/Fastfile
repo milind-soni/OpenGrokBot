@@ -1,0 +1,138 @@
+require "fileutils"
+
+default_platform(:ios)
+
+def ios_project_dir
+  File.expand_path("..", __dir__)
+end
+
+def required_env(name)
+  value = ENV[name].to_s.strip
+  UI.user_error!("Set #{name} before running a signed release lane.") if value.empty?
+  value
+end
+
+def asc_credentials
+  key_path = File.expand_path(required_env("ASC_KEY_PATH"))
+  UI.user_error!("ASC_KEY_PATH does not point to a readable .p8 file: #{key_path}") unless File.file?(key_path)
+
+  {
+    key_path: key_path,
+    key_id: required_env("ASC_KEY_ID"),
+    issuer_id: required_env("ASC_ISSUER_ID")
+  }
+end
+
+def ios_app_identifier
+  ENV.fetch("IOS_APP_IDENTIFIER", "com.willsigmon.openmauscompanion")
+end
+
+def apple_team_id
+  ENV.fetch("APPLE_TEAM_ID", "49HAGQE8FB")
+end
+
+platform :ios do
+  desc "Regenerate Xcode project"
+  lane :generate do
+    Dir.chdir(ios_project_dir) { sh("xcodegen", "generate") }
+  end
+
+  desc "Archive the OpenMausCompanion app"
+  lane :archive do
+    generate
+    timestamp = Time.now.strftime("%Y-%m-%d_%H-%M-%S")
+    archive_path = File.expand_path("../build/Archives/OpenMausCompanion-#{timestamp}.xcarchive", __dir__)
+    FileUtils.mkdir_p(File.dirname(archive_path))
+
+    credentials = asc_credentials
+
+    sh(
+      "xcodebuild",
+      "-project", File.join(ios_project_dir, "OpenMausCompanion.xcodeproj"),
+      "-scheme", "OpenMausCompanion",
+      "-configuration", "Release",
+      "-destination", "generic/platform=iOS",
+      "-archivePath", archive_path,
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath", credentials[:key_path],
+      "-authenticationKeyID", credentials[:key_id],
+      "-authenticationKeyIssuerID", credentials[:issuer_id],
+      "DEVELOPMENT_TEAM=#{apple_team_id}",
+      "PRODUCT_BUNDLE_IDENTIFIER=#{ios_app_identifier}",
+      "archive"
+    )
+    UI.success("Archive created at #{archive_path}")
+    archive_path
+  end
+
+  desc "Export IPA from archive"
+  lane :export do |options|
+    archive_path = options[:archive]
+    unless archive_path && File.exist?(archive_path)
+      latest = Dir[File.expand_path("../build/Archives/*.xcarchive", __dir__)].sort.last ||
+               File.expand_path("../build/OpenMausCompanion.xcarchive", __dir__)
+      archive_path = latest
+    end
+    UI.user_error!("No archive found at #{archive_path}") unless archive_path && File.exist?(archive_path)
+
+    export_dir = File.expand_path("../build/Export", __dir__)
+    FileUtils.rm_rf(export_dir)
+    FileUtils.mkdir_p(export_dir)
+    export_options = File.expand_path("../ExportOptions.plist", __dir__)
+
+    credentials = asc_credentials
+
+    sh(
+      "xcodebuild",
+      "-exportArchive",
+      "-archivePath", archive_path,
+      "-exportPath", export_dir,
+      "-exportOptionsPlist", export_options,
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath", credentials[:key_path],
+      "-authenticationKeyID", credentials[:key_id],
+      "-authenticationKeyIssuerID", credentials[:issuer_id]
+    )
+
+    ipa_path = Dir[File.join(export_dir, "*.ipa")].first
+    UI.user_error!("No IPA produced in #{export_dir}") unless ipa_path && File.exist?(ipa_path)
+    UI.success("Exported IPA at #{ipa_path}")
+    ipa_path
+  end
+
+  desc "🚀 Full TestFlight release: archive → export → upload"
+  lane :beta do |options|
+    UI.header("🚀 OpenMausCompanion TestFlight Release")
+
+    changelog = options[:changelog].to_s.strip
+    UI.user_error!("Pass release notes with changelog:'What changed'.") if changelog.empty?
+
+    # 1. Archive
+    archive_path = archive
+
+    # 2. Export IPA
+    ipa_path = export(archive: archive_path)
+
+    # 3. Setup App Store Connect API Key
+    credentials = asc_credentials
+
+    api_key = app_store_connect_api_key(
+      key_id: credentials[:key_id],
+      issuer_id: credentials[:issuer_id],
+      key_filepath: credentials[:key_path],
+      duration: 1200,
+      in_house: false
+    )
+
+    # 4. Upload to TestFlight
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa_path,
+      app_identifier: ios_app_identifier,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      changelog: changelog
+    )
+    UI.success("🎉 Successfully uploaded OpenMausCompanion to TestFlight!")
+  end
+end

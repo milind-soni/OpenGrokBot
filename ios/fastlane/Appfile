@@ -1,0 +1,2 @@
+app_identifier(ENV.fetch("IOS_APP_IDENTIFIER", "com.willsigmon.openmauscompanion"))
+team_id(ENV.fetch("APPLE_TEAM_ID", "49HAGQE8FB"))

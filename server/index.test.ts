@@ -464,6 +464,59 @@ describe("harness HTTP API", () => {
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
   });
 
+  it("explains when archived room members cannot respond", async () => {
+    const archived = (await api("POST", "/api/bots")).body.bot;
+    const active = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", {
+      name: "Archived member feedback",
+      memberIds: [archived.id, active.id],
+    })).body.group;
+
+    try {
+      const archivedBot = await api("PATCH", `/api/bots/${archived.id}`, {
+        name: "Quill",
+        hidden: true,
+        chiefOfStaff: false,
+      });
+      expect(archivedBot.status).toBe(200);
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill take this" })).status).toBe(202);
+      let state = (await api("GET", "/api/bots?messages=20")).body;
+      let messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)).toMatchObject({
+        kind: "activity",
+        tool: {
+          name: "Quill is archived and can't respond — restore it or mention an active room member.",
+          ok: false,
+        },
+      });
+
+      const beforeUnmentioned = messages.length;
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "no mention" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages).toHaveLength(beforeUnmentioned + 1);
+      expect(messages.at(-1)).toMatchObject({ kind: "text", role: "user", text: "no mention" });
+
+      await api("PATCH", `/api/bots/${active.id}`, { hidden: true });
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "hello everyone" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)).toMatchObject({
+        kind: "activity",
+        tool: {
+          name: "No active room members can respond — restore an archived bot or add an active member.",
+          ok: false,
+        },
+      });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${archived.id}`);
+      await api("DELETE", `/api/bots/${active.id}`);
+    }
+  });
+
   it("saves, serves, and guards image attachments", async () => {
     // a real 1x1 PNG so the bytes round-trip intact
     const png = Buffer.from(

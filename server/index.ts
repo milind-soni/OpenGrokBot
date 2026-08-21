@@ -2000,7 +2000,28 @@ function startGroupTurn(groupId: string, text: string) {
     const last = members.find((b) => b.id === lastSpeakerId) ?? members[0];
     responders = last ? [last] : [];
   }
-  if (!responders.length) return;
+  if (!responders.length) {
+    const archived = members.filter((member) => member.hidden);
+    const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
+    const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
+    const defaultArchived = archived.find((member) => member.id === defaultArchivedId);
+    let unavailableMessage: string | undefined;
+    if (mentionedArchived) {
+      unavailableMessage = `${mentionedArchived.name} is archived and can't respond — restore it or mention an active room member.`;
+    } else if (!members.some((member) => !member.hidden)) {
+      unavailableMessage = "No active room members can respond — restore an archived bot or add an active member.";
+    } else if (defaultArchived) {
+      unavailableMessage = `${defaultArchived.name} is archived and can't respond — restore it or mention an active room member.`;
+    }
+    if (unavailableMessage) {
+      store.appendMessage(group.threadId, {
+        role: "bot",
+        kind: "activity",
+        tool: { name: unavailableMessage, ok: false },
+      });
+    }
+    return;
+  }
 
   const prev = groupQueues.get(groupId) ?? Promise.resolve();
   const next = prev.then(async () => {

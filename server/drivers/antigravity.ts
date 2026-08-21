@@ -40,15 +40,21 @@ export interface AntigravityConfig {
   fullAuto: boolean;
 }
 
-// model catalog from `agy models` (agy 1.1.12)
+// model catalog from `agy models` (agy 1.1.15)
 export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
-  default: "gemini-3.1-pro-high",
+  default: "gemini-3.7-flash-high",
   options: [
-    { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" },
-    { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)" },
+    { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)" },
+    { id: "gemini-3.7-flash-medium", label: "Gemini 3.7 Flash (Medium)" },
+    { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash (Low)" },
     { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash (High)" },
     { id: "gemini-3.6-flash-medium", label: "Gemini 3.6 Flash (Medium)" },
     { id: "gemini-3.6-flash-low", label: "Gemini 3.6 Flash (Low)" },
+    { id: "gemini-3.5-flash-high", label: "Gemini 3.5 Flash (High)" },
+    { id: "gemini-3.5-flash-medium", label: "Gemini 3.5 Flash (Medium)" },
+    { id: "gemini-3.5-flash-low", label: "Gemini 3.5 Flash (Low)" },
+    { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" },
+    { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)" },
     { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Thinking)" },
     { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
     { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
@@ -66,14 +72,29 @@ function antigravityEnvironment(): NodeJS.ProcessEnv {
 
 const AGY_MODEL_ID = /^[a-z0-9][a-z0-9._:/-]*$/i;
 
-function extrasFromUnknown(value: unknown): Array<{ id: string; label: string }> {
+function resolveModelIdOrLabel(candidate: string, knownOptions: Array<{ id: string; label: string }>): string | null {
+  const trimmed = candidate.trim();
+  const matchById = knownOptions.find((o) => o.id.toLowerCase() === trimmed.toLowerCase());
+  if (matchById) return matchById.id;
+  const matchByLabel = knownOptions.find((o) => o.label.toLowerCase() === trimmed.toLowerCase());
+  if (matchByLabel) return matchByLabel.id;
+  return null;
+}
+
+function extrasFromUnknown(value: unknown, knownOptions: Array<{ id: string; label: string }>): Array<{ id: string; label: string }> {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
-    if (typeof item === "string") return AGY_MODEL_ID.test(item) ? [{ id: item, label: item }] : [];
+    if (typeof item === "string") {
+      const candidate = item.trim();
+      const known = resolveModelIdOrLabel(candidate, knownOptions);
+      if (known) return [];
+      return AGY_MODEL_ID.test(candidate) ? [{ id: candidate, label: candidate }] : [];
+    }
     if (!item || typeof item !== "object") return [];
     const row = item as { id?: unknown; model?: unknown; name?: unknown; displayName?: unknown };
-    const id = typeof row.id === "string" ? row.id : typeof row.model === "string" ? row.model : "";
-    if (!AGY_MODEL_ID.test(id)) return [];
+    const rawId = (typeof row.id === "string" ? row.id : typeof row.model === "string" ? row.model : "").trim();
+    const id = resolveModelIdOrLabel(rawId, knownOptions) ?? (AGY_MODEL_ID.test(rawId) ? rawId : "");
+    if (!id) return [];
     const label = typeof row.name === "string" ? row.name : typeof row.displayName === "string" ? row.displayName : id;
     return [{ id, label }];
   });
@@ -90,20 +111,39 @@ export function readAntigravityModelCatalog(env: Record<string, string | undefin
   } catch {
     return STATIC_ANTIGRAVITY_MODELS;
   }
-  const extras = [
-    ...extrasFromUnknown(settings.availableModels),
-    ...extrasFromUnknown(settings.customModels),
-    ...extrasFromUnknown(settings.extraModels),
-  ];
-  if (typeof settings.model === "string") extras.push(...extrasFromUnknown([settings.model]));
   const options = STATIC_ANTIGRAVITY_MODELS.options.map((option) => ({ ...option }));
-  const seen = new Set(options.map((option) => option.id));
+  const seen = new Set(options.map((option) => option.id.toLowerCase()));
+  const extras = [
+    ...extrasFromUnknown(settings.availableModels, options),
+    ...extrasFromUnknown(settings.customModels, options),
+    ...extrasFromUnknown(settings.extraModels, options),
+  ];
+  let defaultModel = STATIC_ANTIGRAVITY_MODELS.default;
+  if (typeof settings.model === "string") {
+    const configuredModel = settings.model.trim();
+    const matched = resolveModelIdOrLabel(configuredModel, options);
+    if (matched) {
+      defaultModel = matched;
+    } else if (AGY_MODEL_ID.test(configuredModel)) {
+      extras.push({ id: configuredModel, label: configuredModel });
+      defaultModel = configuredModel;
+    }
+  }
   for (const extra of extras) {
-    if (seen.has(extra.id)) continue;
-    seen.add(extra.id);
+    const key = extra.id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     options.push({ id: extra.id, label: extra.label, custom: true });
   }
-  return { default: STATIC_ANTIGRAVITY_MODELS.default, options };
+  defaultModel = options.find((option) => option.id.toLowerCase() === defaultModel.toLowerCase())?.id ?? defaultModel;
+  return { default: defaultModel, options };
+}
+
+/** Agy may include partial assistant text on a failed result. Keep that text
+ * visible, but never let its presence turn a structured failure into success. */
+export function antigravityResultOutcome(status?: string, error?: string) {
+  const ok = status === "SUCCESS";
+  return { ok, stopReason: ok ? null : (error || status || "error") };
 }
 
 function decodeConfig(raw: unknown): AntigravityConfig {
@@ -328,10 +368,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               });
             }
             // result.usage is the turn total (the per-step agent_response
-            // figures above are its parts, not additions to it)
+            // figures above are its parts, not additions to it). A failed result
+            // can still carry useful partial text, but remains a failed turn.
+            const { ok, stopReason } = antigravityResultOutcome(payload.status, payload.error);
             settle(
-              payload.status === "SUCCESS",
-              payload.status ?? null,
+              ok,
+              stopReason,
               null,
               payload.usage
                 ? {
@@ -442,7 +484,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         new Promise((resolve, reject) => {
           execCli(
             config.cli,
-            ["-p", prompt, "--output-format", "text", "--model", "gemini-3.6-flash-low"],
+            ["-p", prompt, "--output-format", "text", "--model", "gemini-3.7-flash-low"],
             { timeout: 60_000, env: antigravityEnvironment() },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
           );

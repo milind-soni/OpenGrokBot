@@ -13,7 +13,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
-import { AntigravityDriver, readAntigravityModelCatalog, STATIC_ANTIGRAVITY_MODELS } from "./antigravity.ts";
+import {
+  antigravityResultOutcome,
+  AntigravityDriver,
+  readAntigravityModelCatalog,
+  STATIC_ANTIGRAVITY_MODELS,
+} from "./antigravity.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
 
@@ -38,6 +43,69 @@ describe("readAntigravityModelCatalog", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it("resolves human-readable model labels in settings.json to canonical IDs", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(
+      join(home, ".gemini", "antigravity-cli", "settings.json"),
+      JSON.stringify({ model: "  Gemini 3.7 Flash (High)  " }),
+    );
+    try {
+      const catalog = readAntigravityModelCatalog({ HOME: home });
+      expect(catalog.default).toBe("gemini-3.7-flash-high");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes custom model IDs and deduplicates them case-insensitively", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(
+      join(home, ".gemini", "antigravity-cli", "settings.json"),
+      JSON.stringify({
+        model: "  LOCAL-GEMINI  ",
+        customModels: ["local-gemini", "LOCAL-GEMINI"],
+      }),
+    );
+    try {
+      const catalog = readAntigravityModelCatalog({ HOME: home });
+      expect(catalog.default).toBe("local-gemini");
+      expect(catalog.options.filter((option) => option.id.toLowerCase() === "local-gemini")).toEqual([
+        { id: "local-gemini", label: "local-gemini", custom: true },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("antigravityResultOutcome", () => {
+  it("trusts the structured success status", () => {
+    expect(antigravityResultOutcome("SUCCESS")).toEqual({ ok: true, stopReason: null });
+  });
+
+  it("does not reinterpret partial provider output as a successful result", () => {
+    expect(antigravityResultOutcome("ERROR", "quota exceeded")).toEqual({
+      ok: false,
+      stopReason: "quota exceeded",
+    });
+    expect(
+      antigravityResultOutcome(
+        "CANCELLED",
+        "The stream was interrupted. Please continue the task you were working on.",
+      ),
+    ).toEqual({
+      ok: false,
+      stopReason: "The stream was interrupted. Please continue the task you were working on.",
+    });
+  });
+
+  it("falls back to the status and then a stable error reason", () => {
+    expect(antigravityResultOutcome("FAILED")).toEqual({ ok: false, stopReason: "FAILED" });
+    expect(antigravityResultOutcome()).toEqual({ ok: false, stopReason: "error" });
   });
 });
 

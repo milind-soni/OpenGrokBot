@@ -1991,26 +1991,35 @@ function startGroupTurn(groupId: string, text: string) {
   const members = group.memberIds
     .map((id) => store.bot(id))
     .filter((b): b is NonNullable<typeof b> => Boolean(b));
+  const availableMembers = members.filter((member) => !member.hidden);
+  const archived = members.filter((member) => member.hidden);
+  const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
+  if (mentionedArchived) {
+    store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: {
+        name: `${mentionedArchived.name} is archived and can't respond — restore it or mention an active room member.`,
+        ok: false,
+      },
+    });
+  }
   let responders = roomResponders(text, members, group.defaultResponder);
   // bot⇄bot channels: chipping in without a tag addresses the last speaker
   if (!responders.length && group.dm) {
     const lastSpeakerId = [...store.messagesFor(group.threadId)]
       .reverse()
       .find((msg) => msg.kind === "text" && msg.from)?.from?.botId;
-    const last = members.find((b) => b.id === lastSpeakerId) ?? members[0];
+    const last = availableMembers.find((b) => b.id === lastSpeakerId) ?? availableMembers[0];
     responders = last ? [last] : [];
   }
   if (!responders.length) {
-    const archived = members.filter((member) => member.hidden);
-    const mentionedArchived = mentionedBots(text, archived.map(({ name }) => ({ name })))[0];
     const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
     const defaultArchived = archived.find((member) => member.id === defaultArchivedId);
     let unavailableMessage: string | undefined;
-    if (mentionedArchived) {
-      unavailableMessage = `${mentionedArchived.name} is archived and can't respond — restore it or mention an active room member.`;
-    } else if (!members.some((member) => !member.hidden)) {
+    if (!mentionedArchived && !availableMembers.length) {
       unavailableMessage = "No active room members can respond — restore an archived bot or add an active member.";
-    } else if (defaultArchived) {
+    } else if (!mentionedArchived && defaultArchived) {
       unavailableMessage = `${defaultArchived.name} is archived and can't respond — restore it or mention an active room member.`;
     }
     if (unavailableMessage) {

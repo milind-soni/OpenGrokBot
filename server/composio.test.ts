@@ -134,7 +134,9 @@ afterAll(async () => {
 describe.sequential("Composio Sessions", () => {
   it("accepts a private desktop credential update and rejects unsafe broker URLs", () => {
     setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
-    expect(connectionMode({} as AppConfig)).toBe("managed");
+    expect(connectionMode({})).toBe("managed");
+    setManagedBrokerAccess({ url: "http://[::1]:3210/", token: "a".repeat(64) });
+    expect(connectionMode({})).toBe("managed");
     expect(() =>
       setManagedBrokerAccess({ url: "http://broker.example", token: "a".repeat(64) }),
     ).toThrow(/HTTPS/);

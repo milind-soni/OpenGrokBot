@@ -122,7 +122,12 @@ export function setManagedBrokerAccess(access: unknown): void {
   }
   const parsed = z.object({ url: z.string().url(), token: z.string().regex(/^[0-9a-f]{64}$/) }).strict().parse(access);
   const url = new URL(parsed.url);
-  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+  if (
+    url.protocol !== "https:" &&
+    url.hostname !== "127.0.0.1" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "[::1]"
+  ) {
     throw new Error("The connected-apps service must use HTTPS");
   }
   managedBrokerAccess = { url: url.toString().replace(/\/$/, ""), token: parsed.token };
@@ -134,7 +139,12 @@ function brokerAccess(): { url: string; token: string } | null {
   const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
+  if (
+    parsed.protocol !== "https:" &&
+    parsed.hostname !== "127.0.0.1" &&
+    parsed.hostname !== "localhost" &&
+    parsed.hostname !== "[::1]"
+  ) {
     throw new Error("The connected-apps service must use HTTPS");
   }
   return { url, token };

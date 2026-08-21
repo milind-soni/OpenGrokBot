@@ -28,6 +28,9 @@ describe("managed Composio desktop registration", () => {
     expect(normalizeManagedComposioBrokerUrl("http://localhost:8787")).toBe(
       "http://localhost:8787",
     );
+    expect(normalizeManagedComposioBrokerUrl("http://[::1]:8787/")).toBe(
+      "http://[::1]:8787",
+    );
     expect(normalizeManagedComposioBrokerUrl("http://broker.example")).toBe("");
     expect(normalizeManagedComposioBrokerUrl("https://user:secret@broker.example")).toBe("");
     expect(normalizeManagedComposioBrokerUrl("https://broker.example?redirect=evil")).toBe("");
@@ -49,6 +52,13 @@ describe("managed Composio desktop registration", () => {
         OMB_COMPOSIO_BROKER_TOKEN: "attacker-controlled",
       }),
     ).toEqual({ PATH: "/usr/bin" });
+    expect(
+      managedComposioChildEnvironment("http://[::1]:8787", credentials, { PATH: "/usr/bin" }),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OMB_COMPOSIO_BROKER_URL: "http://[::1]:8787",
+      OMB_COMPOSIO_BROKER_TOKEN: TOKEN,
+    });
   });
 
   it("registers a new installation and persists it", async () => {

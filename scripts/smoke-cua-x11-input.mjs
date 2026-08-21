@@ -73,6 +73,8 @@ driverProcess.stderr.setEncoding("utf8");
 driverProcess.stderr.on("data", (chunk) => {
   driverError += chunk;
 });
+let proxy;
+let proxyError = "";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 async function until(probe, description, timeout = 10_000) {
@@ -109,6 +111,63 @@ function driverRequest(method) {
     });
     client.once("error", reject);
   });
+}
+
+function createMcpClient() {
+  proxy = spawn(driver, ["mcp", "--socket", socketPath], {
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_RUNTIME_DIR: runtime,
+      XDG_SESSION_TYPE: "x11",
+      CUA_DRIVER_EMBEDDED: "1",
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+      CUA_DRIVER_RS_UPDATE_CHECK: "false",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const pending = new Map();
+  let buffer = "";
+  let nextId = 1;
+  proxy.stderr.setEncoding("utf8");
+  proxy.stderr.on("data", (chunk) => {
+    proxyError += chunk;
+  });
+  proxy.stdout.setEncoding("utf8");
+  proxy.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      if (!line.trim()) continue;
+      const message = JSON.parse(line);
+      const settle = pending.get(message.id);
+      if (settle) {
+        pending.delete(message.id);
+        settle(message);
+      }
+    }
+  });
+  return (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} timed out${proxyError ? `: ${proxyError.trim()}` : ""}`));
+      }, 20_000);
+      pending.set(id, (message) => {
+        clearTimeout(timer);
+        if (message.error) reject(new Error(message.error.message));
+        else resolve(message.result);
+      });
+      proxy.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+}
+
+function assertToolResult(result, name) {
+  if (result?.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
+  return result;
 }
 
 async function stop(child) {
@@ -153,29 +212,54 @@ try {
     throw new Error("Cua created its full-screen cursor overlay despite --no-overlay");
   }
 
+  const rpc = createMcpClient();
+  await rpc("initialize", {
+    protocolVersion: "2024-11-05",
+    capabilities: {},
+    clientInfo: { name: "openmausbot-x11-input-smoke", version: "1" },
+  });
+  proxy.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+  const listed = await rpc("tools/list");
+  const toolNames = new Set(listed.tools.map(({ name }) => name));
+  for (const required of ["start_session", "click", "type_text"]) {
+    if (!toolNames.has(required)) throw new Error(`Cua MCP did not expose ${required}`);
+  }
+
+  const session = `openmausbot-x11-smoke-${process.pid}`;
+  assertToolResult(
+    await rpc("tools/call", {
+      name: "start_session",
+      arguments: { session, capture_scope: "window" },
+    }),
+    "start_session",
+  );
   xevOutput = "";
-  await execFileAsync("xdotool", [
-    "windowfocus",
-    windowId,
-    "mousemove",
-    "--window",
-    windowId,
-    "80",
-    "80",
+  const target = {
+    session,
+    pid: xev.pid,
+    window_id: Number(windowId),
+    x: 80,
+    y: 80,
+    scope: "window",
+    delivery_mode: "foreground",
+  };
+  assertToolResult(
+    await rpc("tools/call", { name: "click", arguments: target }),
     "click",
-    "1",
-    "key",
-    "--clearmodifiers",
-    "a",
-  ]);
+  );
+  assertToolResult(
+    await rpc("tools/call", { name: "type_text", arguments: { ...target, text: "a" } }),
+    "type_text",
+  );
   await until(
     async () => /ButtonPress event/.test(xevOutput) && /KeyPress event/.test(xevOutput),
     "an unrelated X11 window to receive pointer and keyboard input",
   );
   console.log(
-    "[smoke-cua-x11-input] OK: no full-screen Cua overlay; unrelated window received click and keyboard input",
+    "[smoke-cua-x11-input] OK: no full-screen Cua overlay; Cua click and type_text reached an unrelated window",
   );
 } finally {
+  if (proxy) await stop(proxy);
   await stop(driverProcess);
   if (xev.exitCode === null && xev.signalCode === null) xev.kill("SIGTERM");
   rmSync(sandbox, { recursive: true, force: true });

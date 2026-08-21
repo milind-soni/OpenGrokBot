@@ -61,7 +61,8 @@ already have:
   events live in `~/.openmausbot`, not a cloud.
 - **Agents with hands.** Each bot can use a cloud Linux desktop, an isolated Local VM, or—where the platform
   safety boundary is currently certified—your own computer, plus 500+ apps through Composio. Host control is
-  available on macOS; Ubuntu host control is temporarily disabled while issue #345 is resolved.
+  available on macOS and Ubuntu Xorg after explicit opt-in. Ubuntu Wayland host control remains disabled while
+  issue #345 is resolved.
 
 ## Features
 

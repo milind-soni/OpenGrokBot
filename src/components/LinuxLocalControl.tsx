@@ -148,7 +148,7 @@ export function LinuxLocalControl() {
             )}
             <button
               type="button"
-              disabled={pending === "disable"}
+              disabled={pending !== null}
               onClick={() => void run("disable")}
               className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
             >

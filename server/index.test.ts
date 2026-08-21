@@ -317,13 +317,42 @@ describe("harness HTTP API", () => {
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("keeps direct-message channels folderless at the API boundary", async () => {
-    const attempted = await api("PATCH", "/api/groups/test-dm", { cwd: home });
-    expect(attempted.status).toBe(400);
-    expect(attempted.body.error).toMatch(/direct-message.*working folder/i);
-    const state = await api("GET", "/api/bots");
-    expect(state.body.groups.find((group: { id: string }) => group.id === "test-dm")).not.toHaveProperty("cwd");
-    expect((await api("DELETE", "/api/groups/test-dm")).status).toBe(200);
+  it("keeps direct-message channels folderless and their fallback on active members", async () => {
+    const archived = (await api("POST", "/api/bots")).body.bot;
+    const active = (await api("POST", "/api/bots")).body.bot;
+    try {
+      const attempted = await api("PATCH", "/api/groups/test-dm", { cwd: home });
+      expect(attempted.status).toBe(400);
+      expect(attempted.body.error).toMatch(/direct-message.*working folder/i);
+      let state = await api("GET", "/api/bots");
+      expect(state.body.groups.find((group: { id: string }) => group.id === "test-dm")).not.toHaveProperty("cwd");
+
+      await api("PATCH", `/api/bots/${archived.id}`, { name: "Archived DM", hidden: true, chiefOfStaff: false });
+      await api("PATCH", `/api/bots/${active.id}`, {
+        name: "Active DM",
+        modelSelection: { instanceId: "ghost" },
+      });
+      await api("PATCH", "/api/groups/test-dm", { memberIds: [archived.id, active.id] });
+      await api("POST", "/api/groups/test-dm/messages", { text: "hello" });
+      await expect.poll(async () => {
+        state = await api("GET", "/api/bots?messages=20");
+        const messages = state.body.groups.find((group: { id: string }) => group.id === "test-dm").messages;
+        return messages.at(-1)?.tool?.name;
+      }).toBe("error: Active DM's model is unavailable");
+
+      await api("PATCH", `/api/bots/${active.id}`, { hidden: true });
+      await api("POST", "/api/groups/test-dm/messages", { text: "anyone?" });
+      state = await api("GET", "/api/bots?messages=20");
+      const messages = state.body.groups.find((group: { id: string }) => group.id === "test-dm").messages;
+      expect(messages.at(-1)?.tool).toEqual({
+        name: "No active room members can respond — restore an archived bot or add an active member.",
+        ok: false,
+      });
+    } finally {
+      await api("DELETE", "/api/groups/test-dm");
+      await api("DELETE", `/api/bots/${archived.id}`);
+      await api("DELETE", `/api/bots/${active.id}`);
+    }
   });
 
   it("rejects working-folder changes after a room has pinned its first turn", async () => {
@@ -462,6 +491,91 @@ describe("harness HTTP API", () => {
     expect(deleted.status).toBe(200);
     const after = await api("GET", "/api/bots");
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
+  });
+
+  it("explains when archived room members cannot respond", async () => {
+    const archived = (await api("POST", "/api/bots")).body.bot;
+    const active = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", {
+      name: "Archived member feedback",
+      memberIds: [archived.id, active.id],
+    })).body.group;
+
+    try {
+      const archivedBot = await api("PATCH", `/api/bots/${archived.id}`, {
+        name: "Quill",
+        hidden: true,
+        chiefOfStaff: false,
+      });
+      expect(archivedBot.status).toBe(200);
+      await api("PATCH", `/api/bots/${active.id}`, {
+        name: "Atlas",
+        modelSelection: { instanceId: "ghost" },
+      });
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill take this" })).status).toBe(202);
+      let state = (await api("GET", "/api/bots?messages=20")).body;
+      let messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)).toMatchObject({
+        kind: "activity",
+        tool: {
+          name: "Quill is archived and can't respond — restore it or mention an active room member.",
+          ok: false,
+        },
+      });
+
+      const archivedError = "Quill is archived and can't respond — restore it or mention an active room member.";
+      const beforeMixedMention = messages.filter((message: { tool?: { name?: string } }) =>
+        message.tool?.name === archivedError
+      ).length;
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@Quill and @Atlas take this" });
+      await expect.poll(async () => {
+        state = (await api("GET", "/api/bots?messages=20")).body;
+        messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+        return {
+          archivedErrors: messages.filter((message: { tool?: { name?: string } }) =>
+            message.tool?.name === archivedError
+          ).length,
+          activeDispatched: messages.some((message: { tool?: { name?: string } }) =>
+            message.tool?.name === "error: Atlas's model is unavailable"
+          ),
+        };
+      }).toEqual({ archivedErrors: beforeMixedMention + 1, activeDispatched: true });
+
+      await api("PATCH", `/api/groups/${room.id}`, {
+        defaultResponder: { kind: "member", botId: archived.id },
+      });
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "use the default responder" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)?.tool).toEqual({ name: archivedError, ok: false });
+
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+
+      const beforeUnmentioned = messages.length;
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "no mention" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages).toHaveLength(beforeUnmentioned + 1);
+      expect(messages.at(-1)).toMatchObject({ kind: "text", role: "user", text: "no mention" });
+
+      await api("PATCH", `/api/bots/${active.id}`, { hidden: true });
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "hello everyone" });
+      state = (await api("GET", "/api/bots?messages=20")).body;
+      messages = state.groups.find((group: { id: string }) => group.id === room.id).messages;
+      expect(messages.at(-1)).toMatchObject({
+        kind: "activity",
+        tool: {
+          name: "No active room members can respond — restore an archived bot or add an active member.",
+          ok: false,
+        },
+      });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${archived.id}`);
+      await api("DELETE", `/api/bots/${active.id}`);
+    }
   });
 
   it("saves, serves, and guards image attachments", async () => {

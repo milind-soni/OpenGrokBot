@@ -121,7 +121,7 @@ process.stdin.on("data", (chunk) => {
       case "thread/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
         break;
-      case "turn/start":
+      case "turn/start": {
         if (mode === "unauthorized") {
           out({
             jsonrpc: "2.0",
@@ -138,18 +138,20 @@ process.stdin.on("data", (chunk) => {
           ? [
               "\"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"",
               "-Command",
-              "\"Get-Content -Raw -LiteralPath 'C:\\Users\\Ada\\workspaces\\research\\NOTES.md'\"",
+              `\"Get-Content -Raw -LiteralPath 'C:\\Users\\Ada\\workspaces\\${"very-long-folder\\".repeat(8)}NOTES.md'\"`,
             ].join(" ")
           : "ls -la";
         notify("item/started", { item: { id: "i1", type: "commandExecution", command } });
         notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
-        if (mode === "approval") {
-          out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
+        if (mode === "approval" || mode === "windows-command") {
+          const approvalCommand = mode === "windows-command" ? command : "rm -rf scratch";
+          out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: approvalCommand } });
           // turn continues from the approval response handler above
         } else {
           finishTurn();
         }
         break;
+      }
       default:
         if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });
     }

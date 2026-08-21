@@ -29,7 +29,11 @@ const {
   createLinuxCuaRuntime,
   createUnavailableLinuxRuntime,
 } = require("./cua-linux-runtime.cjs");
-const { cleanupAppImageCuaBundle, stageAppImageCuaBundle } = require("./cua-linux-bundle.cjs");
+const {
+  cleanupAppImageCuaBundle,
+  reapStaleAppImageCuaBundles,
+  stageAppImageCuaBundle,
+} = require("./cua-linux-bundle.cjs");
 const { linuxLocalControlSupport } = require("./capabilities.cjs");
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
@@ -74,6 +78,7 @@ function ensureLinuxRuntime() {
         // process-owned directory and verify their hashes after the copy, so
         // every AppImage follows the same execution invariant.
         if (process.env.APPIMAGE) {
+          reapStaleAppImageCuaBundles();
           linuxBundleStage ??= stageAppImageCuaBundle({ resourcesPath: process.resourcesPath });
           bundledDriverPath = linuxBundleStage.driverPath;
         }

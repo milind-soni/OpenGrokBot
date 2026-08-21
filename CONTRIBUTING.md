@@ -119,8 +119,12 @@ The SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately small. A
   independent capabilities.
 - Test Ubuntu platform claims on a real GNOME session. Xvfb proves packaging and fake-driver orchestration, not
   Wayland portal behavior or real CUA inspection/input delivery.
-- Linux local control must remain explicit: global opt-in plus per-bot **This computer**. Linux Auto, provider
-  full-auto/bypass modes, remembered grants, and cloud approvals must never authorize the user's desktop.
+- Linux local control currently has a release safety hold from #345: packaged and development desktop launches
+  must not start Cua, must clear a legacy durable opt-in, and must report `linux-seat-safety-blocked`. Do not add an
+  environment bypass. Re-enabling it requires real GNOME/Xorg and GNOME/Wayland evidence that an unrelated app
+  remains clickable/typeable before any approved action. After re-enablement, global opt-in plus per-bot
+  **This computer** remains mandatory; Linux Auto, full-auto/bypass modes, remembered grants, and cloud approvals
+  must never authorize the user's desktop.
 - Keep CUA discovery shell-free and pin accepted archive, inner-file, manifest, and driver contracts. Packaged Linux
   builds must prefer their reviewed outside-ASAR runtime and fail closed instead of executing ambient PATH code;
   source/dev builds may use the validated explicit/user-local paths. Never add a runtime downloader/self-updater or

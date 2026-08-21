@@ -19,7 +19,7 @@ OpenMausBot turns agent CLIs into a messaging-style workspace. The harness norma
 
 ## Computers and tools
 
-- Local computer control with explicit opt-in and approval boundaries
+- Local computer control with explicit opt-in and approval boundaries on supported hosts; Ubuntu currently fails closed under an input-safety hold
 - Isolated Local VM desktops through Docker or Podman
 - Hosted Box cloud computers
 - A self-hosted Linux VPS backend over Docker's SSH transport
@@ -48,5 +48,5 @@ OpenMausBot turns agent CLIs into a messaging-style workspace. The harness norma
 - Automatic updates on macOS and Windows
 
 <Callout type="info" title="Platform differences are intentional">
-  macOS has the broadest native integration. Ubuntu local control is a guarded beta, Windows installers are not yet signed, and the iOS companion keeps sensitive workspace configuration on the computer.
+  macOS has the broadest native integration. Ubuntu chat, preview, Cloud, and Local VM are available, while host control is temporarily disabled under an input-safety hold. Windows installers are not yet signed, and the iOS companion keeps sensitive workspace configuration on the computer.
 </Callout>

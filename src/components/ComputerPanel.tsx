@@ -181,7 +181,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       api("/api/local-computer")
         .then((status) => {
           if (!alive) return;
-          if (typeof status.viewer_url === "string") setVmViewerUrl(status.viewer_url);
+          // parse at the boundary: our own status endpoint sends a string or nothing
+          const viewerUrl = String(status.viewer_url ?? "");
+          if (viewerUrl.startsWith("http")) setVmViewerUrl(viewerUrl);
           if (status.ready) setPhase("vm");
           else {
             setError(`${status.problem ?? "The Local VM is not ready"}. Open App Settings → Local VM.`);

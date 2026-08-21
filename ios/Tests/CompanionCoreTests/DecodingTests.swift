@@ -151,6 +151,12 @@ final class DecodingTests: XCTestCase {
         XCTAssertTrue(card.isPending)
         XCTAssertTrue(card.isPermission)
         XCTAssertEqual(card.allowKey, "Bash:rm")
+        XCTAssertEqual(card.responseBehavior(for: "Allow"), "allow")
+        XCTAssertEqual(card.responseBehavior(for: "Approve"), "allow")
+        XCTAssertEqual(card.responseBehavior(for: "Always allow"), "allow")
+        XCTAssertEqual(card.responseBehavior(for: "Deny"), "deny")
+        XCTAssertTrue(card.shouldRememberPermission(for: "Always allow"))
+        XCTAssertFalse(card.shouldRememberPermission(for: "Allow"))
 
         var answered = card
         answered.answered = "Allow"
@@ -159,6 +165,14 @@ final class DecodingTests: XCTestCase {
         var dismissed = card
         dismissed.dismissed = true
         XCTAssertFalse(dismissed.isPending)
+    }
+
+    func testAQuestionSendsItsChoiceAsAnAnswer() throws {
+        let message = try decode(Message.self, "options-card")
+        let card = try XCTUnwrap(message.card)
+        XCTAssertFalse(card.isPermission)
+        XCTAssertEqual(card.responseBehavior(for: "Anything"), "answer")
+        XCTAssertFalse(card.shouldRememberPermission(for: "Always allow"))
     }
 
     func testDecodesAMessageThatGainedAFieldWeDoNotKnow() throws {

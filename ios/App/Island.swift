@@ -113,7 +113,7 @@ struct NeedsYouIsland: View {
                                     Button {
                                         answering = true
                                         Task {
-                                            await session.answer(threadId: shown.chat.threadId, card: card, choice: option)
+                                            await session.answer(chat: shown.chat, card: card, choice: option)
                                             answering = false
                                             dismiss()
                                         }

@@ -36,6 +36,35 @@ public struct OptionCard: Codable, Hashable, Sendable {
 
     /// Permission cards carry a tool; questions do not.
     public var isPermission: Bool { tool != nil }
+
+    /// The wire API accepts an approval behavior rather than the button's
+    /// display text. Treat the one refusal as deny and every other offered
+    /// permission choice as allow: providers may say "Approve", "Yes", or
+    /// "Always allow", and none of those should accidentally become a deny.
+    public func responseBehavior(for choice: String) -> String {
+        Self.responseBehavior(for: choice, isPermission: isPermission)
+    }
+
+    /// The ID-only form is used by Live Activity buttons, which carry the
+    /// card kind but not the full card payload.
+    public static func responseBehavior(for choice: String, isPermission: Bool) -> String {
+        guard isPermission else { return "answer" }
+        return isRefusal(choice) ? "deny" : "allow"
+    }
+
+    /// Shared by all of the app's card surfaces and by Live Activities.
+    public static func isRefusal(_ choice: String) -> Bool {
+        choice.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("Deny") == .orderedSame
+    }
+
+    /// A provider may include the standing grant as an option of its own.
+    /// Only remember it when the server supplied the narrow grant key.
+    public func shouldRememberPermission(for choice: String) -> Bool {
+        guard isPermission, allowKey != nil else { return false }
+        let normalized = choice.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.caseInsensitiveCompare("Always allow") == .orderedSame
+    }
 }
 
 public struct ToolActivity: Codable, Hashable, Sendable {

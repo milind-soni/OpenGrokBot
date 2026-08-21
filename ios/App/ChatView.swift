@@ -37,10 +37,6 @@ struct ChatView: View {
     /// one per chat and it has no message id to borrow.
     static let liveBubbleId = "companion.live"
 
-    private var messages: [Message] {
-        session.state.visibleTranscript(forThread: chat.threadId)
-    }
-
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
         switch chat {
@@ -48,6 +44,15 @@ struct ChatView: View {
         case let .room(room):
             return session.state.rooms.first { $0.id == room.id }.map(Chat.room) ?? chat
         }
+    }
+
+    /// A bot receives a new thread when its task changes. Navigation keeps
+    /// the original Chat value, so every transcript lookup must follow the
+    /// live record instead of the snapshot that opened this screen.
+    private var threadId: String { current.threadId }
+
+    private var messages: [Message] {
+        session.state.visibleTranscript(forThread: threadId)
     }
 
     /// Unread elsewhere — what the back pill's badge counts, like Messages.
@@ -81,14 +86,14 @@ struct ChatView: View {
                         // room for the floating face when scrolled to the top
                         Color.clear.frame(height: 72)
 
-                        if session.state.hasMore[chat.threadId] == true {
+                        if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
                                 // messages are prepended, sit back on the one
                                 // that used to be at the top
                                 let anchor = transcript.first?.id
                                 Task {
-                                    await session.loadOlder(threadId: chat.threadId)
+                                    await session.loadOlder(threadId: threadId)
                                     if let anchor { proxy.scrollTo(anchor, anchor: .top) }
                                 }
                             }
@@ -123,10 +128,10 @@ struct ChatView: View {
                         // one arrives — the store clears it on the same frame
                         // that appends the message, so there is never a beat
                         // where both are on screen.
-                        if let live = session.state.streaming[chat.threadId], !live.isEmpty {
+                        if let live = session.state.streaming[threadId], !live.isEmpty {
                             StreamingBubble(text: live, reasoning: nil, color: current.color)
                                 .id(Self.liveBubbleId)
-                        } else if let thinking = session.state.reasoning[chat.threadId], !thinking.isEmpty {
+                        } else if let thinking = session.state.reasoning[threadId], !thinking.isEmpty {
                             // Only while there is no answer yet. Once tokens
                             // of the reply exist, the reasoning is behind us
                             // and showing both is just noise.
@@ -196,7 +201,7 @@ struct ChatView: View {
                 // the string so this fires once per delta batch, and without
                 // animation — animating every token turns a smooth stream
                 // into a stutter, because each scroll interrupts the last.
-                .onChange(of: session.state.streaming[chat.threadId]?.count ?? 0) { _, length in
+                .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
                     guard length > 0 else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
                 }
@@ -215,6 +220,7 @@ struct ChatView: View {
                     session.consumeFocus(messageId)
                 }
             }
+            .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             composer
@@ -226,7 +232,7 @@ struct ChatView: View {
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
-        .task {
+        .task(id: threadId) {
             // opening a chat is what marks it read, exactly as on the desktop
             if current.unread { await session.markRead(current) }
 #if DEBUG
@@ -804,9 +810,7 @@ struct CardView: View {
 
     /// One definition of "the refusal", shared by the button tint and the
     /// choice above so the two cannot drift apart.
-    private static func isRefusal(_ option: String) -> Bool {
-        option.caseInsensitiveCompare("Deny") == .orderedSame
-    }
+    private static func isRefusal(_ option: String) -> Bool { OptionCard.isRefusal(option) }
 
     private var tint: Color { MausPalette.color(chat.color) }
 
@@ -842,7 +846,7 @@ struct CardView: View {
                             Button {
                                 answering = true
                                 Task {
-                                    await session.answer(threadId: chat.threadId, card: card, choice: option)
+                                    await session.answer(chat: chat, card: card, choice: option)
                                     answering = false
                                 }
                             } label: {
@@ -871,7 +875,7 @@ struct CardView: View {
                             answering = true
                             Task {
                                 await session.alwaysAllow(bot: bot, card: card)
-                                await session.answer(threadId: chat.threadId, card: card, choice: allow)
+                                await session.answer(chat: chat, card: card, choice: allow)
                                 answering = false
                             }
                         }

@@ -439,9 +439,17 @@ final class Session: ObservableObject {
         }
     }
 
-    func answer(threadId: String, card: OptionCard, choice: String) async {
+    func answer(chat: Chat, card: OptionCard, choice: String) async {
         guard let requestId = card.requestId else { return }
-        await answer(threadId: threadId, requestId: requestId, choice: choice, isPermission: card.isPermission)
+        if card.shouldRememberPermission(for: choice), case let .bot(bot) = chat {
+            await alwaysAllow(bot: bot, card: card)
+        }
+        await answer(
+            threadId: chat.threadId,
+            requestId: requestId,
+            choice: choice,
+            isPermission: card.isPermission
+        )
     }
 
     /// The same answer, from something that only has the ids — the Live
@@ -450,11 +458,12 @@ final class Session: ObservableObject {
         await perform {
             // Permission cards answer allow/deny; a question answers with
             // the chosen text. The harness tells them apart by `behavior`.
-            if isPermission {
+            let behavior = OptionCard.responseBehavior(for: choice, isPermission: isPermission)
+            if behavior != "answer" {
                 try await $0.respond(
                     threadId: threadId,
                     requestId: requestId,
-                    behavior: choice.lowercased() == "allow" ? "allow" : "deny"
+                    behavior: behavior
                 )
             } else {
                 try await $0.respond(threadId: threadId, requestId: requestId, behavior: "answer", message: choice)

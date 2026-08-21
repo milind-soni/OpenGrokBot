@@ -115,6 +115,21 @@ interface IntegrationContext {
 
 let managedBrokerAccess: { url: string; token: string } | null | undefined;
 
+const managedBrokerMessageSchema = z.record(z.string(), z.unknown());
+
+export function applyManagedBrokerMessage(message: unknown): boolean {
+  const parsed = managedBrokerMessageSchema.safeParse(message);
+  if (
+    !parsed.success ||
+    parsed.data.type !== "openmausbot:managed-composio" ||
+    !Object.hasOwn(parsed.data, "access")
+  ) {
+    return false;
+  }
+  setManagedBrokerAccess(parsed.data.access);
+  return true;
+}
+
 export function setManagedBrokerAccess(access: unknown): void {
   if (access === null) {
     managedBrokerAccess = null;

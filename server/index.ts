@@ -138,10 +138,8 @@ type UtilityParentPort = {
 const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityParentPort }).parentPort;
 utilityParentPort?.on("message", (event) => {
   const message = event?.data;
-  if (!message || typeof message !== "object" || Array.isArray(message)) return;
-  if ((message as { type?: unknown }).type !== "openmausbot:managed-composio") return;
   try {
-    composio.setManagedBrokerAccess((message as { access?: unknown }).access ?? null);
+    composio.applyManagedBrokerMessage(message);
   } catch (error) {
     console.error(`[connected-apps] rejected desktop credential sync: ${error instanceof Error ? error.message : String(error)}`);
   }

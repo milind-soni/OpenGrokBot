@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AppConfig } from "./config.ts";
 import {
+  applyManagedBrokerMessage,
   authorizeService,
   connectedServices,
   connectionMode,
@@ -142,6 +143,16 @@ describe.sequential("Composio Sessions", () => {
     ).toThrow(/HTTPS/);
     expect(() => setManagedBrokerAccess({ url: "https://broker.example", token: "short" })).toThrow();
     setManagedBrokerAccess(null);
+  });
+  it("ignores credential sync without access and clears only on explicit null", () => {
+    const messageType = "openmausbot:managed-composio";
+    setManagedBrokerAccess({ url: "http://127.0.0.1:3210/", token: "a".repeat(64) });
+
+    expect(applyManagedBrokerMessage({ type: messageType })).toBe(false);
+    expect(connectionMode({})).toBe("managed");
+
+    expect(applyManagedBrokerMessage({ type: messageType, access: null })).toBe(true);
+    expect(connectionMode({})).toBe("unavailable");
   });
   it("accepts only project API keys", async () => {
     await expect(prepareProjectSession("old_key")).rejects.toThrow(/start with ak_/i);

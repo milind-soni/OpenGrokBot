@@ -48,11 +48,6 @@ jobs:
         run: pnpm package:linux:offline
       - name: Verify package contents and metadata
         run: node scripts/verify-linux-package.mjs
-      - name: Reproduce and verify an in-place DEB upgrade
-        run: |
-          deb=(release/*.deb)
-          test "${#deb[@]}" -eq 1
-          sudo --preserve-env=CI,RUNNER_TEMP node scripts/smoke-deb-upgrade.mjs "${deb[0]}"
       - name: Match a normal Ubuntu package parent on the ephemeral runner
         run: |
           test ! -L /opt
@@ -63,6 +58,11 @@ jobs:
             *) echo "Unexpected /opt mode: $(stat -c '%a' /opt)" >&2; exit 1 ;;
           esac
           test "$(stat -c '%U:%G %a' /opt)" = "root:root 755"
+      - name: Reproduce and verify an in-place DEB upgrade
+        run: |
+          deb=(release/*.deb)
+          test "${#deb[@]}" -eq 1
+          sudo --preserve-env=CI,RUNNER_TEMP node scripts/smoke-deb-upgrade.mjs "${deb[0]}"
       - name: Configure Chromium sandbox for the unpacked app
         run: |
           sudo chown root:root release/linux-unpacked/chrome-sandbox

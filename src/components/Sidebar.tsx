@@ -219,6 +219,15 @@ function GroupListItem({
         e.preventDefault();
         onMenu({ groupId: group.id, x: e.clientX, y: e.clientY });
       }}
+      // the menu must be reachable without a pointer: Shift+F10, and the
+      // dedicated ContextMenu key (whose native event carries no useful
+      // coordinates) both open it centered on the row
+      onKeyDown={(e) => {
+        if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        onMenu({ groupId: group.id, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      }}
       className={cn(
         "relative flex w-full items-center rounded-xl text-left",
         density === "icons" ? "justify-center px-1 py-1.5" : density === "compact" ? "gap-2 px-2 py-1.5" : "gap-3 px-3 py-2.5",
@@ -248,9 +257,11 @@ function GroupListItem({
 function RoomContextMenu({
   menu,
   onClose,
+  onMoveToSection,
 }: {
   menu: { groupId: string; x: number; y: number };
   onClose: () => void;
+  onMoveToSection: (groupId: string) => void;
 }) {
   const { state, dispatch } = useStore();
   const group = state.groups.find((g) => g.id === menu.groupId);
@@ -271,7 +282,7 @@ function RoomContextMenu({
   }, [onClose]);
 
   if (!group) return null;
-  const top = Math.min(menu.y, window.innerHeight - 164);
+  const top = Math.min(menu.y, window.innerHeight - 204);
   const left = Math.min(menu.x, window.innerWidth - 240);
   return createPortal(
     <div
@@ -279,6 +290,16 @@ function RoomContextMenu({
       style={{ top, left }}
       className="fixed z-40 w-[228px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60"
     >
+      <button
+        onClick={() => {
+          onClose();
+          onMoveToSection(group.id);
+        }}
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+      >
+        <FolderPlus size={16} className="text-ink-secondary" />
+        Move to section
+      </button>
       <button
         onClick={() => {
           void navigator.clipboard?.writeText(group.threadId);
@@ -390,20 +411,24 @@ function SectionDivider({ name }: { name: string }) {
 }
 
 /** Move-to-section popover: existing sections as chips (checkmark on the
- * bot's current one), a create field, and a remove action. Mirrors the
+ * target's current one), a create field, and a remove action. Serves bots
+ * and rooms alike — the caller supplies the assignment. Mirrors the
  * context menu's fixed positioning + dismiss-on-outside-click contract. */
 function SectionPicker({
-  botId,
+  current,
   anchor,
   onClose,
+  onAssign,
 }: {
-  botId: string;
-  anchor: MenuState;
+  /** the target's current section; undefined = none */
+  current: string | undefined;
+  anchor: { x: number; y: number };
   onClose: () => void;
+  /** "" clears — the server drops an empty section */
+  onAssign: (section: string) => void;
 }) {
-  const { state, dispatch } = useStore();
+  const { state } = useStore();
   const [name, setName] = useState("");
-  const bot = state.bots.find((b) => b.id === botId);
   const trimmed = name.trim();
 
   useEffect(() => {
@@ -421,12 +446,17 @@ function SectionPicker({
     };
   }, [onClose]);
 
-  if (!bot) return null;
-  // hidden bots can carry a stale assignment; don't offer it as a section
-  const sections = [...new Set(state.bots.filter((b) => !b.hidden && b.section).map((b) => b.section!))];
+  // hidden bots can carry a stale assignment; don't offer it as a section.
+  // Rooms and bots share one namespace, so a heading can hold both.
+  const sections = [
+    ...new Set([
+      ...state.bots.filter((b) => !b.hidden && b.section).map((b) => b.section!),
+      ...state.groups.filter((g) => g.section).map((g) => g.section!),
+    ]),
+  ];
 
   const assign = (section: string) => {
-    dispatch({ type: "updateBot", botId, patch: { section } });
+    onAssign(section);
     onClose();
   };
 
@@ -450,11 +480,11 @@ function SectionPicker({
               onClick={() => assign(section)}
               className={cn(
                 "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]",
-                section === bot.section ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
+                section === current ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
               )}
             >
               <span className="truncate">{section}</span>
-              {section === bot.section && <Check size={14} className="shrink-0 text-accent" />}
+              {section === current && <Check size={14} className="shrink-0 text-accent" />}
             </button>
           ))}
         </div>
@@ -487,14 +517,11 @@ function SectionPicker({
           Add
         </button>
       </form>
-      {bot.section && (
+      {current && (
         <>
           <div className="mx-2 my-1 border-t border-hairline/40" />
           <button
-            onClick={() => {
-              dispatch({ type: "updateBot", botId, patch: { section: "" } });
-              onClose();
-            }}
+            onClick={() => assign("")}
             className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-danger hover:bg-raised/70"
           >
             <FolderMinus size={15} />
@@ -916,6 +943,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [sectionPicker, setSectionPicker] = useState<MenuState | null>(null);
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
+  const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
@@ -1112,13 +1140,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const visibleBots = matchingBots
     .filter((bot) => !bot.chiefOfStaff && !bot.section)
     .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q));
+  const sectionedGroups = visibleGroups.filter((g) => g.section);
+  const unsectionedGroups = visibleGroups.filter((g) => !g.section);
   // sections keep first-appearance order within the current list; a section
-  // whose bots all moved away (or fell out of the filter) simply vanishes
+  // whose members all moved away (or fell out of the filter) simply vanishes
   const sectionNames: string[] = [];
   for (const bot of sectionedBots) {
     if (!sectionNames.includes(bot.section!)) sectionNames.push(bot.section!);
   }
-  const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q));
+  for (const group of sectionedGroups) {
+    if (!sectionNames.includes(group.section!)) sectionNames.push(group.section!);
+  }
   const activeBotCount = state.bots.filter((bot) => !bot.hidden).length;
   const archivedBots = state.bots.filter((bot) => bot.hidden);
   const pendingTeamUndo = teamFeedback?.undo;
@@ -1318,7 +1351,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               />
             </div>
           )}
-          {visibleGroups.map((g) => (
+          {unsectionedGroups.map((g) => (
             <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
           ))}
           {visibleBots.map((b) => (
@@ -1334,6 +1367,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {sectionNames.map((name) => (
             <Fragment key={name}>
               {density !== "icons" && <SectionDivider name={name} />}
+              {sectionedGroups
+                .filter((g) => g.section === name)
+                .map((g) => (
+                  <GroupListItem key={g.id} group={g} density={density} onMenu={setRoomMenu} />
+                ))}
               {sectionedBots
                 .filter((b) => b.section === name)
                 .map((b) => (
@@ -1411,12 +1449,28 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         />
       )}
       {sectionPicker && (
-        <SectionPicker botId={sectionPicker.botId} anchor={sectionPicker} onClose={() => setSectionPicker(null)} />
+        <SectionPicker
+          current={state.bots.find((b) => b.id === sectionPicker.botId)?.section}
+          anchor={sectionPicker}
+          onClose={() => setSectionPicker(null)}
+          onAssign={(section) => dispatch({ type: "updateBot", botId: sectionPicker.botId, patch: { section } })}
+        />
       )}
       {roomMenu && (
         <RoomContextMenu
           menu={roomMenu}
           onClose={() => setRoomMenu(null)}
+          onMoveToSection={(groupId) => setRoomSectionPicker({ groupId, x: roomMenu.x, y: roomMenu.y })}
+        />
+      )}
+      {roomSectionPicker && (
+        <SectionPicker
+          current={state.groups.find((g) => g.id === roomSectionPicker.groupId)?.section}
+          anchor={roomSectionPicker}
+          onClose={() => setRoomSectionPicker(null)}
+          onAssign={(section) =>
+            dispatch({ type: "patchGroup", groupId: roomSectionPicker.groupId, patch: { section } })
+          }
         />
       )}
       {newRoom && <NewRoomPanel onClose={() => setNewRoom(false)} />}

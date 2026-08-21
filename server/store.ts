@@ -139,6 +139,9 @@ export interface GroupRecord {
   /** the one message pinned to the top of this room's transcript. A pin id
    * that no longer resolves (edited away, deleted) simply renders nothing. */
   pinnedMessageId?: string;
+  /** sidebar section heading this room is filed under; shares the bots'
+   * namespace so one heading can hold a project's room and its people */
+  section?: string;
 }
 
 /** One task = one conversation with its own context.
@@ -585,7 +588,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd" | "section">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     Object.assign(group, patch);

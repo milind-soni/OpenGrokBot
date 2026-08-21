@@ -3145,6 +3145,17 @@ const server = createServer(async (req, res) => {
           patch.pinnedMessageId = body.pinnedMessageId;
         } else return json(res, 400, { error: "pinnedMessageId must be a message id" });
       }
+      // same contract as a bot's sidebar section: null/"" clears, 60 chars max
+      if (body.section !== undefined) {
+        if (body.section === null) patch.section = undefined;
+        else if (typeof body.section !== "string") return json(res, 400, { error: "section must be a string" });
+        else {
+          const trimmed = body.section.trim();
+          if (!trimmed) patch.section = undefined;
+          else if (trimmed.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
+          else patch.section = trimmed;
+        }
+      }
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group });

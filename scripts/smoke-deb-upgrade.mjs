@@ -88,6 +88,18 @@ try {
       fail(`upgraded executable is not root:root 0755: ${file}`);
     }
   }
+  const chromiumSandbox = "/opt/OpenMausBot/chrome-sandbox";
+  const sandboxDetails = fs.lstatSync(chromiumSandbox);
+  if (!sandboxDetails.isFile() || sandboxDetails.isSymbolicLink()) {
+    fail(`unsafe upgraded Chromium sandbox: ${chromiumSandbox}`);
+  }
+  if (
+    sandboxDetails.uid !== 0 ||
+    sandboxDetails.gid !== 0 ||
+    (sandboxDetails.mode & 0o7777) !== 0o4755
+  ) {
+    fail(`upgraded Chromium sandbox is not root:root 4755: ${chromiumSandbox}`);
+  }
   const installedVersion = execFileSync("dpkg-query", ["-W", "-f=${Version}", "openmausbot"], {
     encoding: "utf8",
   }).trim();

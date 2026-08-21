@@ -20,7 +20,10 @@ function fixture() {
     fs.writeFileSync(path.join(cuaRoot, executable), "fixture", { mode: 0o664 });
     fs.chmodSync(path.join(cuaRoot, executable), 0o664);
   }
-  return { appRoot, resources, cuaRoot };
+  const chromiumSandbox = path.join(appRoot, "chrome-sandbox");
+  fs.writeFileSync(chromiumSandbox, "fixture", { mode: 0o664 });
+  fs.chmodSync(chromiumSandbox, 0o664);
+  return { appRoot, resources, cuaRoot, chromiumSandbox };
 }
 
 function runHook(appRoot) {
@@ -38,7 +41,7 @@ afterEach(() => {
 
 describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
   it("repairs legacy directory and executable modes idempotently", () => {
-    const { appRoot, resources, cuaRoot } = fixture();
+    const { appRoot, resources, cuaRoot, chromiumSandbox } = fixture();
 
     for (let pass = 0; pass < 2; pass += 1) {
       const result = runHook(appRoot);
@@ -49,6 +52,7 @@ describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
       for (const executable of ["cua-driver", "cua-cursor-theme"]) {
         expect(fs.lstatSync(path.join(cuaRoot, executable)).mode & 0o777).toBe(0o755);
       }
+      expect(fs.lstatSync(chromiumSandbox).mode & 0o7777).toBe(0o4755);
     }
   });
 
@@ -73,6 +77,18 @@ describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
     const result = runHook(appRoot);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("package executable is missing or unsafe");
+  });
+
+  it("fails the install when the Chromium sandbox is replaced by a symlink", () => {
+    const { appRoot, chromiumSandbox } = fixture();
+    const external = path.join(appRoot, "external-sandbox");
+    fs.writeFileSync(external, "fixture", { mode: 0o755 });
+    fs.unlinkSync(chromiumSandbox);
+    fs.symlinkSync(external, chromiumSandbox, "file");
+
+    const result = runHook(appRoot);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Chromium sandbox is missing or unsafe");
   });
 
   it("rejects a test override outside the private temporary root", () => {

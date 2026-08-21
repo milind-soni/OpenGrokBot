@@ -35,6 +35,7 @@ import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
+import { nextRename } from "@/lib/rename";
 import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
@@ -254,6 +255,8 @@ function RoomContextMenu({
 }) {
   const { state, dispatch } = useStore();
   const group = state.groups.find((g) => g.id === menu.groupId);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(group?.name ?? "");
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -271,6 +274,11 @@ function RoomContextMenu({
   }, [onClose]);
 
   if (!group) return null;
+  const saveRename = () => {
+    const name = nextRename(group.name, draft);
+    if (name) dispatch({ type: "patchGroup", groupId: group.id, patch: { name } });
+    onClose();
+  };
   const top = Math.min(menu.y, window.innerHeight - 164);
   const left = Math.min(menu.x, window.innerWidth - 240);
   return createPortal(
@@ -279,6 +287,58 @@ function RoomContextMenu({
       style={{ top, left }}
       className="fixed z-40 w-[228px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60"
     >
+      {renaming ? (
+        <div className="flex items-center gap-1 px-2 py-1">
+          <input
+            autoFocus
+            value={draft}
+            maxLength={100}
+            aria-label={`Rename ${group.name}`}
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                saveRename();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+              }
+            }}
+            className="min-w-0 flex-1 rounded-lg bg-raised px-2 py-1.5 text-[14px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+          />
+          <button
+            type="button"
+            onClick={saveRename}
+            aria-label="Save room name"
+            title="Save"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <Check size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cancel room rename"
+            title="Cancel"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => {
+            setDraft(group.name);
+            setRenaming(true);
+          }}
+          className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+        >
+          <Pencil size={16} className="text-ink-secondary" />
+          Rename Room
+        </button>
+      )}
       <button
         onClick={() => {
           void navigator.clipboard?.writeText(group.threadId);
@@ -1415,6 +1475,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       )}
       {roomMenu && (
         <RoomContextMenu
+          key={roomMenu.groupId}
           menu={roomMenu}
           onClose={() => setRoomMenu(null)}
         />

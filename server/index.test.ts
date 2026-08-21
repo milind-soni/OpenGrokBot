@@ -335,6 +335,26 @@ describe("harness HTTP API", () => {
     expect((await api("DELETE", "/api/groups/test-pinned-room")).status).toBe(200);
   });
 
+  it("renames rooms through a bounded non-empty name", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Old room", memberIds: [bot.id] })).body.group;
+    try {
+      const renamed = await api("PATCH", `/api/groups/${room.id}`, { name: "  Project Atlas  " });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.group.name).toBe("Project Atlas");
+
+      for (const name of ["", "   ", 42, "x".repeat(101)]) {
+        expect((await api("PATCH", `/api/groups/${room.id}`, { name })).status).toBe(400);
+      }
+
+      const state = (await api("GET", "/api/bots")).body;
+      expect(state.groups.find((group: { id: string }) => group.id === room.id).name).toBe("Project Atlas");
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("describes the configured fleet, shadows included", async () => {
     const { status, body } = await api("GET", "/api/instances");
     expect(status).toBe(200);

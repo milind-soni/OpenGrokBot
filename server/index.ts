@@ -3108,7 +3108,14 @@ const server = createServer(async (req, res) => {
       const existing = store.group(m[1]);
       if (!existing) return json(res, 404, { error: "no such room" });
       const patch: Record<string, unknown> = {};
-      for (const key of ["name", "bulletin", "unread"] as const) {
+      if (body.name !== undefined) {
+        if (typeof body.name !== "string") return json(res, 400, { error: "room name must be a string" });
+        const name = body.name.trim();
+        if (!name) return json(res, 400, { error: "room name must not be empty" });
+        if (name.length > 100) return json(res, 400, { error: "room name must be at most 100 characters" });
+        patch.name = name;
+      }
+      for (const key of ["bulletin", "unread"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
       if (Array.isArray(body.memberIds)) {

@@ -123,7 +123,7 @@ describe("comms e2e (fake ACP fleet)", () => {
           // chip, not silence.
           helperCrash: {
             driver: "grokAgent",
-            environment: { FAKE_ACP_MODE: "exit-early" },
+            environment: { FAKE_ACP_MODE: "crash-on-prompt" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
           // a successful peer turn that deliberately emits no assistant
@@ -131,6 +131,15 @@ describe("comms e2e (fake ACP fleet)", () => {
           helperEmpty: {
             driver: "grokAgent",
             environment: { FAKE_ACP_MODE: "empty-reply" },
+            config: { cli: FAKE_CLI, fullAuto: true },
+          },
+          // a peer whose CLI dies before initialize answers, so the catalog
+          // probe fails: PATCH cannot verify the model and lets it through,
+          // but startTurn's own catalog call rejects — the delegation never
+          // starts, and that must mirror as a could-not-start chip.
+          helperNoCatalog: {
+            driver: "grokAgent",
+            environment: { FAKE_ACP_MODE: "exit-early" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
           // a turn that remains busy until provider reload disposes it.
@@ -190,7 +199,7 @@ describe("comms e2e (fake ACP fleet)", () => {
       // deterministic roster: hide the seeded bot, add Asker + Helper
       const seeded = (await api("GET", "/api/bots")).body.bots[0];
       await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
-      const selection = { instanceId: "grok", model: "fake-model" };
+      const selection = { instanceId: "grok", model: "fake-acp-model", effort: "high" };
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, { name: "Helper", modelSelection: selection });
       const asker = (await api("POST", "/api/bots")).body.bot;
@@ -262,8 +271,8 @@ describe("comms e2e (fake ACP fleet)", () => {
     async () => {
       const seeded = (await api("GET", "/api/bots")).body.bots[0];
       await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
-      const helperSelection = { instanceId: "grok", model: "fake-model" };
-      const askerSelection = { instanceId: "askerDelegate", model: "fake-model" };
+      const helperSelection = { instanceId: "grok", model: "fake-acp-model", effort: "high" };
+      const askerSelection = { instanceId: "askerDelegate", model: "fake-acp-model", effort: "high" };
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, { name: "Helper", modelSelection: helperSelection });
       const asker = (await api("POST", "/api/bots")).body.bot;
@@ -371,12 +380,12 @@ describe("comms e2e (fake ACP fleet)", () => {
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, {
         name: "Helper",
-        modelSelection: { instanceId: "helperEmpty", model: "fake-model" },
+        modelSelection: { instanceId: "helperEmpty", model: "fake-acp-model" },
       });
       const asker = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${asker.id}`, {
         name: "Asker",
-        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+        modelSelection: { instanceId: "askerDelegate", model: "fake-acp-model" },
       });
 
       const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
@@ -421,12 +430,12 @@ describe("comms e2e (fake ACP fleet)", () => {
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, {
         name: "Helper",
-        modelSelection: { instanceId: "helperHang", model: "fake-model" },
+        modelSelection: { instanceId: "helperHang", model: "fake-acp-model" },
       });
       const asker = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${asker.id}`, {
         name: "Asker",
-        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+        modelSelection: { instanceId: "askerDelegate", model: "fake-acp-model" },
       });
 
       const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
@@ -485,12 +494,12 @@ describe("comms e2e (fake ACP fleet)", () => {
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, {
         name: "Helper",
-        modelSelection: { instanceId: "helperCrash", model: "fake-model" },
+        modelSelection: { instanceId: "helperCrash", model: "fake-acp-model" },
       });
       const asker = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${asker.id}`, {
         name: "Asker",
-        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+        modelSelection: { instanceId: "askerDelegate", model: "fake-acp-model" },
       });
 
       const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
@@ -537,15 +546,18 @@ describe("comms e2e (fake ACP fleet)", () => {
       const seeded = (await api("GET", "/api/bots")).body.bots[0];
       await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
       const helper = (await api("POST", "/api/bots")).body.bot;
-      // no such instance — startTurn rejects, so B's turn never starts
-      await api("PATCH", `/api/bots/${helper.id}`, {
+      // a live engine whose CLI dies before the catalog probe answers —
+      // startTurn rejects, so B's turn never starts. The exit-early CLI
+      // kills the probe before initialize answers.
+      const configured = await api("PATCH", `/api/bots/${helper.id}`, {
         name: "Helper",
-        modelSelection: { instanceId: "missing-instance", model: "fake-model" },
+        modelSelection: { instanceId: "helperNoCatalog", model: "fake-acp-model" },
       });
+      expect(configured.status).toBe(200);
       const asker = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${asker.id}`, {
         name: "Asker",
-        modelSelection: { instanceId: "askerDelegate", model: "fake-model" },
+        modelSelection: { instanceId: "askerDelegate", model: "fake-acp-model" },
       });
 
       const send = await api("POST", `/api/bots/${asker.id}/messages`, { text: "hey @Helper please pick this up" });
@@ -593,7 +605,7 @@ describe("comms e2e (fake ACP fleet)", () => {
     async () => {
       const seeded = (await api("GET", "/api/bots")).body.bots[0];
       await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
-      const selection = { instanceId: "grok", model: "fake-model" };
+      const selection = { instanceId: "grok", model: "fake-acp-model", effort: "high" };
       const helper = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${helper.id}`, { name: "Helper", modelSelection: selection });
       const asker = (await api("POST", "/api/bots")).body.bot;
@@ -684,7 +696,7 @@ describe("comms e2e (fake ACP fleet)", () => {
   it("refuses ask_bot with a denial chip and never starts B when the user denies", async () => {
     const seeded = (await api("GET", "/api/bots")).body.bots[0];
     await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
-    const selection = { instanceId: "grok", model: "fake-model" };
+    const selection = { instanceId: "grok", model: "fake-acp-model", effort: "high" };
     const helper = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${helper.id}`, { name: "Helper", modelSelection: selection });
     const asker = (await api("POST", "/api/bots")).body.bot;
@@ -776,8 +788,8 @@ describe("comms e2e (fake ACP fleet)", () => {
     // A runs delegate-peer and hands off to B, which runs ask-peer. If the
     // depth guard broke, B's depth-1 turn would call ask_bot and its reply
     // would carry the "one hop" refusal — the regression signal.
-    const selection = { instanceId: "grok", model: "fake-model" };
-    const askerSelection = { instanceId: "askerDelegate", model: "fake-model" };
+    const selection = { instanceId: "grok", model: "fake-acp-model", effort: "high" };
+    const askerSelection = { instanceId: "askerDelegate", model: "fake-acp-model", effort: "high" };
     const helper = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${helper.id}`, { name: "Helper", modelSelection: selection });
     const asker = (await api("POST", "/api/bots")).body.bot;

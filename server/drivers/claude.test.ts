@@ -6,7 +6,7 @@
 // These used to be POSIX-only: the fake CLI is a shebang script Windows
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -188,6 +188,39 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 
+  it("discovers CLI model aliases and configured model and effort", async () => {
+    const home = join(scratch, "home");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ model: "opus", effortLevel: "xhigh" }),
+    );
+    await create(undefined, { HOME: home });
+
+    await expect(instance.catalog()).resolves.toEqual({
+      default: { model: "opus", effort: "xhigh" },
+      options: [
+        { id: "fable", label: "Fable", efforts: ["low", "medium", "high", "xhigh", "max"], provider: "claude-code" },
+        { id: "opus", label: "Opus", efforts: ["low", "medium", "high", "xhigh", "max"], provider: "claude-code" },
+        { id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high", "xhigh", "max"], provider: "claude-code" },
+      ],
+    });
+  });
+
+  it("keeps the CLI-owned default selectable when no model is configured", async () => {
+    const home = join(scratch, "empty-home");
+    mkdirSync(home, { recursive: true });
+    await create(undefined, { HOME: home });
+
+    const catalog = await instance.catalog();
+    expect(catalog.default).toEqual({ model: "" });
+    expect(catalog.options[0]).toEqual({
+      id: "",
+      label: "CLI default",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    });
+  });
+
   it("streams partial-message text deltas without re-emitting the whole message", async () => {
     await create("stream");
     await instance.adapter.sendTurn({ threadId: "t-stream", text: "hi" });
@@ -232,6 +265,24 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
     expect(seen.env.BOX_TOKEN).toBeUndefined();
     expect(seen.env.OMB_TTS_KEY).toBeUndefined();
+  });
+
+  it("passes the selected model and effort to Claude", async () => {
+    await create();
+    const dump = join(scratch, "selection.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-selection",
+      text: "go",
+      model: "opus",
+      effort: "max",
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "opus"]);
+    expect(argv.slice(argv.indexOf("--effort"), argv.indexOf("--effort") + 2)).toEqual(["--effort", "max"]);
   });
 
   it("uses instance credentials when launching an injected local model", async () => {
@@ -917,12 +968,6 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     for (const name of names) expect(seen.env[name]).toBeUndefined();
   });
 
-  it("declares the effort levels the CLI accepts", async () => {
-    await create();
-    expect(instance.adapter.capabilities.effortLevels).toEqual([
-      "low", "medium", "high", "xhigh", "max",
-    ]);
-  });
 });
 
 // Auth state must come from the CLI, not from probing its credential store:

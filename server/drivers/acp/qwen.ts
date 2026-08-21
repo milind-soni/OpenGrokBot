@@ -9,7 +9,7 @@ import type { ModelCatalog } from "../../contracts.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
-const EMPTY: ModelCatalog = { default: "", options: [] };
+const EMPTY: ModelCatalog = { default: { model: "" }, options: [] };
 
 function qwenHome(env: Record<string, string | undefined>): string {
   return join(env.HOME || env.USERPROFILE || homedir(), ".qwen");
@@ -82,14 +82,13 @@ export function ensureQwenInjectModel(
 
 async function resolveModels(env: Record<string, string | undefined>): Promise<ModelCatalog> {
   const catalog = await mergeLocalInject(EMPTY, env);
-  return { default: catalog.options[0]?.id ?? "", options: catalog.options };
+  return { default: { model: catalog.options[0]?.id ?? "" }, options: catalog.options };
 }
 
 const support: AcpSupport = {
   driverKind: "qwenAgent",
   displayName: "Qwen",
   access: "custom",
-  models: EMPTY,
   resolveModels,
   resolveTurnModel: (model, env) => (model ? ensureQwenInjectModel(model, env) : model),
   defaultCli: "qwen",

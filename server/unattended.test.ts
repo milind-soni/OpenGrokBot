@@ -137,7 +137,7 @@ posixOnly("unattended turns keep asking", () => {
         (
           await api("PATCH", `/api/bots/${bot.id}`, {
             autoApprove: true,
-            modelSelection: { instanceId: "grok", model: "fake-model" },
+            modelSelection: { instanceId: "grok", model: "fake-acp-model" },
           })
         ).status,
       ).toBe(200);
@@ -185,7 +185,7 @@ posixOnly("unattended turns keep asking", () => {
       await api("PATCH", `/api/bots/${delegator.id}`, {
         name: "Delegator",
         autoApprove: true,
-        modelSelection: { instanceId: "delegator", model: "fake-model" },
+        modelSelection: { instanceId: "delegator", model: "fake-acp-model" },
       });
 
       const hook = await api("POST", "/api/webhooks", {
@@ -235,7 +235,7 @@ posixOnly("unattended turns keep asking", () => {
       await api("PATCH", `/api/bots/${target.id}`, {
         name: "Answerer",
         autoApprove: true,
-        modelSelection: { instanceId: "grok", model: "fake-model" },
+        modelSelection: { instanceId: "grok", model: "fake-acp-model" },
       });
 
       const asker = (await api("POST", "/api/bots")).body.bot;
@@ -243,7 +243,7 @@ posixOnly("unattended turns keep asking", () => {
         name: "Asker",
         autoApprove: true,
         hidden: true, // keep it out of its own peer list's way
-        modelSelection: { instanceId: "asker", model: "fake-model" },
+        modelSelection: { instanceId: "asker", model: "fake-acp-model" },
       });
 
       const hook = await api("POST", "/api/webhooks", {

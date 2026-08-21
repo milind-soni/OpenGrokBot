@@ -42,7 +42,7 @@ name = "MiniMax M3 4bit (oMLX)"
 `);
 
     expect(readGrokModelCatalog({ HOME: home })).toEqual({
-      default: "ollama-ornith-35b-bf16",
+      default: { model: "ollama-ornith-35b-bf16" },
       options: [
         { id: "grok-4.6", label: "Grok 4.6" },
         { id: "grok-4.5", label: "Grok 4.5" },
@@ -64,7 +64,7 @@ name = "nope"
 name = "OK"
 `);
     const catalog = readGrokModelCatalog({ HOME: home });
-    expect(catalog.default).toBe("grok-4.6");
+    expect(catalog.default.model).toBe("grok-4.6");
     expect(catalog.options.map((o) => o.id)).toEqual(["grok-4.6", "grok-4.5", "ok-model"]);
   });
 
@@ -88,7 +88,7 @@ default = "grok-4.5"
 [model.ok-model]
 name = "OK"
 `);
-    expect(readGrokModelCatalog({ HOME: home }).default).toBe("grok-4.6");
+    expect(readGrokModelCatalog({ HOME: home }).default.model).toBe("grok-4.6");
   });
 });
 
@@ -103,8 +103,8 @@ describe("GrokAgentDriver catalog", () => {
       config: GrokAgentDriver.defaultConfig(),
     });
     try {
-      expect(instance.models.options.some((o) => o.id === "local-glm" && o.label === "GLM local")).toBe(true);
-      expect(instance.refreshModels).toEqual(expect.any(Function));
+      const catalog = await instance.catalog();
+      expect(catalog.options.some((o) => o.id === "local-glm" && o.label === "GLM local")).toBe(true);
     } finally {
       await instance.dispose();
     }

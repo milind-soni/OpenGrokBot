@@ -13,7 +13,7 @@ import { execCli } from "../../procs.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 export const STATIC_CURSOR_MODELS: ModelCatalog = {
-  default: "auto",
+  default: { model: "auto" },
   options: [
     { id: "auto", label: "Auto" },
     { id: "composer-2.5", label: "Composer 2.5" },
@@ -113,7 +113,7 @@ export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null 
     (typeof asRecord(payload)?.default === "string" && seen.has(asRecord(payload)!.default as string)
       ? (asRecord(payload)!.default as string)
       : undefined) ??
-    (seen.has(STATIC_CURSOR_MODELS.default) ? STATIC_CURSOR_MODELS.default : options[0]!.id);
+    (seen.has(STATIC_CURSOR_MODELS.default.model) ? STATIC_CURSOR_MODELS.default.model : options[0]!.id);
 
   // Keep the static cloud set at the front (stable picker rail) and append
   // live ids the static list does not already name.
@@ -124,7 +124,7 @@ export function decodeCursorModelCatalog(payload: unknown): ModelCatalog | null 
     mergedSeen.add(option.id);
     merged.push(option);
   }
-  return { default: defaultId, options: merged };
+  return { default: { model: defaultId }, options: merged };
 }
 
 function stripModelMarkers(label: string): { label: string; isDefault: boolean; isCurrent: boolean } {
@@ -174,8 +174,8 @@ export function decodeCursorModelText(text: string): ModelCatalog | null {
   const defaultId =
     (markedDefault && seen.has(markedDefault) ? markedDefault : undefined) ??
     (markedCurrent && seen.has(markedCurrent) ? markedCurrent : undefined) ??
-    (seen.has(STATIC_CURSOR_MODELS.default) ? STATIC_CURSOR_MODELS.default : options[0]!.id);
-  return { default: defaultId, options: merged };
+    (seen.has(STATIC_CURSOR_MODELS.default.model) ? STATIC_CURSOR_MODELS.default.model : options[0]!.id);
+  return { default: { model: defaultId }, options: merged };
 }
 
 function truthyAuthFlag(value: unknown): boolean | null {
@@ -288,7 +288,6 @@ export function classifyCursorError(error: unknown): ProviderErrorCode | undefin
 const support = (run: typeof execCli): AcpSupport => ({
   driverKind: "cursorAgent",
   displayName: "Cursor",
-  models: STATIC_CURSOR_MODELS,
   // Cursor and other coding agents can both install a generic `agent` shim.
   // Cursor's compatibility alias is unambiguous and ships with the same CLI.
   defaultCli: "cursor-agent",
@@ -315,7 +314,7 @@ const support = (run: typeof execCli): AcpSupport => ({
   ],
   credentialEnv: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"],
 
-  resolveModels: (environment, config) => fetchCursorModels(config.cli || "cursor-agent", environment, run),
+  catalog: (config, environment) => fetchCursorModels(config.cli || "cursor-agent", environment),
 
   // Prefer the advertised ACP method. An already-signed-in CLI should accept
   // cursor_login without a browser; a missing method rides the ambient login

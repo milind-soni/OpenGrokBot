@@ -140,7 +140,7 @@ export class ProviderRegistry {
             driverKind: entry.shadow.driverKind,
             displayName: entry.shadow.displayName ?? entry.shadow.driverKind,
             snapshot: { state: "unavailable", reason: entry.shadow.reason } satisfies ProviderSnapshot,
-            models: { default: "", options: [] },
+            models: { default: { model: "" }, options: [] },
             capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
             // an unknown driver has no driver record, hence no install path
             access: driver?.metadata.access ?? "subscription",
@@ -155,24 +155,32 @@ export class ProviderRegistry {
         const inst = entry.live;
         let snapshot: ProviderSnapshot;
         try {
-          await inst.refreshModels?.();
           snapshot = await inst.snapshot();
         } catch (e) {
           snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };
+        }
+        let models;
+        try {
+          models = await inst.catalog();
+        } catch (e) {
+          models = {
+            default: { model: "" },
+            options: [],
+            error: e instanceof Error ? e.message : String(e),
+          };
         }
         return {
           instanceId: inst.instanceId,
           driverKind: inst.driverKind,
           displayName: inst.displayName ?? inst.driverKind,
           snapshot,
-          models: inst.models,
+          models,
           capabilities: {
             computerMcp: inst.adapter.capabilities.computerMcp === true,
             agentsMcp: inst.adapter.capabilities.agentsMcp === true,
             composioMcp: inst.adapter.capabilities.composioMcp === true,
             phoneMcp: inst.adapter.capabilities.phoneMcp === true,
             images: inst.adapter.capabilities.images === true,
-            effortLevels: inst.adapter.capabilities.effortLevels,
             queueing: inst.adapter.capabilities.queueing === true,
             localComputerMcp: inst.adapter.capabilities.localComputerMcp === true,
           },

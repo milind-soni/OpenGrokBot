@@ -6,11 +6,10 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
 import type { ProviderInstance } from "../../contracts.ts";
@@ -31,7 +30,6 @@ const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test
 const SELECT_MODEL_SUPPORT: AcpSupport = {
   driverKind: "selectModelTest",
   displayName: "Select Model Test",
-  models: { default: "m-one", options: [{ id: "m-one", label: "One" }, { id: "m-two", label: "Two" }] },
   defaultCli: "fake-select-model",
   nativeSource: "test.acp",
   loginNote: "never reached",
@@ -78,7 +76,6 @@ describe("ACP decodeConfig", () => {
     const support: AcpSupport = {
       driverKind: "dynamic-test",
       displayName: "Dynamic Test",
-      models: { default: "fallback", options: [{ id: "fallback", label: "Fallback" }] },
       defaultCli: FAKE_CLI,
       nativeSource: "dynamic-test.acp",
       loginNote: "not authenticated",
@@ -86,8 +83,8 @@ describe("ACP decodeConfig", () => {
       pickAuthMethod: () => null,
       authFailure: "continue",
       isAuthenticated: () => true,
-      resolveModels: async () => ({
-        default: "dynamic-model",
+      catalog: async () => ({
+        default: { model: "dynamic-model" },
         options: [{ id: "dynamic-model", label: "Dynamic model" }],
       }),
     };
@@ -99,8 +96,8 @@ describe("ACP decodeConfig", () => {
       enabled: true,
       config: driver.defaultConfig(),
     });
-    expect(instance.models).toEqual({
-      default: "dynamic-model",
+    await expect(instance.catalog()).resolves.toEqual({
+      default: { model: "dynamic-model" },
       options: [{ id: "dynamic-model", label: "Dynamic model" }],
     });
     await instance.dispose();
@@ -201,6 +198,7 @@ describe("ACP turns (fake CLI)", () => {
   afterEach(async () => {
     delete process.env.FAKE_ACP_MODE;
     delete process.env.FAKE_ACP_DUMP;
+    delete process.env.FAKE_ACP_RPC_DUMP;
     delete process.env.XAI_API_KEY;
     delete process.env.OPENCODE_API_KEY;
     delete process.env.CURSOR_API_KEY;
@@ -210,6 +208,8 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
+    delete process.env.KIMI_CODE_HOME;
+    vi.useRealTimers();
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -239,6 +239,75 @@ describe("ACP turns (fake CLI)", () => {
     const done = recorder.events.at(-1)!;
     expect(done).toMatchObject({ type: "turn.completed", ok: true });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
+  });
+
+  it("discovers the current model and effort capabilities from ACP initialize", async () => {
+    await create();
+
+    await expect(instance.catalog()).resolves.toEqual({
+      default: { model: "fake-acp-model", effort: "high" },
+      options: [
+        {
+          id: "fake-acp-model",
+          label: "Fake ACP Model",
+          efforts: ["low", "high"],
+          defaultEffort: "high",
+        },
+        { id: "fake-acp-fast", label: "Fake ACP Fast" },
+      ],
+    });
+  });
+
+  it("times out provider selection requests before prompting", async () => {
+    let selectionReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      selectionReady = resolve;
+    });
+    const driver = createAcpDriver({
+      ...SELECT_MODEL_SUPPORT,
+      driverKind: "hangingSelectionTest",
+      selectModel: undefined,
+      configureSession: async () => {
+        // Start fake time after the child handshake so only the missing
+        // selection timeout is under test.
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        selectionReady();
+      },
+      applySelection: async (request, sessionId) => {
+        await request("session/never", { sessionId });
+      },
+    });
+    await create(driver);
+
+    await instance.adapter.sendTurn({ threadId: "t-selection-timeout", text: "go" });
+    await ready;
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(recorder.events.find((event) => event.type === "turn.completed")).toMatchObject({
+      ok: false,
+      stopReason: "rpc_error",
+    });
+    expect(recorder.events.find((event) => event.type === "runtime.error")?.message).toContain("session/never timed out");
+  });
+
+  it("discovers Kimi models and configured defaults from provider JSON", async () => {
+    process.env.KIMI_CODE_HOME = scratch;
+    writeFileSync(join(scratch, "config.toml"), 'default_model = "fake-kimi-1"\n\n[thinking]\neffort = "high"\n');
+    await create(KimiAgentDriver);
+
+    await expect(instance.catalog()).resolves.toEqual({
+      default: { model: "fake-kimi-1", effort: "high" },
+      options: [
+        {
+          id: "fake-kimi-1",
+          label: "Fake Kimi One",
+          efforts: ["low", "high"],
+          defaultEffort: "low",
+          toolUse: true,
+        },
+        { id: "fake-kimi-2", label: "Fake Kimi Two", toolUse: false },
+      ],
+    });
   });
 
   it("reads token usage from the root of the prompt result", async () => {
@@ -320,7 +389,12 @@ describe("ACP turns (fake CLI)", () => {
     const dump = join(scratch, "droid-dump.json");
     process.env.FAKE_ACP_DUMP = dump;
 
-    await instance.adapter.sendTurn({ threadId: "t-droid", text: "go", model: "claude-sonnet-5" });
+    await instance.adapter.sendTurn({
+      threadId: "t-droid",
+      text: "go",
+      model: "claude-sonnet-5",
+      effort: "max",
+    });
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
@@ -331,14 +405,24 @@ describe("ACP turns (fake CLI)", () => {
     expect(applied).toEqual([
       { method: "session/set_mode", params: { sessionId: "fake-acp-session", modeId: "auto-high" } },
       { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "claude-sonnet-5" } },
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "fake-acp-session", configId: "reasoning_effort", value: "max" },
+      },
     ]);
   });
 
   it("droid pins read-only mode when fullAuto is off", async () => {
+    mkdirSync(join(scratch, ".factory"), { recursive: true });
+    writeFileSync(
+      join(scratch, ".factory", "settings.json"),
+      JSON.stringify({ sessionDefaultSettings: { model: "claude-opus-5" } }),
+    );
+    const helpDump = join(scratch, "droid-help-called");
     instance = await DroidAgentDriver.create({
       instanceId: "droid-safe",
       displayName: "Droid Safe",
-      environment: {},
+      environment: { HOME: scratch, FAKE_ACP_HELP_DUMP: helpDump },
       enabled: true,
       config: { cli: FAKE_CLI, fullAuto: false },
     });
@@ -356,6 +440,7 @@ describe("ACP turns (fake CLI)", () => {
       { method: "session/set_mode", params: { sessionId: "fake-acp-session", modeId: "normal" } },
       { method: "session/set_model", params: { sessionId: "fake-acp-session", modelId: "claude-opus-5" } },
     ]);
+    expect(existsSync(helpDump)).toBe(false);
   });
 
   it("droid names the rejected setting when the agent predates session config", async () => {
@@ -383,6 +468,57 @@ describe("ACP turns (fake CLI)", () => {
     // The session id still reached the client, so the thread can resume rather
     // than orphaning the session droid just created.
     expect(recorder.events.some((e) => e.type === "session.started")).toBe(true);
+  });
+
+  it("passes the selected Grok model and effort as CLI arguments", async () => {
+    await create();
+    const dump = join(scratch, "grok-selection.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-grok-selection",
+      text: "go",
+      model: "fake-acp-model",
+      effort: "high",
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "-m",
+      "fake-acp-model",
+      "--reasoning-effort",
+      "high",
+      "stdio",
+    ]);
+  });
+
+  it("applies the selected Kimi model and effort through ACP session options", async () => {
+    await create(KimiAgentDriver);
+    const dump = join(scratch, "kimi-selection.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-kimi-selection",
+      text: "go",
+      model: "fake-kimi-1",
+      effort: "high",
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const { calls } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(calls.find((call: any) => call.method === "session/set_model")?.params).toEqual({
+      sessionId: "fake-acp-session",
+      modelId: "fake-kimi-1",
+    });
+    expect(calls.find((call: any) => call.method === "session/set_config_option")?.params).toEqual({
+      sessionId: "fake-acp-session",
+      configId: "thinking",
+      value: "high",
+    });
   });
 
   it("mounts local CUA only on an approval-capable ACP instance", async () => {
@@ -613,16 +749,6 @@ describe("ACP turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.TEST_POLICY).toBe("auto");
   });
 
-  it("declares effort levels for Grok only", async () => {
-    await create(GrokAgentDriver);
-    expect(instance.adapter.capabilities.effortLevels).toEqual(["low", "medium", "high"]);
-
-    await create(GeminiAgentDriver);
-    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
-
-    await create(KimiAgentDriver);
-    expect(instance.adapter.capabilities.effortLevels).toBeUndefined();
-  });
 
   it("passes effort to Grok, and omits the flag when unset", async () => {
     const withEffort = join(scratch, "grok-effort.json");
@@ -777,7 +903,7 @@ describe("ACP snapshot", () => {
           { id: "custom:Azure-Opus-0", displayName: "Azure Opus" },
         ],
         modelFavorites: ["custom:Azure-Opus-0", "custom:LMStudio-Qwen-0"],
-        sessionDefaultSettings: { model: "custom:LMStudio-Qwen-0" },
+        sessionDefaultSettings: { model: "custom:LMStudio-Qwen-0", reasoningEffort: "max" },
       }),
     );
 
@@ -790,19 +916,20 @@ describe("ACP snapshot", () => {
     });
     try {
       // favourites first in the user's own order, then the built-in slice
-      expect(instance.models.options.slice(0, 2)).toEqual([
+      const catalog = await instance.catalog();
+      expect(catalog.options.slice(0, 2)).toEqual([
         { id: "custom:Azure-Opus-0", label: "Azure Opus", custom: true },
         { id: "custom:LMStudio-Qwen-0", label: "Qwen (local)", custom: true },
       ]);
-      expect(instance.models.options.some((o) => o.id === "claude-opus-5")).toBe(true);
-      expect(instance.models.default).toBe("custom:LMStudio-Qwen-0");
+      expect(catalog.options.some((o) => o.id === "claude-opus-5")).toBe(true);
+      expect(catalog.default).toEqual({ model: "custom:LMStudio-Qwen-0", effort: "max" });
     } finally {
       await instance.dispose();
       await removeTempDir(scratch);
     }
   });
 
-  it("droid falls back to the built-in catalog when settings.json is unreadable", async () => {
+  it("droid discovers the CLI catalog when settings.json is unreadable", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "omb-droid-nosettings-"));
     mkdirSync(join(scratch, ".factory"), { recursive: true });
     writeFileSync(join(scratch, ".factory", "settings.json"), "{ not json");
@@ -815,8 +942,14 @@ describe("ACP snapshot", () => {
       config: { cli: FAKE_CLI, fullAuto: false },
     });
     try {
-      expect(instance.models.default).toBe("claude-opus-5");
-      expect(instance.models.options.every((o) => !o.id.startsWith("custom:"))).toBe(true);
+      const catalog = await instance.catalog();
+      expect(catalog.default).toEqual({ model: "claude-opus-5", effort: "high" });
+      expect(catalog.options.every((o) => !o.id.startsWith("custom:"))).toBe(true);
+      expect(catalog.options.find((o) => o.id === "claude-opus-5")).toMatchObject({
+        label: "Opus 5",
+        efforts: ["low", "high", "max"],
+        defaultEffort: "high",
+      });
     } finally {
       await instance.dispose();
       await removeTempDir(scratch);

@@ -8,7 +8,7 @@ function instance(snapshot: InstanceInfo["snapshot"]): InstanceInfo {
     instanceId: "kimi",
     driverKind: "kimiAgent",
     displayName: "Kimi",
-    models: { default: "kimi-code/k3", options: [] },
+    models: { default: { model: "kimi-code/k3" }, options: [] },
     snapshot,
   };
 }

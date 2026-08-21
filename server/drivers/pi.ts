@@ -77,7 +77,7 @@ export function parsePiCatalog(stdout: string, fallbackDefault = ""): ModelCatal
     break;
   }
   if (!def && options.length) def = options[0]!.id;
-  return { default: def, options };
+  return { default: { model: def }, options };
 }
 
 /** The pi-side default model, read from ~/.pi/agent/settings.json so the
@@ -118,7 +118,7 @@ export async function fetchPiModels(
       }
       resolve(catalog);
     };
-    const timer = setTimeout(() => finish({ default: "", options: [] }), 15_000);
+    const timer = setTimeout(() => finish({ default: { model: "" }, options: [] }), 15_000);
     timer.unref?.();
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -136,12 +136,12 @@ export async function fetchPiModels(
         }
       }
     });
-    child.on("error", () => finish({ default: "", options: [] }));
-    child.on("close", () => finish({ default: "", options: [] }));
+    child.on("error", () => finish({ default: { model: "" }, options: [] }));
+    child.on("close", () => finish({ default: { model: "" }, options: [] }));
     try {
       child.stdin.write(JSON.stringify({ id: "catalog", type: "get_available_models" }) + "\n");
     } catch {
-      finish({ default: "", options: [] });
+      finish({ default: { model: "" }, options: [] });
     }
   });
 }
@@ -158,7 +158,7 @@ function decodeConfig(raw: unknown): PiConfig {
   return { cli: obj.cli && obj.cli.trim() ? obj.cli.trim() : "pi" };
 }
 
-const EMPTY: ModelCatalog = { default: "", options: [] };
+const EMPTY: ModelCatalog = { default: { model: "" }, options: [] };
 
 /** The parsed pi RPC event we branch on — only the fields this driver reads. */
 interface PiEvent {
@@ -207,7 +207,6 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     needsNode: true,
     docsUrl: "https://pi.dev",
   },
-  models: EMPTY,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
@@ -518,10 +517,10 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      get models() {
+      catalog: async () => {
+        await refreshModels();
         return models;
       },
-      refreshModels,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,

@@ -12,7 +12,7 @@ import { killCliTree, spawnCli } from "../procs.ts";
 import { mergeLocalInject } from "./local-inject.ts";
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
-  default: "gpt-5.6-sol",
+  default: { model: "gpt-5.6-sol" },
   options: [
     { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
@@ -56,6 +56,13 @@ interface CodexAppServerModel {
   displayName?: unknown;
   hidden?: unknown;
   isDefault?: unknown;
+  /** Capability metadata the app-server reports per model — drives the
+   * effort/tier pickers and their validation. */
+  supportedReasoningEfforts?: unknown;
+  defaultReasoningEffort?: unknown;
+  serviceTiers?: unknown;
+  additionalSpeedTiers?: unknown;
+  defaultServiceTier?: unknown;
 }
 
 /** Ask the installed Codex CLI for the ChatGPT model catalog it can actually
@@ -78,7 +85,10 @@ export function readCodexAppServerModelCatalog(
     let nextId = 1;
     const models: CodexAppServerModel[] = [];
     const cursors = new Set<string>();
-    const pending = new Map<number, "initialize" | "models">();
+    const pending = new Map<number, "initialize" | "models" | "config">();
+    // config/read values (model, model_reasoning_effort, service_tier) refine
+    // the default selection once every model page has arrived.
+    let configured: { model?: unknown; model_reasoning_effort?: unknown; service_tier?: unknown } | null = null;
 
     const finish = (catalog: ModelCatalog | null) => {
       if (settled) return;
@@ -87,7 +97,7 @@ export function readCodexAppServerModelCatalog(
       killCliTree(child);
       resolve(catalog);
     };
-    const request = (method: string, params: unknown, kind: "initialize" | "models") => {
+    const request = (method: string, params: unknown, kind: "initialize" | "models" | "config") => {
       const id = nextId++;
       pending.set(id, kind);
       try {
@@ -133,6 +143,11 @@ export function readCodexAppServerModelCatalog(
           requestModels(null);
           continue;
         }
+        if (kind === "config") {
+          configured = (message.result as any)?.config ?? {};
+          finish(buildAppServerCatalog());
+          return;
+        }
 
         const page = message.result;
         if (Array.isArray(page?.data)) models.push(...page.data);
@@ -143,26 +158,78 @@ export function readCodexAppServerModelCatalog(
           continue;
         }
 
+        if (!configured) {
+          request("config/read", { includeLayers: false }, "config");
+          return;
+        }
+        finish(buildAppServerCatalog());
+        return;
+
+        function buildAppServerCatalog(): ModelCatalog | null {
         const options: ModelCatalog["options"] = [];
         const seen = new Set<string>();
         let defaultModel: string | null = null;
         for (const row of models) {
           if (row.hidden === true || typeof row.id !== "string" || !MODEL_ID.test(row.id) || seen.has(row.id)) continue;
           seen.add(row.id);
+          // Capability metadata (reasoning efforts, service tiers) comes from
+          // the same rows the CLI's own picker shows — without it the app
+          // cannot gate effort/tier combinations the model rejects.
+          const additionalSpeedTiers = Array.isArray(row.additionalSpeedTiers)
+            ? row.additionalSpeedTiers.filter((id: unknown): id is string => typeof id === "string")
+            : [];
+          const serviceTiers: Array<{ id: string; label: string }> = Array.isArray(row.serviceTiers)
+            ? row.serviceTiers
+                .filter((tier: any) => typeof tier?.id === "string")
+                .map((tier: any) => ({ id: tier.id, label: typeof tier.name === "string" ? tier.name : tier.id }))
+            : [];
+          for (const id of additionalSpeedTiers) {
+            if (id === "fast") {
+              // Codex reports the same speed mode under both IDs; keep the ID used by current config values.
+              const priorityIndex = serviceTiers.findIndex((tier) => tier.id === "priority" && tier.label === "Fast");
+              if (priorityIndex !== -1) serviceTiers.splice(priorityIndex, 1);
+            }
+            if (!serviceTiers.some((tier) => tier.id === id)) {
+              serviceTiers.push({ id, label: id.charAt(0).toUpperCase() + id.slice(1) });
+            }
+          }
+          const efforts = Array.isArray(row.supportedReasoningEfforts)
+            ? row.supportedReasoningEfforts
+                .map((effort: any) => effort?.reasoningEffort)
+                .filter((effort: unknown): effort is string => typeof effort === "string")
+            : [];
           options.push({
             id: row.id,
             label: typeof row.displayName === "string" && row.displayName.trim() ? row.displayName : row.id,
+            ...(efforts.length ? { efforts } : {}),
+            ...(typeof row.defaultReasoningEffort === "string" ? { defaultEffort: row.defaultReasoningEffort } : {}),
+            serviceTiers,
+            defaultServiceTier: typeof row.defaultServiceTier === "string" ? row.defaultServiceTier : null,
+            provider: "codex",
           });
           if (row.isDefault === true) defaultModel = row.id;
         }
-        if (!options.length) {
-          finish(null);
-          return;
-        }
-        finish({
-          default: defaultModel && seen.has(defaultModel) ? defaultModel : options[0].id,
+        if (!options.length) return null;
+        // The user's own config outranks the reported default; effort and
+        // service tier follow config when set, else the model's own defaults.
+        const configModel = typeof configured?.model === "string" && seen.has(configured.model) ? configured.model : null;
+        const chosen = configModel ?? (defaultModel && seen.has(defaultModel) ? defaultModel : options[0].id);
+        const chosenRow = options.find((option) => option.id === chosen)!;
+        return {
+          default: {
+            model: chosen,
+            ...(typeof configured?.model_reasoning_effort === "string"
+              ? { effort: configured.model_reasoning_effort }
+              : chosenRow.defaultEffort
+                ? { effort: chosenRow.defaultEffort }
+                : {}),
+            ...(configured?.service_tier !== undefined
+              ? { serviceTier: typeof configured.service_tier === "string" ? configured.service_tier : null }
+              : { serviceTier: chosenRow.defaultServiceTier ?? null }),
+          },
           options,
-        });
+        };
+        }
       }
     });
     child.on("error", () => finish(null));
@@ -430,7 +497,7 @@ export async function readCodexModelCatalog(
 
   return mergeLocalInject(
     {
-      default: configured && seen.has(configured) ? configured : official.default,
+      default: { model: configured && seen.has(configured) ? configured : official.default.model },
       options,
     },
     env,

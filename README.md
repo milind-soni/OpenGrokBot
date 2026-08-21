@@ -70,8 +70,10 @@ already have:
 
 ### 🧠 Pick a brain per bot
 
-A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
-providers dimmed with the reason. Switch a bot's model mid-conversation.
+A model picker with a provider rail — models reported by installed CLIs or supported provider APIs, with their
+configured defaults, effort levels, and processing tiers such as Codex Fast. The cached list stays visible while
+catalogs refresh manually or every five minutes. The server rejects unsupported model, effort, or tier selections
+and only attaches tools to capable models.
 
 <img src="docs/screenshots/model-picker.png" alt="Model picker with provider rail" width="100%">
 

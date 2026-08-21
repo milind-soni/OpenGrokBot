@@ -11,8 +11,7 @@
 // approves everything. Real per-action approval cards are a future path via
 // native ACP (agy issue #31), which would reuse acp/core.ts like grok/gemini.
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
-import { mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
@@ -22,7 +21,6 @@ import { injectedApiModel, mergeLocalInject } from "./local-inject.ts";
 import type { ChildProcess } from "node:child_process";
 import type {
   DriverCreateInput,
-  ModelCatalog,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -40,25 +38,6 @@ export interface AntigravityConfig {
   fullAuto: boolean;
 }
 
-// model catalog from `agy models` (agy 1.1.12)
-export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
-  default: "gemini-3.1-pro-high",
-  options: [
-    { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" },
-    { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)" },
-    // 3.7 ids confirmed against the agy 1.1.12 binary's own model table
-    { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)" },
-    { id: "gemini-3.7-flash-medium", label: "Gemini 3.7 Flash (Medium)" },
-    { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash (Low)" },
-    { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash (High)" },
-    { id: "gemini-3.6-flash-medium", label: "Gemini 3.6 Flash (Medium)" },
-    { id: "gemini-3.6-flash-low", label: "Gemini 3.6 Flash (Low)" },
-    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Thinking)" },
-    { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
-    { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
-  ],
-};
-
 function antigravityEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath() };
   // The harness process may hold workspace credentials injected by the
@@ -67,49 +46,6 @@ function antigravityEnvironment(): NodeJS.ProcessEnv {
   stripWorkspaceCredentialEnv(env);
   return env;
 }
-
-const AGY_MODEL_ID = /^[a-z0-9][a-z0-9._:/-]*$/i;
-
-function extrasFromUnknown(value: unknown): Array<{ id: string; label: string }> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (typeof item === "string") return AGY_MODEL_ID.test(item) ? [{ id: item, label: item }] : [];
-    if (!item || typeof item !== "object") return [];
-    const row = item as { id?: unknown; model?: unknown; name?: unknown; displayName?: unknown };
-    const id = typeof row.id === "string" ? row.id : typeof row.model === "string" ? row.model : "";
-    if (!AGY_MODEL_ID.test(id)) return [];
-    const label = typeof row.name === "string" ? row.name : typeof row.displayName === "string" ? row.displayName : id;
-    return [{ id, label }];
-  });
-}
-
-/** Extra ids from ~/.gemini/antigravity-cli/settings.json, if the user added any. */
-export function readAntigravityModelCatalog(env: Record<string, string | undefined> = process.env) {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(
-      readFileSync(join(home, ".gemini", "antigravity-cli", "settings.json"), "utf8"),
-    ) as Record<string, unknown>;
-  } catch {
-    return STATIC_ANTIGRAVITY_MODELS;
-  }
-  const extras = [
-    ...extrasFromUnknown(settings.availableModels),
-    ...extrasFromUnknown(settings.customModels),
-    ...extrasFromUnknown(settings.extraModels),
-  ];
-  if (typeof settings.model === "string") extras.push(...extrasFromUnknown([settings.model]));
-  const options = STATIC_ANTIGRAVITY_MODELS.options.map((option) => ({ ...option }));
-  const seen = new Set(options.map((option) => option.id));
-  for (const extra of extras) {
-    if (seen.has(extra.id)) continue;
-    seen.add(extra.id);
-    options.push({ id: extra.id, label: extra.label, custom: true });
-  }
-  return { default: STATIC_ANTIGRAVITY_MODELS.default, options };
-}
-
 function decodeConfig(raw: unknown): AntigravityConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (o.cli !== undefined && typeof o.cli !== "string") {
@@ -140,23 +76,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     },
     docsUrl: "https://github.com/google-antigravity/antigravity-cli#installation",
   },
-  models: STATIC_ANTIGRAVITY_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
   async create(input: DriverCreateInput<AntigravityConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const catalogEnv: Record<string, string | undefined> = { ...process.env, ...input.environment };
-    let models = STATIC_ANTIGRAVITY_MODELS;
-    const refreshModels = async () => {
-      try {
-        const resolved = await mergeLocalInject(readAntigravityModelCatalog(catalogEnv), catalogEnv);
-        if (resolved.options.length) models = resolved;
-      } catch {
-        // Keep the last usable catalog when settings.json is unreadable.
-      }
-    };
-    await refreshModels();
     const listeners = new Set<RuntimeEventListener>();
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; turnId: string }>();
@@ -164,6 +88,64 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // hang AFTER emitting `result` (so it's already removed from `active`), and
     // dispose()/stopAll() must still be able to reap it. Removed on process exit.
     const children = new Set<ChildProcess>();
+
+    const catalog = async () =>
+      mergeLocalInject(
+        await new Promise<any>((resolve, reject) => {
+        execCli(
+          config.cli,
+          ["models", "--output-format", "json"],
+          { timeout: 20_000, env: { ...process.env, ...input.environment, PATH: augmentedPath() } },
+          (error, stdout) => {
+            if (error) return reject(error);
+            try {
+              const payload = JSON.parse(stdout);
+              const listed = Array.isArray(payload) ? payload : payload?.models;
+              const options = (Array.isArray(listed) ? listed : [])
+                .map((raw: any) => {
+                  const id = typeof raw === "string" ? raw : raw?.id ?? raw?.model;
+                  if (typeof id !== "string") return null;
+                  const listedEfforts = raw?.efforts ?? raw?.supportedEfforts ?? raw?.supportedReasoningEfforts;
+                  const efforts = (Array.isArray(listedEfforts) ? listedEfforts : [])
+                    .map((effort: any) =>
+                      typeof effort === "string" ? effort : effort?.effort ?? effort?.reasoningEffort ?? effort?.id,
+                    )
+                    .filter((effort: unknown): effort is string => typeof effort === "string");
+                  return {
+                    id,
+                    label: typeof raw?.name === "string" ? raw.name : typeof raw?.displayName === "string" ? raw.displayName : id,
+                    ...(efforts.length ? { efforts } : {}),
+                    ...(typeof raw?.defaultEffort === "string" ? { defaultEffort: raw.defaultEffort } : {}),
+                  };
+                })
+                .filter((option: any): option is NonNullable<typeof option> => option !== null);
+              if (!options.length) throw new Error("Antigravity models returned no models");
+              const requested = typeof payload?.defaultModel === "string"
+                ? payload.defaultModel
+                : listed.find((model: any) => model?.default === true)?.id;
+              const model = requested && options.some((option: any) => option.id === requested)
+                ? requested
+                : options[0].id;
+              const selected = options.find((option: any) => option.id === model)!;
+              resolve({
+                default: {
+                  model,
+                  ...(typeof payload?.defaultEffort === "string"
+                    ? { effort: payload.defaultEffort }
+                    : selected.defaultEffort
+                      ? { effort: selected.defaultEffort }
+                      : {}),
+                },
+                options,
+              });
+            } catch (error) {
+              reject(error);
+            }
+          },
+        );
+        }),
+        { ...process.env, ...input.environment },
+      );
 
     const emit = (event: RuntimeEvent) => {
       for (const l of [...listeners]) l(event);
@@ -259,6 +241,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       ];
       if (!config.fullAuto) args.push("accept-edits");
       if (turn.model) args.push("--model", injectedApiModel(turn.model) ?? turn.model);
+      if (turn.effort) args.push("--effort", turn.effort);
       if (resumeCursor) args.push("--conversation", resumeCursor);
 
       const env = antigravityEnvironment();
@@ -421,10 +404,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      get models() {
-        return models;
-      },
-      refreshModels,
+      catalog,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,

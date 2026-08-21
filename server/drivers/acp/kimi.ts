@@ -10,25 +10,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { execCli } from "../../procs.ts";
+import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import type { ModelCatalog } from "../../contracts.ts";
-import { decodeInjectId, hostApiKey, LOCAL_HOSTS, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
-const STATIC_KIMI_MODELS: ModelCatalog = {
-  default: "kimi-code/k3",
-  options: [
-    { id: "kimi-code/k3", label: "Kimi K3" },
-    { id: "kimi-code/k3-256k", label: "Kimi K3 256K" },
-    { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
-    { id: "kimi-code/kimi-for-coding-highspeed", label: "Kimi for Coding Highspeed" },
-  ],
-};
-
-const SLUG = /^[a-z0-9][a-z0-9._:/-]*$/i;
-const LOCAL_PROVIDER_PREFIXES = LOCAL_HOSTS.map((host) => `${host.id}/`);
-
-function isLocalInjectAlias(slug: string): boolean {
-  return LOCAL_PROVIDER_PREFIXES.some((prefix) => slug.startsWith(prefix));
+function configPath(env: Record<string, string | undefined>) {
+  const dataRoot = env.KIMI_CODE_HOME || join(env.HOME || homedir(), ".kimi-code");
+  return join(dataRoot, "config.toml");
 }
 
 function kimiDataRoot(env: Record<string, string | undefined>): string {
@@ -452,57 +441,10 @@ function stripKimiModelEnv(env: Record<string, string | undefined>): void {
   for (const key of KIMI_MODEL_ENV) delete env[key];
 }
 
-function readKimiModelCatalog(env: Record<string, string | undefined>): ModelCatalog {
-  const dataRoot = kimiDataRoot(env);
-  let text = "";
-  try {
-    text = readFileSync(join(dataRoot, "config.toml"), "utf8");
-  } catch {
-    return STATIC_KIMI_MODELS;
-  }
-  const options = STATIC_KIMI_MODELS.options.map((o) => ({ ...o }));
-  const seen = new Set(options.map((o) => o.id));
-  let current: { slug: string; name?: string } | null = null;
-  const flush = () => {
-    if (!current || !SLUG.test(current.slug) || seen.has(current.slug) || isLocalInjectAlias(current.slug)) {
-      current = null;
-      return;
-    }
-    seen.add(current.slug);
-    options.push({ id: current.slug, label: current.name || current.slug, custom: true });
-    current = null;
-  };
-  for (const line of text.split(/\r?\n/)) {
-    const stripped = line.trim();
-    if ((stripped.startsWith("[model.") || stripped.startsWith("[models.")) && stripped.endsWith("]")) {
-      flush();
-      let inner = stripped.replace(/^\[models?\./, "").slice(0, -1);
-      if (inner.startsWith('"') && inner.endsWith('"')) inner = inner.slice(1, -1);
-      current = { slug: inner };
-      continue;
-    }
-    if (stripped.startsWith("[")) {
-      flush();
-      continue;
-    }
-    if (!stripped || stripped.startsWith("#") || !stripped.includes("=")) continue;
-    const eq = stripped.indexOf("=");
-    const key = stripped.slice(0, eq).trim();
-    let value = stripped.slice(eq + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    if (current && (key === "name" || key === "label") && value) current.name = value;
-  }
-  flush();
-  return { default: STATIC_KIMI_MODELS.default, options };
-}
 
 const support: AcpSupport = {
   driverKind: "kimiAgent",
   displayName: "Kimi",
-  // Aliases from the CLI's own catalog (~/.kimi-code/config.toml
-  // [models."kimi-code/…"] — `kimi provider list` reports the same four).
-  models: STATIC_KIMI_MODELS,
-  resolveModels: (env) => mergeLocalInject(readKimiModelCatalog(env), env),
   defaultCli: "kimi",
   nativeSource: "kimi.acp",
   loginNote: "Kimi Code CLI is not signed in — run `kimi login` in a terminal",
@@ -520,12 +462,17 @@ const support: AcpSupport = {
     signInCommand: "kimi login",
   },
 
-  // -m is a global commander option and must precede the `acp` subcommand
-  // (verified against 0.29.1).
-  resolveTurnModel: (model, env) => (model ? ensureKimiInjectAlias(model, env) : model),
-  spawnArgs: (_config, turn) => {
-    const model = turn.model;
-    return [...(model ? ["-m", model] : []), "acp"];
+  spawnArgs: () => ["acp"],
+
+  applySelection: async (request, sessionId, turn) => {
+    if (turn.model) await request("session/set_model", { sessionId, modelId: turn.model });
+    if (turn.effort) {
+      await request("session/set_config_option", {
+        sessionId,
+        configId: "thinking",
+        value: turn.effort,
+      });
+    }
   },
 
   // Subscription CLI: a leaked Moonshot/Kimi API key must not flip billing
@@ -549,6 +496,60 @@ const support: AcpSupport = {
   // Match the child CLI's own data-root precedence. A custom instance HOME or
   // KIMI_CODE_HOME must not be checked against the server user's home instead.
   isAuthenticated: (env) => existsSync(credentialsPath(env)),
+
+  catalog: async (config, env) =>
+    mergeLocalInject(
+      await new Promise<ModelCatalog>((resolve, reject) => {
+      execCli(config.cli, ["provider", "list", "--json"], { timeout: 20_000, env }, (error, stdout) => {
+        if (error) return reject(error);
+        try {
+          const payload = JSON.parse(stdout);
+          const options = Object.entries(payload?.models ?? {}).map(([id, raw]) => {
+            const model = raw as Record<string, unknown>;
+            const capabilities = Array.isArray(model.capabilities) ? model.capabilities : [];
+            const efforts = Array.isArray(model.supportEfforts)
+              ? model.supportEfforts.filter((effort): effort is string => typeof effort === "string")
+              : [];
+            return {
+              id,
+              label: typeof model.displayName === "string" ? model.displayName : id,
+              ...(efforts.length ? { efforts } : {}),
+              ...(typeof model.defaultEffort === "string" ? { defaultEffort: model.defaultEffort } : {}),
+              toolUse: capabilities.includes("tool_use"),
+            };
+          });
+          if (!options.length) throw new Error("Kimi provider list returned no models");
+          let configured = "";
+          try {
+            configured = readFileSync(configPath(env), "utf8");
+          } catch {
+            // Missing config means the CLI will use its catalog default.
+          }
+          const requestedModel = /^\s*default_model\s*=\s*"([^"]+)"/m.exec(configured)?.[1];
+          const model = requestedModel && options.some((option) => option.id === requestedModel)
+            ? requestedModel
+            : options[0].id;
+          const thinking = /\[thinking\]([\s\S]*?)(?:\n\[|$)/.exec(configured)?.[1] ?? "";
+          const configuredEffort = /^\s*effort\s*=\s*"([^"]+)"/m.exec(thinking)?.[1];
+          const selected = options.find((option) => option.id === model)!;
+          resolve({
+            default: {
+              model,
+              ...(configuredEffort
+                ? { effort: configuredEffort }
+                : selected.defaultEffort
+                  ? { effort: selected.defaultEffort }
+                  : {}),
+            },
+            options,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+      }),
+      env,
+    ),
 
   buildPromptText: (turn) => (turn.system ? `${turn.system}\n\n${turn.text}` : turn.text),
 };

@@ -22,6 +22,16 @@ import { readFileSync, writeFileSync } from "node:fs";
 const mode = process.env.FAKE_CLAUDE_MODE ?? "happy";
 
 const argv = process.argv.slice(2);
+if (argv.includes("--help")) {
+  console.log(`Options:
+  --effort <level>  Effort level (low, medium, high, xhigh, max)
+  --model <model>   Model alias ('fable', 'opus', or 'sonnet')`);
+  process.exit(0);
+}
+if (argv.includes("--version")) {
+  console.log("fake-claude 1.0.0");
+  process.exit(0);
+}
 const argAfter = (flag: string): string | null => {
   const i = argv.indexOf(flag);
   return i === -1 ? null : (argv[i + 1] ?? null);

@@ -28,7 +28,7 @@ describe("OpenCode Go catalog", () => {
       }), { status: 200 }),
     );
 
-    expect(models.default).toBe("opencode-go/minimax-m3");
+    expect(models.default.model).toBe("opencode-go/minimax-m3");
     expect(models.options.filter((option) => !option.custom).map((option) => option.id)).toEqual([
       "opencode-go/minimax-m3",
       "opencode-go/kimi-k3",
@@ -46,11 +46,11 @@ describe("OpenCode Go catalog", () => {
       throw new Error("network down");
     });
 
-    expect(fallback.default).toBe("opencode-go/minimax-m3");
+    expect(fallback.default.model).toBe("opencode-go/minimax-m3");
     expect(fallback.options.some((option) => option.id === "opencode-go/extra-live" && option.custom)).toBe(true);
   });
 
-  it("refreshes the same instance catalog on each explicit refresh", async () => {
+  it("resolves a fresh instance catalog on each request", async () => {
     let calls = 0;
     const driver = createOpenCodeGoDriver(async () => {
       calls += 1;
@@ -65,12 +65,11 @@ describe("OpenCode Go catalog", () => {
       config: driver.defaultConfig(),
     });
 
-    expect(instance.models.default).toBe("opencode-go/minimax-m3");
-    expect(instance.models.options.some((option) => option.custom)).toBe(false);
-    await instance.refreshModels?.();
-    expect(instance.models.options.some((option) => option.id === "opencode-go/extra-two" && option.custom)).toBe(true);
-    await instance.refreshModels?.();
-    expect(instance.models.options.some((option) => option.id === "opencode-go/extra-three" && option.custom)).toBe(true);
+    const initial = await instance.catalog();
+    expect(initial.default.model).toBe("opencode-go/minimax-m3");
+    expect(initial.options.some((option) => option.custom)).toBe(false);
+    const refreshed = await instance.catalog();
+    expect(refreshed.options.some((option) => option.id === "opencode-go/extra-two" && option.custom)).toBe(true);
     await instance.dispose();
   });
 

@@ -5,7 +5,7 @@
 // session/prompt, and streams session/update notifications for a scripted
 // turn. Failure modes mirror how real ACP agents misbehave:
 //
-//   FAKE_ACP_MODE   happy (default) | empty-reply | exit-early | fail-after-text | hang | no-auth | auth-required | permission
+//   FAKE_ACP_MODE   happy (default) | empty-reply | exit-early | crash-on-prompt | fail-after-text | hang | no-auth | auth-required | permission
 //                   | no-session-config (reject session/set_mode + set_model
 //                     with -32601, i.e. an agent predating those methods)
 //                   | ask-peer (spawn the injected "agents" MCP server from
@@ -85,7 +85,28 @@ const dumpEnv = Object.fromEntries(
 );
 const dumpState: Record<string, unknown> = { argv, env: dumpEnv };
 if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));
+  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+}
+// RPC calls seen this run — the dump tests assert on them.
+const calls: Array<{ method: string; params: unknown }> = [];
+dumpState.calls = calls;
+const dump = () => {
+  if (process.env.FAKE_ACP_DUMP) writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+};
+dump();
+// droid's catalog source: `droid exec --help` prints the model table
+if (argv.join(" ") === "exec --help") {
+  if (process.env.FAKE_ACP_HELP_DUMP) writeFileSync(process.env.FAKE_ACP_HELP_DUMP, "called");
+  console.log(`Available Models:
+  auto                         Auto Model
+  claude-opus-5                Opus 5 (default)
+  claude-sonnet-5              Sonnet 5
+
+Model details:
+  - Auto Model: supports reasoning: No; supported: [none]; default: none
+  - Opus 5: supports reasoning: Yes; supported: [low, high, max]; default: high
+  - Sonnet 5: supports reasoning: Yes; supported: [low, medium, high]; default: high`);
+  process.exit(0);
 }
 if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
@@ -109,6 +130,27 @@ if (argv[0] === "models" || argv.includes("--list-models")) {
       "gpt-5.3-codex - Codex 5.3",
       "cursor-live - Cursor Live",
     ].join("\n"),
+  );
+  process.exit(0);
+}
+
+if (argv.join(" ") === "provider list --json") {
+  console.log(
+    JSON.stringify({
+      providers: {},
+      models: {
+        "fake-kimi-1": {
+          displayName: "Fake Kimi One",
+          capabilities: ["thinking", "tool_use"],
+          supportEfforts: ["low", "high"],
+          defaultEffort: "low",
+        },
+        "fake-kimi-2": {
+          displayName: "Fake Kimi Two",
+          capabilities: [],
+        },
+      },
+    }),
   );
   process.exit(0);
 }
@@ -215,6 +257,8 @@ function handle(msg: any) {
   }
   if (!msg.method) return;
   recordMethod(msg.method);
+  calls.push({ method: msg.method, params: msg.params ?? null });
+  dump();
 
   switch (msg.method) {
     case "initialize": {
@@ -223,7 +267,29 @@ function handle(msg: any) {
         process.exit(3);
       }
       const authMethods = mode === "no-auth" ? [] : [{ id: "cached_token" }];
-      result(msg.id, { protocolVersion: 1, authMethods, _meta: { modelState: { currentModelId: "fake-acp-model" } } });
+      result(msg.id, {
+        protocolVersion: 1,
+        authMethods,
+        _meta: {
+          modelState: {
+            currentModelId: "fake-acp-model",
+            availableModels: [
+              {
+                modelId: "fake-acp-model",
+                name: "Fake ACP Model",
+                _meta: {
+                  reasoningEffort: "high",
+                  reasoningEfforts: [
+                    { id: "low", value: "low" },
+                    { id: "high", value: "high" },
+                  ],
+                },
+              },
+              { modelId: "fake-acp-fast", name: "Fake ACP Fast" },
+            ],
+          },
+        },
+      });
       break;
     }
     case "authenticate":
@@ -284,6 +350,18 @@ function handle(msg: any) {
     }
     case "session/set_config_option": {
       const { configId, value } = msg.params ?? {};
+      if (configId === "reasoning_effort" && typeof value === "string") {
+        configCalls.push({ method: msg.method, params: msg.params });
+        if (process.env.FAKE_ACP_DUMP) {
+          writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+        }
+        result(msg.id, { configOptions: [] });
+        break;
+      }
+      if (configId === "thinking" && typeof value === "string") {
+        result(msg.id, { configOptions: [] });
+        break;
+      }
       if (configId !== "model" || !models.includes(value)) {
         out({
           jsonrpc: "2.0",
@@ -300,6 +378,12 @@ function handle(msg: any) {
       break;
     }
     case "session/prompt": {
+      if (mode === "crash-on-prompt") {
+        // initialize answered fine (the catalog probe passes); the crash
+        // lands mid-turn, after the harness already started the session
+        process.stderr.write("fake-acp: simulated crash mid-turn\n");
+        process.exit(3);
+      }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
         setInterval(() => {}, 1_000);

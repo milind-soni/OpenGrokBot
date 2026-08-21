@@ -128,7 +128,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, {
-        modelSelection: { instanceId: "happy", model: "fake-model" },
+        modelSelection: { instanceId: "happy", model: "fake-acp-model" },
       });
 
       // turn 1 settles on the original branch
@@ -180,7 +180,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, {
-        modelSelection: { instanceId: "hang", model: "fake-model" },
+        modelSelection: { instanceId: "hang", model: "fake-acp-model" },
       });
 
       // start a turn that will never finish on its own
@@ -248,7 +248,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, {
-        modelSelection: { instanceId: "happy", model: "fake-model" },
+        modelSelection: { instanceId: "happy", model: "fake-acp-model" },
       });
 
       // turn 1 on the first engine, carrying a token only the transcript knows
@@ -260,7 +260,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
 
       // switch the bot to a second engine that has never seen this thread
       await api("PATCH", `/api/bots/${created.id}`, {
-        modelSelection: { instanceId: "second", model: "fake-model" },
+        modelSelection: { instanceId: "second", model: "fake-acp-model" },
       });
       expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "what is my dog called?" })).status).toBe(202);
       await waitFor(async () => {
@@ -271,7 +271,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       // …and back to the first engine, whose own session is now stale: it
       // has a cursor here, but the second engine took a turn since
       await api("PATCH", `/api/bots/${created.id}`, {
-        modelSelection: { instanceId: "happy", model: "fake-model" },
+        modelSelection: { instanceId: "happy", model: "fake-acp-model" },
       });
       expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "and again?" })).status).toBe(202);
       await waitFor(async () => {

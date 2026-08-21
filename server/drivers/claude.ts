@@ -88,6 +88,17 @@ function claudeEnvironment(
   return env;
 }
 
+/** Rewrite a leftover API slug (`orcarouter/Qwen…`) to `host::model` when a
+ * local host is serving it, so the turn injects instead of asking for /login.
+ * Already-encoded inject ids skip the probe. */
+async function resolveClaudeTurnModel(
+  model: string | null | undefined,
+  env: Record<string, string | undefined>,
+): Promise<string | null | undefined> {
+  if (!model || decodeInjectId(model)) return model;
+  return resolveInjectId(model, await probeLocalInjects(env)) ?? model;
+}
+
 const DRIVER_KIND = "claudeAgent";
 
 export interface ClaudeConfig {
@@ -95,87 +106,10 @@ export interface ClaudeConfig {
   permissionMode: "acceptEdits" | "auto" | "bypassPermissions";
 }
 
-// model catalog ported from upstream packages/contracts/src/model.ts
-export const STATIC_CLAUDE_MODELS: ModelCatalog = {
-  default: "claude-sonnet-5",
-  options: [
-    { id: "claude-fable-5", label: "Claude Fable 5" },
-    { id: "claude-opus-5", label: "Claude Opus 5" },
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
-  ],
-};
+// Proxy paths resolve through the shared proxy-paths module: a local `".."`
+// here would climb from the BUNDLE's directory once esbuild inlines this
+// file (the 0.1.24 RC bug). See server/proxy-paths.ts.
 
-const CLAUDE_MODEL_ID = /^[a-z0-9][a-z0-9._:/-]*$/i;
-
-/** Rewrite a leftover API slug (`orcarouter/Qwen…`) to `host::model` when a
- *  local host is serving it, so the turn injects instead of asking for /login.
- *  Official cloud ids and already-encoded inject ids skip the probe. */
-async function resolveClaudeTurnModel(
-  model: string | null | undefined,
-  env: Record<string, string | undefined>,
-): Promise<string | null | undefined> {
-  if (!model || decodeInjectId(model) || STATIC_CLAUDE_MODELS.options.some((option) => option.id === model)) {
-    return model;
-  }
-  return resolveInjectId(model, await probeLocalInjects(env)) ?? model;
-}
-
-function claudeConfigDir(env: Record<string, string | undefined>): string {
-  if (env.CLAUDE_CONFIG_DIR) return env.CLAUDE_CONFIG_DIR;
-  return join(env.HOME || env.USERPROFILE || homedir(), ".claude");
-}
-
-function extrasFromUnknown(value: unknown): Array<{ id: string; label: string }> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (typeof item === "string") {
-      return CLAUDE_MODEL_ID.test(item) ? [{ id: item, label: item }] : [];
-    }
-    if (!item || typeof item !== "object") return [];
-    const row = item as { id?: unknown; model?: unknown; slug?: unknown; name?: unknown; displayName?: unknown; label?: unknown };
-    const id = [row.id, row.model, row.slug].find((candidate): candidate is string => typeof candidate === "string");
-    if (!id || !CLAUDE_MODEL_ID.test(id)) return [];
-    const label = [row.name, row.displayName, row.label].find((candidate): candidate is string => typeof candidate === "string");
-    return [{ id, label: label || id }];
-  });
-}
-
-/** Extra ids from ~/.claude/settings.json. Official cloud rows stay untagged.
- *  `model` is Claude Code's last-used slug, not a catalog — listing it as
- *  Custom put a non-inject id in the picker and the turn then had no
- *  ANTHROPIC_API_KEY ("Not logged in · Please run /login"). Live injects
- *  come from mergeLocalInject. */
-export function readClaudeModelCatalog(env: Record<string, string | undefined> = process.env) {
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(readFileSync(join(claudeConfigDir(env), "settings.json"), "utf8")) as Record<string, unknown>;
-  } catch {
-    return STATIC_CLAUDE_MODELS;
-  }
-
-  const extras = [
-    ...extrasFromUnknown(settings.availableModels),
-    ...extrasFromUnknown(settings.customModels),
-    ...extrasFromUnknown(settings.extraModels),
-  ];
-  const nestedEnv = settings.env && typeof settings.env === "object" ? (settings.env as Record<string, unknown>) : {};
-  const envModel = nestedEnv.ANTHROPIC_MODEL ?? env.ANTHROPIC_MODEL;
-  if (typeof envModel === "string") extras.push(...extrasFromUnknown([envModel]));
-
-  const options = STATIC_CLAUDE_MODELS.options.map((option) => ({ ...option }));
-  const seen = new Set(options.map((option) => option.id));
-  for (const extra of extras) {
-    if (seen.has(extra.id)) continue;
-    seen.add(extra.id);
-    options.push({ id: extra.id, label: extra.label, custom: true });
-  }
-  return { default: STATIC_CLAUDE_MODELS.default, options };
-}
-
-// Resolved from the server root, never relative to this file: bundling inlines
-// this module into an entry one directory up, so a `".."` here would climb too
-// far. See server/proxy-paths.ts.
 const PROXY_PATH = SPAWNED_PROXIES.computer;
 const PERM_PROXY_PATH = SPAWNED_PROXIES.permission;
 const DWEB_PROXY_PATH = SPAWNED_PROXIES.dweb;
@@ -237,6 +171,55 @@ export function permissionSocketPath(threadId: string) {
   const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
   const digest = createHash("sha256").update(threadId).digest("hex").slice(0, 4);
   return brokerSocketPath(DATA_DIR, `${prefix}${digest}`);
+}
+
+function readClaudeCatalog(cli: string, environment: Record<string, string>): Promise<ModelCatalog> {
+  const env: Record<string, string | undefined> = { ...process.env, ...environment, PATH: augmentedPath() };
+  return new Promise((resolve, reject) => {
+    execCli(cli, ["--help"], { timeout: 20_000, env }, (error, stdout) => {
+      if (error) return reject(error);
+      try {
+        const modelBlock = /--model <model>([\s\S]*?)(?=\n\s{2,}--|\nCommands:|$)/.exec(stdout)?.[1] ?? "";
+        const aliases = [...modelBlock.matchAll(/['"]([a-zA-Z0-9._/-]+)['"]/g)].map((match) => match[1]);
+        const effortBlock = /--effort <level>([\s\S]*?)(?=\n\s{2,}--|\nCommands:|$)/.exec(stdout)?.[1] ?? "";
+        const efforts = /\(([^)]+)\)/
+          .exec(effortBlock)?.[1]
+          ?.split(",")
+          .map((effort) => effort.trim())
+          .filter(Boolean) ?? [];
+        let settings: Record<string, unknown> = {};
+        const configDir = env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude");
+        try {
+          settings = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+        } catch {
+          // Missing settings means Claude owns the effective default.
+        }
+        const configuredModel = typeof settings.model === "string" ? settings.model : "";
+        if (configuredModel && !aliases.includes(configuredModel)) aliases.push(configuredModel);
+        const ids = [...new Set(aliases)];
+        if (!ids.length) throw new Error("Claude CLI help returned no model aliases");
+        resolve({
+          default: {
+            model: configuredModel,
+            ...(typeof settings.effortLevel === "string" ? { effort: settings.effortLevel } : {}),
+          },
+          options: [
+            ...(!configuredModel
+              ? [{ id: "", label: "CLI default", ...(efforts.length ? { efforts } : {}) }]
+              : []),
+            ...ids.map((id) => ({
+              id,
+              label: id.charAt(0).toUpperCase() + id.slice(1),
+              ...(efforts.length ? { efforts } : {}),
+              provider: "claude-code",
+            })),
+          ],
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 function createPermissionBroker(opts: {
@@ -413,23 +396,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     docsUrl: "https://claude.com/claude-code",
     signInCommand: "claude",
   },
-  models: STATIC_CLAUDE_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const catalogEnv: Record<string, string | undefined> = { ...process.env, ...input.environment };
-    let models = STATIC_CLAUDE_MODELS;
-    const refreshModels = async () => {
-      try {
-        const resolved = await mergeLocalInject(readClaudeModelCatalog(catalogEnv), catalogEnv);
-        if (resolved.options.length) models = resolved;
-      } catch {
-        // Keep the last usable catalog when settings.json is unreadable.
-      }
-    };
-    await refreshModels();
     const listeners = new Set<RuntimeEventListener>();
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; turnId: string; broker?: ReturnType<typeof createPermissionBroker> }>();
@@ -912,10 +883,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      get models() {
-        return models;
-      },
-      refreshModels,
+      catalog: async () =>
+        mergeLocalInject(
+          await readClaudeCatalog(config.cli, input.environment),
+          { ...process.env, ...input.environment },
+        ),
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
@@ -926,7 +898,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           composioMcp: true,
           phoneMcp: true,
           images: true,
-          effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
         },

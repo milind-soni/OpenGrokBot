@@ -57,10 +57,10 @@ describe("decodeCodexSelection", () => {
 });
 
 describe("readCodexModelCatalog", () => {
-  it("returns the static cloud fallback when there is no config or CLI probe", async () => {
-    expect(await readCodexModelCatalog({ HOME: join(tmpdir(), "omb-codex-missing-home") })).toEqual(
-      STATIC_CODEX_MODELS,
-    );
+  it("returns the static cloud trio when there is no config", async () => {
+    const catalog = await readCodexModelCatalog({ HOME: join(tmpdir(), "omb-codex-missing-home") });
+    expect(catalog.default.model).toBe(STATIC_CODEX_MODELS.default.model);
+    expect(catalog.options).toEqual(STATIC_CODEX_MODELS.options);
   });
 
   it("uses every visible page from the installed Codex app-server catalog", async () => {
@@ -72,10 +72,26 @@ describe("readCodexModelCatalog", () => {
     );
 
     expect(catalog).toEqual({
-      default: "gpt-fake-default",
+      default: { model: "fake-codex-1", effort: "high", serviceTier: "fast" },
       options: [
-        { id: "gpt-fake-default", label: "GPT Fake Default" },
-        { id: "gpt-page-two", label: "GPT Page Two" },
+        {
+          id: "fake-codex-1",
+          label: "Fake Codex One",
+          efforts: ["low", "high"],
+          defaultEffort: "low",
+          serviceTiers: [{ id: "fast", label: "Fast" }],
+          defaultServiceTier: null,
+          provider: "codex",
+        },
+        {
+          id: "fake-codex-2",
+          label: "Fake Codex Two",
+          efforts: ["high"],
+          defaultEffort: "high",
+          serviceTiers: [],
+          defaultServiceTier: null,
+          provider: "codex",
+        },
       ],
     });
   });
@@ -103,7 +119,7 @@ model = "GLM-5.2-mxfp4"
       throw new Error("live probe should not be required");
     });
 
-    expect(catalog.default).toBe(encodeCodexSelection("omlx", "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning"));
+    expect(catalog.default.model).toBe(encodeCodexSelection("omlx", "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning"));
     expect(catalog.options.slice(0, STATIC_CODEX_MODELS.options.length)).toEqual(STATIC_CODEX_MODELS.options);
     expect(catalog.options.filter((option) => option.custom).map((option) => option.id)).toEqual([
       encodeCodexSelection("omlx", "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning"),
@@ -126,13 +142,13 @@ name = "oMLX"
     const catalog = await readCodexModelCatalog({ HOME: home });
     const local = encodeCodexSelection("omlx", "gpt-5.4");
 
-    expect(catalog.default).toBe(local);
+    expect(catalog.default.model).toBe(local);
     expect(catalog.options).toContainEqual({
       id: local,
       label: "gpt-5.4 (oMLX)",
       custom: true,
     });
-    expect(decodeCodexSelection(catalog.default)).toEqual({
+    expect(decodeCodexSelection(catalog.default.model)).toEqual({
       model: "gpt-5.4",
       modelProvider: "omlx",
     });
@@ -186,7 +202,7 @@ name = "oMLX"
 `,
     });
     const catalog = await readCodexModelCatalog({ HOME: home });
-    expect(catalog.default).toBe("gpt-5.6-sol");
+    expect(catalog.default.model).toBe("gpt-5.6-sol");
     expect(catalog.options.every((option) => !option.custom)).toBe(true);
   });
 });
@@ -211,8 +227,8 @@ name = "oMLX"
       config: { ...CodexDriver.defaultConfig(), cli: FAKE_CLI },
     });
     try {
-      expect(instance.models.options.some((option) => option.id === "omlx::MiniMax-M3-4bit" && option.custom)).toBe(true);
-      expect(instance.refreshModels).toEqual(expect.any(Function));
+      const catalog = await instance.catalog();
+      expect(catalog.options.some((option) => option.id === "omlx::MiniMax-M3-4bit" && option.custom)).toBe(true);
     } finally {
       await instance.dispose();
     }

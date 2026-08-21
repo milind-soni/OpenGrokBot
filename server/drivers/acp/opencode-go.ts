@@ -9,15 +9,16 @@ import { createAcpDriver, type AcpSupport } from "./core.ts";
 import type { ModelCatalog, ProviderErrorCode } from "../../contracts.ts";
 
 const CATALOG_URL = "https://opencode.ai/zen/go/v1/models";
+// Offline/first-fetch fallback so the picker has something to show before the
+// catalog API answers; fetched models are appended as custom entries.
 const STATIC_MODELS: ModelCatalog = {
-  default: "opencode-go/minimax-m3",
+  default: { model: "opencode-go/minimax-m3" },
   options: [
     { id: "opencode-go/minimax-m3", label: "Minimax M3" },
     { id: "opencode-go/kimi-k3", label: "Kimi K3" },
     { id: "opencode-go/glm-5.2", label: "GLM 5.2" },
   ],
 };
-
 let lastSuccessfulCatalog: ModelCatalog | null = null;
 
 function labelForModel(id: string): string {
@@ -64,8 +65,10 @@ export async function fetchOpenCodeGoModels(fetcher: typeof fetch = fetch): Prom
     } finally {
       clearTimeout(timeout);
     }
-  } catch {
-    return lastSuccessfulCatalog ?? STATIC_MODELS;
+  } catch (error) {
+    if (lastSuccessfulCatalog) return lastSuccessfulCatalog;
+    if (error instanceof Error && error.name === "AbortError") return STATIC_MODELS;
+    throw error;
   }
 }
 
@@ -206,7 +209,6 @@ function hasStoredOpenCodeGoAuth(env: Record<string, string | undefined>) {
 const support = (fetcher: typeof fetch): AcpSupport => ({
   driverKind: "opencodeGo",
   displayName: "OpenCode Go",
-  models: STATIC_MODELS,
   defaultCli: "opencode",
   nativeSource: "opencode-go.acp",
   loginNote:
@@ -230,7 +232,9 @@ const support = (fetcher: typeof fetch): AcpSupport => ({
   authFailure: "continue",
   isAuthenticated: (env) => Boolean(env.OPENCODE_API_KEY) || hasStoredOpenCodeGoAuth(env),
   classifyError: classifyOpenCodeGoError,
-  resolveModels: async (environment) => mergeLocalInject(await fetchOpenCodeGoModels(fetcher), environment),
+  // catalog (not resolveModels): the remote models API is the primary source,
+  // so the picker must never wait on an ACP probe of the optional CLI.
+  catalog: async (_config, environment) => mergeLocalInject(await fetchOpenCodeGoModels(fetcher), environment),
   buildPromptText: (turn) => turn.system ? `${turn.system}\n\n${turn.text}` : turn.text,
 });
 

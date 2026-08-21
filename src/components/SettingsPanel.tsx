@@ -547,38 +547,82 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             <ModelPicker bot={bot} />
           </div>
 
-          {!!engine?.capabilities?.effortLevels?.length && (
-            <div className="rounded-xl bg-card p-4">
-              <div className="text-[15px] font-medium text-ink">Effort</div>
-              {/* Says what the app does, not what the engine ends up at:
-                  Codex applies a level to the whole thread and has no way to
-                  take one back, so "currently: engine default" was a promise
-                  we could not keep for a thread that had already been sent
-                  one. Sending nothing is true on every engine. */}
-              <div className="mt-0.5 text-[13px] text-ink-secondary">
-                How hard this bot thinks{bot.modelSelection.effort ? "" : " (Default: no level is sent)"}
+          {(() => {
+            // capabilities come from the selected model's catalog row, not a
+            // static per-driver list — the CLI is the source of truth
+            const option = engine?.models.options.find((o) => o.id === bot.modelSelection.model);
+            const efforts = option?.efforts ?? [];
+            const tiers = option?.serviceTiers ?? [];
+            if (!efforts.length && !tiers.length) return null;
+            return (
+              <div className="rounded-xl bg-card p-4">
+                {!!efforts.length && (
+                  <>
+                    <div className="text-[15px] font-medium text-ink">Effort</div>
+                    {/* Says what the app does, not what the engine ends up at:
+                        Codex applies a level to the whole thread and has no way
+                        to take one back. Sending nothing is true on every engine. */}
+                    <div className="mt-0.5 text-[13px] text-ink-secondary">
+                      How hard this bot thinks{bot.modelSelection.effort ? "" : " (Default: no level is sent)"}
+                    </div>
+                    <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
+                      {([undefined, ...efforts] as const).map((level, i) => (
+                        <button
+                          key={level ?? "default"}
+                          aria-pressed={bot.modelSelection.effort === level}
+                          onClick={() => patch({ modelSelection: { ...bot.modelSelection, effort: level } })}
+                          className={cn(
+                            "flex-1 py-1.5 text-[13px] capitalize",
+                            i > 0 && "border-l border-hairline/40",
+                            bot.modelSelection.effort === level
+                              ? "bg-raised text-ink"
+                              : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
+                          )}
+                        >
+                          {level ?? "Default"}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {!!tiers.length && (
+                  <div className={cn(!!efforts.length && "mt-4")}>
+                    <div className="text-[15px] font-medium text-ink">Processing</div>
+                    <div className="mt-0.5 text-[13px] text-ink-secondary">
+                      Priority handling of this bot's turns
+                    </div>
+                    <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
+                      {(["standard", ...tiers.map((tier) => tier.id)] as const).map((tier, i) => (
+                        <button
+                          key={tier}
+                          aria-pressed={(bot.modelSelection.serviceTier ?? "standard") === tier}
+                          onClick={() =>
+                            patch({
+                              modelSelection: {
+                                ...bot.modelSelection,
+                                serviceTier: tier === "standard" ? null : tier,
+                              },
+                            })
+                          }
+                          className={cn(
+                            "flex-1 py-1.5 text-[13px]",
+                            i > 0 && "border-l border-hairline/40",
+                            (bot.modelSelection.serviceTier ?? "standard") === tier
+                              ? "bg-raised text-ink"
+                              : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
+                          )}
+                        >
+                          {tier === "standard"
+                            ? "Standard"
+                            : (tiers.find((t) => t.id === tier)?.label ?? tier)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
-                {([undefined, ...engine.capabilities.effortLevels] as const).map((level, i) => (
-                  <button
-                    key={level ?? "default"}
-                    aria-pressed={bot.modelSelection.effort === level}
-                    onClick={() => patch({ modelSelection: { ...bot.modelSelection, effort: level } })}
-                    className={cn(
-                      "flex-1 py-1.5 text-[13px] capitalize",
-                      i > 0 && "border-l border-hairline/40",
-                      bot.modelSelection.effort === level
-                        ? "bg-raised text-ink"
-                        : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
-                    )}
-                  >
-                    {/* the others capitalize cleanly; "xhigh" would read "Xhigh" */}
-                    {level === "xhigh" ? "X-High" : (level ?? "Default")}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>

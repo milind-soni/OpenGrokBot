@@ -54,7 +54,7 @@ describe("decodeCursorModelCatalog", () => {
         "gpt-5.3-codex",
       ],
     });
-    expect(catalog?.default).toBe("composer-2.5");
+    expect(catalog?.default?.model).toBe("composer-2.5");
     expect(catalog?.options.slice(0, STATIC_CURSOR_MODELS.options.length)).toEqual(STATIC_CURSOR_MODELS.options);
     expect(catalog?.options).toContainEqual({ id: "cursor-live", label: "Cursor Live" });
     expect(catalog?.options.some((option) => option.id === "bad id")).toBe(false);
@@ -87,14 +87,14 @@ auto - Auto (default)
 composer-2.5 - Composer 2.5 (current)
 cursor-text - Cursor Text
 `);
-    expect(catalog?.default).toBe("auto");
+    expect(catalog?.default?.model).toBe("auto");
     expect(catalog?.options).toContainEqual({ id: "cursor-text", label: "Cursor Text" });
     expect(catalog?.options).toContainEqual({ id: "composer-2.5", label: "Composer 2.5" });
   });
 
   it("falls back to the first parsed id when static default is absent", () => {
     const catalog = decodeCursorModelText("cursor-only - Cursor Only");
-    expect(catalog?.default).toBe("cursor-only");
+    expect(catalog?.default?.model).toBe("cursor-only");
   });
 });
 
@@ -145,8 +145,9 @@ describe("CursorAgentDriver", () => {
       config: { cli: FAKE_CLI, fullAuto: false },
     });
     try {
-      expect(instance.models.options.some((option) => option.id === "cursor-live")).toBe(true);
-      expect(instance.models.default).toBe("auto");
+      const catalog = await instance.catalog();
+      expect(catalog.options.some((option) => option.id === "cursor-live")).toBe(true);
+      expect(catalog.default.model).toBe("auto");
     } finally {
       await instance.dispose();
     }

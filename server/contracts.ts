@@ -29,24 +29,14 @@ export class ProviderError extends Error {
   }
 }
 
-/** Reasoning-effort levels, ascending. A union of everything any engine
- * accepts; each driver declares the subset its CLI will take. */
-export const EFFORT_LEVELS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
-export type EffortLevel = (typeof EFFORT_LEVELS)[number];
-
-/** Narrow untrusted API/config input before it becomes a model selection. */
-export function isEffortLevel(value: unknown): value is EffortLevel {
-  return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
-}
-
 // ── model selection ────────────────────────────────────────────────────
 // "Which model" is a data value carried on the request, never a service
 // binding (upstream ModelSelectionWire). instanceId is the routing key.
 export interface ModelSelection {
   instanceId: InstanceId;
   model: string;
-  /** Optional: no effort means no flag, and the CLI keeps its own default. */
-  effort?: EffortLevel;
+  effort?: string;
+  serviceTier?: string | null;
 }
 
 // ── instance configuration envelope ────────────────────────────────────
@@ -143,7 +133,10 @@ export interface SendTurnInput {
   threadId: ThreadId;
   text: string;
   model?: string;
-  effort?: EffortLevel;
+  effort?: string;
+  serviceTier?: string | null;
+  /** Explicit remote harness provider. Never infer it from a model id. */
+  modelProvider?: string;
   resumeCursor?: unknown;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
@@ -218,10 +211,6 @@ export interface ProviderAdapter {
      * attachment an engine cannot open (a bot told it has an image it
      * cannot read burns the turn). */
     images?: boolean;
-    /** Effort levels this driver can pass to its CLI, ascending. Absent =
-     * the driver cannot set effort, so the app never offers the control —
-     * same rule as computerMcp: never show a knob the driver cannot turn. */
-    effortLevels?: readonly EffortLevel[];
     /** True when the driver keeps a live session across turns and can take
      * a user message MID-TURN (delivered before the model's next call —
      * "steer"). The composer stays open during a turn on such an engine;
@@ -291,17 +280,24 @@ export interface EngineInstall {
 // Failures must reject, never throw synchronously — the registry downgrades
 // a rejection to an unavailable shadow snapshot.
 export interface ModelCatalog {
-  default: string;
+  default: Omit<ModelSelection, "instanceId">;
   options: Array<{
     id: string;
     label: string;
     custom?: boolean;
     loaded?: boolean;
+    efforts?: string[];
+    defaultEffort?: string;
+    serviceTiers?: Array<{ id: string; label: string }>;
+    defaultServiceTier?: string | null;
+    toolUse?: boolean;
+    provider?: string;
     /** total context window in tokens, when the driver knows it — sizes
      * the model-facing rebuild (server/context-rebuild.ts). Unknown falls
      * back to a pattern table over the model id, then a conservative default. */
     contextWindow?: number;
   }>;
+  error?: string;
 }
 
 export interface DriverCreateInput<Config> {
@@ -317,9 +313,7 @@ export interface ProviderInstance {
   readonly driverKind: DriverKind;
   readonly displayName: string | undefined;
   readonly enabled: boolean;
-  readonly models: ModelCatalog;
-  /** Refresh a live catalog without recreating the provider instance. */
-  readonly refreshModels?: () => Promise<void>;
+  catalog(): Promise<ModelCatalog>;
   readonly adapter: ProviderAdapter;
   snapshot(): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
@@ -345,7 +339,6 @@ export interface ProviderDriver<Config = unknown> {
   /** Decode the opaque config envelope; throw on invalid (→ shadow). */
   decodeConfig(raw: unknown): Config;
   defaultConfig(): Config;
-  readonly models: ModelCatalog;
   create(input: DriverCreateInput<Config>): Promise<ProviderInstance>;
 }
 

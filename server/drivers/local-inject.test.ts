@@ -181,7 +181,7 @@ describe("loadedIdsFromPayloads", () => {
 describe("mergeLocalInject", () => {
   it("marks oMLX /v1/models/status loaded rows, not the default_model", async () => {
     const catalog = await mergeLocalInject(
-      { default: "keep", options: [{ id: "keep", label: "Keep" }] },
+      { default: { model: "keep" }, options: [{ id: "keep", label: "Keep" }] },
       { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
       async (url) => {
         const href = String(url);
@@ -226,7 +226,7 @@ describe("mergeLocalInject", () => {
 
   it("appends live host models as custom without touching official rows", async () => {
     const catalog = await mergeLocalInject(
-      { default: "claude-sonnet-5", options: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }] },
+      { default: { model: "claude-sonnet-5" }, options: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }] },
       { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
       async (url) => {
         if (String(url).includes(":8080")) {
@@ -243,7 +243,7 @@ describe("mergeLocalInject", () => {
   it("drops a leftover custom API id that a live inject already covers", async () => {
     const catalog = await mergeLocalInject(
       {
-        default: "claude-sonnet-5",
+        default: { model: "claude-sonnet-5" },
         options: [
           { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
           { id: "orcarouter/Qwen3.8-27B-Uncensored-GGUF", label: "orcarouter/Qwen3.8-27B-Uncensored-GGUF", custom: true },
@@ -1028,7 +1028,8 @@ describe("live Custom lists on every local CLI harness", () => {
         }),
       );
       for (const instance of instances) {
-        expect(instance.models.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(
+        const catalog = await instance.catalog();
+        expect(catalog.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(
           true,
         );
       }

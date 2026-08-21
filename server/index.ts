@@ -60,7 +60,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import type { ModelSelection, RequestOutcome, RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -70,6 +70,7 @@ import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { modelSupportsTools, selectedModel } from "./models.ts";
 import {
   mentionedBots,
   roomResponders,
@@ -242,16 +243,16 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, from
 // default selection for new bots: first available instance, claude preferred
 async function defaultSelection() {
   const described = await registry.describe();
-  const available = described.filter((d) => d.snapshot.state === "available");
+  const available = described.filter((d) => d.snapshot.state === "available" && d.models.options.length > 0);
   // Deliberately NO fallback to described[0]. Handing a bot an engine whose
   // CLI isn't installed makes it look ready and then fail on send with a raw
   // spawn ENOENT — the single worst first-run experience, and the one every
   // user with no CLIs used to get. An empty selection is honest: the UI shows
   // the setup path instead of a bot that cannot answer.
   const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0];
-  return { instanceId: pick?.instanceId ?? "", model: pick?.models.default ?? "" };
+  return { instanceId: pick?.instanceId ?? "", ...(pick?.models.default ?? { model: "" }) };
 }
-let bootSelection = { instanceId: "", model: "" };
+let bootSelection: ModelSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
@@ -1313,9 +1314,16 @@ async function startTurn(
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.connectorContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
+  const sourceInstance = registry.get(bot.modelSelection.instanceId);
+  if (!sourceInstance) {
+    throw Object.assign(
+      new Error(`provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`),
+      { status: 409 },
+    );
+  }
   const instance = opts?.runOn === "cloud"
     ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
-    : registry.get(bot.modelSelection.instanceId);
+    : sourceInstance;
   if (!instance) {
     throw Object.assign(
       new Error(
@@ -1326,19 +1334,20 @@ async function startTurn(
       { status: 409 },
     );
   }
+  let modelOption;
+  try {
+    modelOption = selectedModel(bot.modelSelection, await sourceInstance.catalog());
+  } catch (error) {
+    throw Object.assign(new Error(error instanceof Error ? error.message : String(error)), { status: 409 });
+  }
+  if (opts?.runOn === "cloud" && !modelOption.provider) {
+    throw Object.assign(new Error(`model "${bot.modelSelection.model}" cannot run on the cloud computer`), { status: 409 });
+  }
   const instanceId = instance.instanceId;
-  const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  const model = bot.modelSelection.model;
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
   const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
-  // A selection can be persisted while its engine is offline. Re-check when
-  // the engine returns so an old or unsupported value never reaches a CLI.
-  if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
-    throw Object.assign(
-      new Error(`effort "${effort}" is not offered by this bot's engine — choose another level in settings`),
-      { status: 409 },
-    );
-  }
 
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
@@ -1440,10 +1449,13 @@ async function startTurn(
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
+      // The catalog's toolUse row gates both mounts: never tell a bot it has
+      // a computer its model cannot drive.
+      const supportsTools = modelSupportsTools(modelOption);
       const cloudBackend = opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
-      const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
-      const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
-      const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
+      const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true && supportsTools;
+      const mountsCloudComputer = (mountsComputerMcp || instance.driverKind === "boxAgent") && supportsTools;
+      const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true && supportsTools;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
       let computerKind: "box" | "vps" | "vm" | "local" | null = null;
 
@@ -1590,6 +1602,7 @@ async function startTurn(
       if (
         commsDepth < MAX_COMMS_DEPTH &&
         instance.adapter.capabilities.agentsMcp === true &&
+        supportsTools &&
         store.bots.filter((b) => b.id !== bot.id && !b.hidden).length > 0
       ) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
@@ -1617,6 +1630,8 @@ async function startTurn(
         text: turnText,
         model,
         effort,
+        serviceTier: bot.modelSelection.serviceTier,
+        modelProvider: modelOption.provider,
         // a rewound thread never resumes the abandoned branch's session
         // the active task's own session — another task's cursor would
         // resume the wrong conversation and defeat the context bubble
@@ -1864,6 +1879,20 @@ async function runGroupMemberTurn(
     return true;
   }
   store.setActivity(bot.id, "working");
+  let modelOption;
+  try {
+    modelOption = selectedModel(bot.modelSelection, await instance.catalog());
+  } catch (error) {
+    const failure = store.appendMessage(group.threadId, {
+      role: "bot",
+      kind: "activity",
+      from: { botId: bot.id, name: bot.name, color: bot.color },
+      tool: { name: `error: ${error instanceof Error ? error.message.slice(0, 140) : "model unavailable"}`, ok: false },
+    });
+    broadcast({ kind: "message", threadId: group.threadId, message: failure });
+    store.setActivity(bot.id, "idle");
+    return false;
+  }
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
   groupSpeakers.set(group.threadId, { botId: bot.id, name: bot.name, color: bot.color });
@@ -1945,6 +1974,7 @@ async function runGroupMemberTurn(
         cwd,
         integrations,
         ...memberTurnSelection(bot.modelSelection),
+        modelProvider: modelOption.provider,
       })
       .catch((err) => {
         store.appendMessage(group.threadId, {
@@ -3299,34 +3329,6 @@ const server = createServer(async (req, res) => {
     if (m && method === "PATCH") {
       const body = await readBody(req);
       const existingBot = store.bot(m[1]);
-      // Neither Codex (free-form string field) nor Grok (lazy, logs-only)
-      // rejects an unknown effort level at their own boundary — this is the
-      // only real gate, so it stays. But it fires only when the target
-      // instance actually resolves. An instance that isn't there declares no
-      // levels, and rejecting against that empty list would 400 the *whole*
-      // request: this is the app's general-purpose bot endpoint, and
-      // duplicateBot re-sends the source bot's entire modelSelection beside
-      // its name, title and description, so a source engine that happens to
-      // be offline would cost the copy all of them. Letting it through is
-      // safe — startTurn refuses to run a turn on an unavailable instance
-      // anyway, so an unverifiable level never reaches a CLI.
-      const nextSelection = (body as Record<string, unknown>).modelSelection as
-        | { instanceId?: string; effort?: string }
-        | undefined;
-      if (nextSelection?.effort !== undefined) {
-        if (!isEffortLevel(nextSelection.effort)) {
-          return json(res, 400, { error: `effort "${String(nextSelection.effort)}" is not recognized` });
-        }
-        const target = registry.get(nextSelection.instanceId ?? existingBot?.modelSelection.instanceId ?? "");
-        // typed as strings, not levels: this is the boundary that decides
-        // whether the value *is* a level, so it must not assert that it is
-        const allowed: readonly string[] = target?.adapter.capabilities.effortLevels ?? [];
-        if (target && !allowed.includes(nextSelection.effort)) {
-          return json(res, 400, {
-            error: `effort "${nextSelection.effort}" is not offered by this bot's engine`,
-          });
-        }
-      }
       // Persona/profile fields reach prompts and paired clients. Both this
       // broad desktop endpoint and the paired-safe profile endpoint pass
       // through the same validation and clear-value normalization.
@@ -3351,6 +3353,53 @@ const server = createServer(async (req, res) => {
       for (const key of ["modelSelection", "unread", "computer", "cloudBackend", "color", "mascotExpression", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
+      if (body.modelSelection !== undefined) {
+        const raw = body.modelSelection as Record<string, unknown>;
+        if (
+          !raw ||
+          typeof raw !== "object" ||
+          typeof raw.instanceId !== "string" ||
+          typeof raw.model !== "string" ||
+          (raw.effort !== undefined && typeof raw.effort !== "string") ||
+          (raw.serviceTier !== undefined && raw.serviceTier !== null && typeof raw.serviceTier !== "string")
+        ) {
+          return json(res, 400, { error: "invalid model selection" });
+        }
+        // An offline/unknown instance is persistable: users pre-configure
+        // engines before first use, and duplicateBot re-sends a whole
+        // selection next to persona fields. startTurn is the loud gate —
+        // it refuses to run a turn on an instance that cannot answer.
+        const selectedInstance = registry.get(raw.instanceId) ?? null;
+        const selection: ModelSelection = {
+          instanceId: raw.instanceId,
+          model: raw.model,
+          ...(typeof raw.effort === "string" ? { effort: raw.effort } : {}),
+          ...(raw.serviceTier !== undefined ? { serviceTier: raw.serviceTier as string | null } : {}),
+        };
+        // A selection can be persisted while its engine is offline. The catalog
+        // then cannot answer, and 400ing the *whole* request would cost a
+        // duplicateBot its name/title/description too — startTurn refuses to
+        // run on an unavailable instance anyway, so an unverifiable value
+        // never reaches a CLI.
+        let catalog = null;
+        try {
+          if (selectedInstance) catalog = await selectedInstance.catalog();
+        } catch {
+          catalog = null;
+        }
+        // A catalog carrying `error` is a fallback the engine could not
+        // confirm (probe failure) — same as no catalog: unverifiable, and
+        // startTurn remains the real gate.
+        if (catalog && !catalog.error) {
+          try {
+            selectedModel(selection, catalog);
+          } catch (error) {
+            return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+        patch.modelSelection = selection;
+      }
+
       // one pinned message per thread; null/"" clears. The id is not
       // validated against the transcript here — a pin whose message was
       // edited to another branch or deleted simply resolves to nothing.

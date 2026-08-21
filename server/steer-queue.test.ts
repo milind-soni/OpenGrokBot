@@ -171,7 +171,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
 
   const newBot = async (instanceId: string, name: string) => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    await api("PATCH", `/api/bots/${bot.id}`, { name, modelSelection: { instanceId, model: "fake-model" } });
+    await api("PATCH", `/api/bots/${bot.id}`, { name, modelSelection: { instanceId, model: "fake-acp-model" } });
     return bot;
   };
 

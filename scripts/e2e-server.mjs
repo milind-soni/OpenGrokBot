@@ -84,13 +84,13 @@ async function waitAskOrSettle(botId, budgetMs) {
   }
 }
 
-async function makeBot(name, instanceId, model) {
+async function makeBot(name, instanceId, selection) {
   const { bot } = await api("/api/bots", { method: "POST", body: "{}" });
   const patched = await api(`/api/bots/${bot.id}`, {
     method: "PATCH",
-    body: JSON.stringify({ name, modelSelection: { instanceId, model } }),
+    body: JSON.stringify({ name, modelSelection: { instanceId, ...selection } }),
   });
-  log(`bot "${name}" created (${patched.bot.id.slice(0, 8)}) on ${instanceId}/${model}`);
+  log(`bot "${name}" created (${patched.bot.id.slice(0, 8)}) on ${instanceId}/${selection.model || "CLI default"}`);
   return patched.bot;
 }
 
@@ -192,25 +192,9 @@ async function main() {
 
     // ── codex: plain turn ──
     if (byKind.codex?.snapshot.state === "available") {
-      // the catalog targets the newest CLI; older installs reject newer
-      // model ids ("requires a newer version of Codex") — walk the catalog
-      // until one answers
-      let answered = false;
-      for (const optn of byKind.codex.models.options) {
-        const bot = await makeBot(`E2E Codex ${optn.id}`, "codex", optn.id);
-        created.push(bot.id);
-        const want = marker("codex");
-        await send(bot.id, `Reply with exactly this token and nothing else: ${want}`);
-        const settled = await waitTurnDone(bot.id, 300_000);
-        if (settled.messages.find((m) => m.role === "bot" && m.kind === "text" && m.text?.includes(want))) {
-          log(`  ✓ E2E Codex replied on ${optn.id}`);
-          answered = true;
-          break;
-        }
-        const err = [...settled.messages].reverse().find((m) => m.kind === "activity" && /error/i.test(m.tool?.name ?? ""));
-        log(`  codex on ${optn.id} failed${err ? ` (${err.tool.name.slice(6, 100)})` : ""} — trying next catalog model`);
-      }
-      if (!answered) fail("codex answered on no catalog model");
+      const bot = await makeBot("E2E Codex", "codex", byKind.codex.models.default);
+      created.push(bot.id);
+      await expectReply(bot, marker("codex"), 300_000);
     } else {
       log("  skip: codex CLI not available");
     }
@@ -222,37 +206,6 @@ async function main() {
       const cfg = await api("/api/config");
       if (!cfg.box?.configured) fail("box token saved but /api/config still says unconfigured");
       log("  ✓ box token configured, providers hot-reloaded");
-
-      // a turn that runs ON the box (boxAgent) — provisions on first use.
-      // One bot, models walked via PATCH: each bot owns one persistent box,
-      // so re-provisioning per attempt would be wasteful. (On this account
-      // the substrate's claude-code auth is expired — codex answers.)
-      const boxBot = await makeBot("E2E Computer", "computer", byKind.boxAgent?.models.default ?? "sonnet");
-      created.push(boxBot.id);
-      let boxSaid = false;
-      for (const optn of byKind.boxAgent?.models.options ?? [{ id: "sonnet" }]) {
-        await api(`/api/bots/${boxBot.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ modelSelection: { instanceId: "computer", model: optn.id } }),
-        });
-        const want = marker("box");
-        await send(boxBot.id, `Say exactly: ${want} — then stop.`);
-        const settled = await waitTurnDone(boxBot.id, 600_000); // first provision can take minutes
-        if (settled.messages.some((m) => m.role === "bot" && m.kind === "text" && m.text?.includes(want))) {
-          log(`  ✓ box agent replied from its own computer on ${optn.id}`);
-          boxSaid = true;
-          break;
-        }
-        const last = [...settled.messages].reverse().find((m) => m.role === "bot" && m.kind === "text");
-        log(`  box model ${optn.id} settled without the marker (${(last?.text ?? "?").slice(0, 90)}) — trying next`);
-      }
-      if (!boxSaid) fail("box agent answered on no catalog model");
-
-      const shot = await api(`/api/bots/${boxBot.id}/computer/screenshot`, { method: "POST" });
-      if (!shot.png || shot.png.length < 10_000) fail("box screenshot came back empty");
-      log(`  ✓ box screenshot (${Math.round(shot.png.length / 1024)} KB base64)`);
-      await api(`/api/bots/${boxBot.id}/computer/sleep`, { method: "POST" }).catch(() => {});
-      log("  ✓ box asleep (billing paused)");
 
       // computer tools through the claude driver (computer-proxy MCP)
       if (byKind.claudeAgent?.snapshot.state === "available") {
@@ -267,7 +220,11 @@ async function main() {
         const sawTool = settled.messages.some((m) => m.kind === "activity" && /computer|mcp/i.test(m.tool?.name ?? ""));
         if (!sawTool) fail("claude turn never touched the computer tools");
         log("  ✓ claude used the computer tools on its box");
+        const shot = await api(`/api/bots/${handy.id}/computer/screenshot`, { method: "POST" });
+        if (!shot.png || shot.png.length < 10_000) fail("box screenshot came back empty");
+        log(`  ✓ box screenshot (${Math.round(shot.png.length / 1024)} KB base64)`);
         await api(`/api/bots/${handy.id}/computer/sleep`, { method: "POST" }).catch(() => {});
+        log("  ✓ box asleep (billing paused)");
       }
     }
   } catch (e) {

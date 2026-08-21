@@ -85,7 +85,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     docsUrl: "https://github.com/openai/codex",
     signInCommand: "codex login",
   },
-  models: STATIC_CODEX_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
@@ -109,11 +108,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const catalogEnv = childEnv();
     let models = STATIC_CODEX_MODELS;
     const refreshModels = async () => {
+      // readCodexModelCatalog asks the app-server first (the authoritative
+      // subscription catalog, including per-model capabilities) and merges
+      // locally wired provider rows from ~/.codex on top.
       try {
         const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli);
         if (resolved.options.length) models = resolved;
       } catch {
-        // Keep the last usable catalog when a local provider is down.
+        // Signed-out or missing CLI: keep the last usable catalog.
       }
     };
     await refreshModels();
@@ -463,7 +465,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           let startedModel: string | null = null;
           if (cursor) {
             try {
-              const resumed = await request("thread/resume", { threadId: cursor });
+              const resumed = await request("thread/resume", {
+                threadId: cursor,
+                ...(turn.model ? { model: turn.model } : {}),
+                ...(turn.serviceTier !== undefined ? { serviceTier: turn.serviceTier } : {}),
+              });
               codexThreadId = resumed?.thread?.id ?? cursor;
             } catch {
               /* resume unsupported or thread gone — start fresh below */
@@ -475,6 +481,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               cwd: turn.cwd ?? homedir(),
               model: selection.model,
               ...(selection.modelProvider ? { modelProvider: selection.modelProvider } : {}),
+              ...(turn.serviceTier !== undefined ? { serviceTier: turn.serviceTier } : {}),
               sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
               approvalPolicy: config.fullAuto ? "never" : "on-request",
               ephemeral: false,
@@ -486,6 +493,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await request("turn/start", {
             threadId: codexThreadId,
             input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
+            ...(turn.model ? { model: turn.model } : {}),
             // Spread, not `effort: turn.effort ?? null`. Probed against
             // codex-cli 0.146.0: null is indistinguishable from an absent key
             // — both leave the thread's current effort alone, emitting no
@@ -496,6 +504,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             // sent another, and choosing Default lands on the bot's next new
             // thread rather than the current one.
             ...(turn.effort ? { effort: turn.effort } : {}),
+            ...(turn.serviceTier !== undefined ? { serviceTier: turn.serviceTier } : {}),
           });
         } catch (e) {
           if (!state.settled) {
@@ -537,10 +546,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      get models() {
+      catalog: async () => {
+        await refreshModels();
         return models;
       },
-      refreshModels,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
@@ -552,7 +561,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           agentsMcp: true,
           phoneMcp: true,
           images: true,
-          effortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),

@@ -19,6 +19,36 @@ describe("ProviderRegistry", () => {
     expect(registry.instances()).toHaveLength(1);
   });
 
+  it("reads the live model catalog again on every describe", async () => {
+    const fake = makeFakeDriver();
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({ a: { driver: "fake" } });
+    const live = registry.get("a")!;
+    let model = "fake-1";
+    (live as typeof live & { catalog: () => Promise<unknown> }).catalog = async () => ({
+      default: { model },
+      options: [{ id: model, label: model }],
+    });
+
+    expect((await registry.describe())[0].models.default).toEqual({ model: "fake-1" });
+    model = "fake-2";
+    expect((await registry.describe())[0].models.default).toEqual({ model: "fake-2" });
+  });
+
+  it("reports catalog lookup failures without hiding an available engine", async () => {
+    const fake = makeFakeDriver({ failCatalog: "catalog probe failed" });
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({ a: { driver: "fake" } });
+
+    const [described] = await registry.describe();
+    expect(described.snapshot.state).toBe("available");
+    expect(described.models).toEqual({
+      default: { model: "" },
+      options: [],
+      error: "catalog probe failed",
+    });
+  });
+
   it("uses defaultConfig when the entry has no config", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([fake.driver]);
@@ -105,23 +135,7 @@ describe("ProviderRegistry", () => {
     expect(described.snapshot).toMatchObject({ state: "unavailable", reason: "provider probe exploded" });
   });
 
-  it("forwards a live instance's declared effort levels in describe()", async () => {
-    const fake = makeFakeDriver({ effortLevels: ["low", "high"] });
-    const registry = new ProviderRegistry([fake.driver]);
-    await registry.load({ a: { driver: "fake" } });
 
-    const [described] = await registry.describe();
-    expect(described.capabilities.effortLevels).toEqual(["low", "high"]);
-  });
-
-  it("omits effortLevels from describe() when the driver declares none", async () => {
-    const fake = makeFakeDriver();
-    const registry = new ProviderRegistry([fake.driver]);
-    await registry.load({ a: { driver: "fake" } });
-
-    const [described] = await registry.describe();
-    expect(described.capabilities.effortLevels).toBeUndefined();
-  });
 
   it("disposeAll disposes every live instance and empties the registry", async () => {
     const fake = makeFakeDriver();

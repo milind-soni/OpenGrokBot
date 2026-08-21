@@ -170,7 +170,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   const currentModel = selection.instanceId === railInstance?.instanceId ? selection.model : undefined;
   const filteredOfficial = filterCustomModels(official, query);
   const compactOfficial = railInstance
-    ? suggestedModels(official, railInstance.models.default, currentModel, COMPACT_MODEL_COUNT)
+    ? suggestedModels(official, railInstance.models.default.model, currentModel, COMPACT_MODEL_COUNT)
     : [];
   const shownOfficial = query ? filteredOfficial : showAll ? official : compactOfficial;
   const filteredCustom = filterCustomModels(custom, query);
@@ -188,7 +188,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
       key={option.id}
       option={option}
       current={selection.instanceId === railInstance?.instanceId && selection.model === option.id}
-      defaultId={railInstance?.models.default ?? ""}
+      defaultId={railInstance?.models.default.model ?? ""}
       onPick={() => railInstance && pick(railInstance, option.id)}
     />
   );

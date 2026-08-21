@@ -123,7 +123,7 @@ posixOnly("mid-turn steering e2e", () => {
 
   it("an engine without a live session preserves the message in the server-side queue", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
-    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-acp-model" } });
     expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
     await waitFor(async () => (await getBot(created.id)).busy === true, "the hung turn to start");
     const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: "second" });

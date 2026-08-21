@@ -1,8 +1,7 @@
 // Grok driver — xAI chat-completions API with SSE streaming. Unlike the
 // CLI drivers this one is transcript-replay: the server hands it the
 // folded thread history each turn (SendTurnInput.transcript) and it emits
-// true token-level content.delta events. Also supplies the instance's
-// generateText (bot titles, thread names) — upstream's TextGeneration slot.
+// true token-level content.delta events.
 import type {
   DriverCreateInput,
   ProviderDriver,
@@ -17,15 +16,6 @@ import { appendNative } from "./native.ts";
 
 const DRIVER_KIND = "grok";
 const DEFAULT_URL = "https://api.x.ai/v1";
-
-const MODELS = {
-  default: "grok-4",
-  options: [
-    { id: "grok-4", label: "Grok 4" },
-    { id: "grok-4-fast", label: "Grok 4 Fast" },
-    { id: "grok-3-mini", label: "Grok 3 Mini" },
-  ],
-};
 
 export interface GrokConfig {
   url: string;
@@ -45,7 +35,6 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
   driverKind: DRIVER_KIND,
   // "(API)" distinguishes this key-billed driver from grokAgent, the CLI one
   metadata: { displayName: "Grok (API)", supportsMultipleInstances: true },
-  models: MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
@@ -54,6 +43,21 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
     const apiKey = input.environment[config.apiKeyEnv] ?? process.env[config.apiKeyEnv] ?? "";
     const listeners = new Set<RuntimeEventListener>();
     const active = new Map<string, { abort: AbortController; turnId: string }>();
+
+    const catalog = async () => {
+      if (!apiKey) throw new Error(`no xAI key — set ${config.apiKeyEnv} or config.json xai.key`);
+      const response = await fetch(`${config.url}/models`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!response.ok) throw new Error(`xAI models HTTP ${response.status}`);
+      const payload: any = await response.json();
+      const options = (Array.isArray(payload?.data) ? payload.data : [])
+        .filter((model: any) => typeof model?.id === "string")
+        .map((model: any) => ({ id: model.id, label: model.id }));
+      if (!options.length) throw new Error("xAI models returned no models");
+      return { default: { model: options[0].id }, options };
+    };
 
     const emit = (event: RuntimeEvent) => {
       for (const l of [...listeners]) l(event);
@@ -128,6 +132,8 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (!apiKey) throw new Error(`no xAI key — set ${config.apiKeyEnv} or config.json xai.key`);
+      if (!turn.model) throw new Error("model selection is required");
+      const selectedModel = turn.model;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
       const abort = new AbortController();
@@ -144,11 +150,11 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
       appendNative(threadId, { dir: "out", source: "xai.chat.completions", msg: { model: turn.model, messages } });
 
       emit({ ...base(threadId, turnId), type: "turn.started" });
-      emit({ ...base(threadId, turnId), type: "session.started", sessionId: null, model: turn.model ?? MODELS.default });
+      emit({ ...base(threadId, turnId), type: "session.started", sessionId: null, model: turn.model });
 
       (async () => {
         try {
-          const { text, usage } = await complete(messages, turn.model || MODELS.default, {
+          const { text, usage } = await complete(messages, selectedModel, {
             stream: true,
             signal: abort.signal,
             onDelta: (delta) =>
@@ -197,7 +203,7 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: MODELS,
+      catalog,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
@@ -213,10 +219,6 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
           listeners.add(listener);
           return () => listeners.delete(listener);
         },
-      },
-      generateText: async (prompt: string) => {
-        const { text } = await complete([{ role: "user", content: prompt }], "grok-3-mini", { stream: false });
-        return text;
       },
       dispose: async () => {
         for (const { abort } of active.values()) abort.abort();

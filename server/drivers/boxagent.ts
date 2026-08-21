@@ -25,17 +25,6 @@ import { appendNative } from "./native.ts";
 const DRIVER_KIND = "boxAgent";
 const BOX_API = "https://ascii.dev/api/box/v1";
 
-const MODELS = {
-  default: "claude-fable-5",
-  options: [
-    { id: "claude-fable-5", label: "Claude Fable 5 · on the box" },
-    { id: "sonnet", label: "Claude Sonnet · on the box" },
-    { id: "gpt-5.4", label: "GPT-5.4 (Codex) · on the box" },
-  ],
-};
-
-const providerFor = (model: string) => (model.startsWith("gpt") ? "codex" : "claude-code");
-
 export interface BoxAgentConfig {
   pollMs: number;
 }
@@ -48,7 +37,6 @@ function decodeConfig(raw: unknown): BoxAgentConfig {
 export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Computer", supportsMultipleInstances: false },
-  models: MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
@@ -90,9 +78,12 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
       if (!boxId) {
         throw new Error("this bot has no computer yet — open the Computer panel and provision one");
       }
+      if (!turn.model || !turn.modelProvider) {
+        throw new Error("box runs require an explicit model and provider");
+      }
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
-      const model = turn.model || MODELS.default;
+      const model = turn.model;
 
       const prompt = [
         turn.system,
@@ -105,7 +96,7 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
 
       const started: any = await api(`/boxes/${boxId}/prompt`, {
         method: "POST",
-        body: JSON.stringify({ provider: providerFor(model), model, prompt }),
+        body: JSON.stringify({ provider: turn.modelProvider, model, prompt }),
       });
       appendNative(threadId, { dir: "out", source: "box.prompt", msg: { model, prompt, response: started } });
       // real shape (2026-08): {type:"prompt.queued", promptId, promptRun:{id,…},
@@ -247,7 +238,7 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: MODELS,
+      catalog: async () => ({ default: { model: "" }, options: [] }),
       snapshot,
       adapter: {
         provider: DRIVER_KIND,

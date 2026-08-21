@@ -4,7 +4,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly;
 // spawnCli resolves it to `node <script>`, so these run everywhere.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,33 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
-import { AntigravityDriver, readAntigravityModelCatalog, STATIC_ANTIGRAVITY_MODELS } from "./antigravity.ts";
+import { AntigravityDriver } from "./antigravity.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-agy-cli.ts");
-
-describe("readAntigravityModelCatalog", () => {
-  it("returns the official list when settings are missing", () => {
-    expect(readAntigravityModelCatalog({ HOME: join(tmpdir(), "omb-agy-missing-home") })).toEqual(
-      STATIC_ANTIGRAVITY_MODELS,
-    );
-  });
-
-  it("tags extra settings models as custom", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
-    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
-    writeFileSync(
-      join(home, ".gemini", "antigravity-cli", "settings.json"),
-      JSON.stringify({ customModels: [{ id: "local-gemini", displayName: "Local Gemini" }] }),
-    );
-    try {
-      const catalog = readAntigravityModelCatalog({ HOME: home });
-      expect(catalog.options.slice(0, STATIC_ANTIGRAVITY_MODELS.options.length)).toEqual(STATIC_ANTIGRAVITY_MODELS.options);
-      expect(catalog.options.at(-1)).toEqual({ id: "local-gemini", label: "Local Gemini", custom: true });
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("Antigravity decodeConfig", () => {
   it("publishes the official installer for every supported platform", () => {
@@ -88,6 +64,7 @@ describe("Antigravity turns (fake CLI)", () => {
   });
 
   afterEach(async () => {
+    delete process.env.FAKE_AGY_DUMP;
     recorder?.stop();
     await instance?.dispose();
   });
@@ -127,6 +104,43 @@ describe("Antigravity turns (fake CLI)", () => {
     // result.usage is the turn total (the per-step figures precede it)
     expect(done).toMatchObject({ type: "turn.completed", ok: true, usage: { input: 105, output: 20 } });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
+  });
+
+  it("discovers models and configured defaults from the CLI JSON catalog", async () => {
+    await create();
+
+    await expect(instance.catalog()).resolves.toEqual({
+      default: { model: "fake-agy-pro", effort: "high" },
+      options: [
+        {
+          id: "fake-agy-pro",
+          label: "Fake Agy Pro",
+          efforts: ["low", "high"],
+          defaultEffort: "low",
+        },
+        { id: "fake-agy-flash", label: "Fake Agy Flash" },
+      ],
+    });
+  });
+
+  it("passes the selected model and effort to Antigravity", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-agy-selection-"));
+    const dump = join(scratch, "argv.json");
+    process.env.FAKE_AGY_DUMP = dump;
+    await create();
+
+    await instance.adapter.sendTurn({
+      threadId: "t-selection",
+      text: "go",
+      model: "fake-agy-pro",
+      effort: "high",
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "fake-agy-pro"]);
+    expect(argv.slice(argv.indexOf("--effort"), argv.indexOf("--effort") + 2)).toEqual(["--effort", "high"]);
+    rmSync(scratch, { recursive: true, force: true });
   });
 
   it("respondToRequest resolves `unavailable` — no interactive permission channel, so the caller denies", async () => {

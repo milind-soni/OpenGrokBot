@@ -733,6 +733,32 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("rejects malformed or unavailable model selections before persisting them", async () => {
+    const created = await api("POST", "/api/bots");
+    const bot = created.body.bot;
+    const originalSelection = structuredClone(bot.modelSelection);
+    const persistedSelection = async () =>
+      (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id).modelSelection;
+
+    const malformed = await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-model", effort: 7 },
+    });
+    expect(malformed).toMatchObject({ status: 400, body: { error: "invalid model selection" } });
+    expect(await persistedSelection()).toEqual(originalSelection);
+
+    // An unknown instance is persistable (users pre-configure engines) —
+    // the loud gate is startTurn, which refuses with 409 on send.
+    const unavailable = await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-model" },
+    });
+    expect(unavailable.status).toBe(200);
+    const send = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hi" });
+    expect(send.status).toBe(409);
+    expect(send.body.error).toContain("unavailable");
+
+    await api("DELETE", `/api/bots/${bot.id}`);
+  });
+
   it("imports a team as a project: one room, on a folder", async () => {
     // The manifest still describes only people. Room name and folder come
     // from the CALLER, so a manifest fetched from the library cannot create
@@ -923,61 +949,15 @@ describe("harness HTTP API", () => {
       modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "xhigh" },
     });
 
+    // The unresolvable instance is allowed to persist — a duplicate keeps
+    // its persona fields, and the pick fails loudly at send time instead.
     expect(patched.status).toBe(200);
     expect(patched.body.bot).toMatchObject({
       name: "Reviewer copy",
       title: "Reviewer",
       description: "reads diffs",
-      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "xhigh" },
     });
-  });
-
-  it("rejects an unknown effort value even while the engine is offline", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    const patched = await api("PATCH", `/api/bots/${bot.id}`, {
-      modelSelection: { instanceId: "ghost", model: "ghost-1", effort: "turbo" },
-    });
-
-    expect(patched.status).toBe(400);
-    expect(patched.body.error).toContain("not recognized");
-  });
-
-  it("leaves a bot with no effort level untouched", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    expect(bot.modelSelection.effort).toBeUndefined();
-
-    const renamed = await api("PATCH", `/api/bots/${bot.id}`, { name: "Plain" });
-    expect(renamed.status).toBe(200);
-    expect(renamed.body.bot.modelSelection.effort).toBeUndefined();
-  });
-
-  // This fixture pins a single unknown driver, so no instance here ever
-  // resolves: these cover the gate's pass-through and the store's replace
-  // semantics, NOT the comparison against a live engine's declared list.
-  // That branch has no coverage at this layer, and manufacturing a live
-  // instance in this fixture would cost it its no-probe determinism.
-  it("round-trips an effort level and clears it when the key is dropped", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    const selection = { instanceId: "ghost", model: "ghost-1" };
-
-    const set = await api("PATCH", `/api/bots/${bot.id}`, {
-      modelSelection: { ...selection, effort: "high" },
-    });
-    expect(set.status).toBe(200);
-    expect(set.body.bot.modelSelection.effort).toBe("high");
-
-    const reread = (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id);
-    expect(reread.modelSelection.effort).toBe("high");
-
-    // The panel's "Default" button spreads the selection with effort:
-    // undefined, and JSON.stringify drops the key — so clearing reaches the
-    // server as a modelSelection carrying no effort at all.
-    const cleared = await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: selection });
-    expect(cleared.status).toBe(200);
-
-    const after = (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id);
-    expect(after.modelSelection).toEqual(selection);
-    expect(after.modelSelection.effort).toBeUndefined();
+    expect(patched.body.bot.modelSelection.instanceId).toBe("ghost");
   });
 
   it("grants Auto on this computer only through the warning acknowledgement", async () => {
@@ -1111,8 +1091,10 @@ describe("harness HTTP API", () => {
     const empty = await api("POST", `/api/bots/${bot.id}/messages`, { text: "   " });
     expect(empty.status).toBe(400);
 
-    // the seeded bot's selection points at the ghost instance — sending a
-    // real message must fail loudly, not 202-and-hang
+    // point the bot at the ghost instance — the PATCH succeeds (the engine
+    // being online is not required to persist a pick), but sending a real
+    // message must fail loudly, not 202-and-hang
+    await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "ghost", model: "ghost-model" } });
     const send = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello?" });
     expect(send.status).toBe(409);
     expect(send.body.error).toContain("unavailable");
@@ -1249,7 +1231,7 @@ describe("harness HTTP API", () => {
     })).body.group;
     try {
       const selected = await api("PATCH", `/api/bots/${botId}`, {
-        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+        modelSelection: { instanceId: "claude", model: "sonnet" },
       });
       expect(selected.status).toBe(200);
 

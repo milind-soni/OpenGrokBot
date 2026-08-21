@@ -12,7 +12,7 @@ import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../loca
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 export const STATIC_GROK_MODELS: ModelCatalog = {
-  default: "grok-4.6",
+  default: { model: "grok-4.6" },
   options: [
     { id: "grok-4.6", label: "Grok 4.6" },
     { id: "grok-4.5", label: "Grok 4.5" },
@@ -91,7 +91,9 @@ export function readGrokModelCatalog(env: Record<string, string | undefined> = p
   flush();
 
   return {
-    default: configuredDefault && seen.has(configuredDefault) ? configuredDefault : STATIC_GROK_MODELS.default,
+    default: {
+      model: configuredDefault && seen.has(configuredDefault) ? configuredDefault : STATIC_GROK_MODELS.default.model,
+    },
     options,
   };
 }
@@ -184,12 +186,7 @@ const support: AcpSupport = {
   driverKind: "grokAgent",
   displayName: "Grok",
   images: false,
-  models: STATIC_GROK_MODELS,
   resolveModels: (env) => mergeLocalInject(readGrokModelCatalog(env), env),
-  // Grok's accepted levels vary by model and the CLI validates lazily — a
-  // rejected level only logs and falls back. Offer the intersection shared
-  // by every model in this driver's picker; notably, grok-4.5 rejects xhigh.
-  effortLevels: ["low", "medium", "high"],
   defaultCli: "grok",
   nativeSource: "grok.acp",
   loginNote: "Grok CLI is not signed in — run `grok login` in a terminal",

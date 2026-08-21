@@ -63,6 +63,7 @@ export function execCli(
   );
 }
 
+
 /** Human wording for a failed CLI spawn.
  *
  * Node reports these as bare errno strings — "spawn grok ENOENT" — which

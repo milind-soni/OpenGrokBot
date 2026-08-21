@@ -4,8 +4,8 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | resume | stream | windows-command |
-//                     logged-in-stdout | logged-out | unauthorized
+//   FAKE_CODEX_MODE   happy (default) | approval | resume | stream | hidden-default
+//                     | windows-command | logged-in-stdout | logged-out | unauthorized
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -85,32 +85,54 @@ process.stdin.on("data", (chunk) => {
       case "initialize":
         out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
         break;
-      case "model/list":
-        if (msg.params?.cursor === "page-2") {
-          out({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result: {
-              data: [
-                { id: "gpt-hidden", displayName: "Hidden", hidden: true, isDefault: false },
-                { id: "gpt-page-two", displayName: "GPT Page Two", hidden: false, isDefault: false },
-              ],
-              nextCursor: null,
-            },
-          });
-        } else {
-          out({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result: {
-              data: [
-                { id: "gpt-fake-default", displayName: "GPT Fake Default", hidden: false, isDefault: true },
-              ],
-              nextCursor: "page-2",
-            },
-          });
-        }
+      case "model/list": {
+        const secondPage = msg.params?.cursor === "page-2";
+        out({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: {
+            data: secondPage ? [
+              {
+                id: "fake-codex-2",
+                displayName: "Fake Codex Two",
+                hidden: false,
+                supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+                defaultReasoningEffort: "high",
+                additionalSpeedTiers: [],
+                serviceTiers: [],
+                defaultServiceTier: null,
+              },
+            ] : [
+              {
+                id: "fake-codex-hidden",
+                displayName: "Hidden Codex Default",
+                hidden: true,
+                isDefault: true,
+                supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+                defaultReasoningEffort: "high",
+                additionalSpeedTiers: [],
+                serviceTiers: [],
+                defaultServiceTier: null,
+              },
+              {
+                id: "fake-codex-1",
+                displayName: "Fake Codex One",
+                hidden: false,
+                supportedReasoningEfforts: [
+                  { reasoningEffort: "low" },
+                  { reasoningEffort: "high" },
+                ],
+                defaultReasoningEffort: "low",
+                additionalSpeedTiers: ["fast"],
+                serviceTiers: [{ id: "priority", name: "Fast" }],
+                defaultServiceTier: null,
+              },
+            ],
+            nextCursor: secondPage ? null : "page-2",
+          },
+        });
         break;
+      }
       case "thread/resume":
         if (mode === "resume") {
           out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId } } });
@@ -121,6 +143,23 @@ process.stdin.on("data", (chunk) => {
       case "thread/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
         break;
+      
+      case "config/read":
+        out({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: {
+            config: mode === "hidden-default"
+              ? { model: "retired-codex-model" }
+              : {
+                  model: "fake-codex-1",
+                  model_reasoning_effort: "high",
+                  service_tier: "fast",
+                },
+          },
+        });
+        break;
+      case "turn/start":
       case "turn/start": {
         if (mode === "unauthorized") {
           out({

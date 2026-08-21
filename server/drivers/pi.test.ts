@@ -23,7 +23,7 @@ const MODELS_LINE =
 describe("parsePiCatalog", () => {
   it("turns a get_available_models response into custom composite-id options", () => {
     const catalog = parsePiCatalog(MODELS_LINE + "\n");
-    expect(catalog.default).toBe("ollama-cloud/glm-5.2");
+    expect(catalog.default.model).toBe("ollama-cloud/glm-5.2");
     expect(catalog.options).toEqual([
       { id: "ollama-cloud/glm-5.2", label: "glm-5.2", custom: true },
       { id: "openai/gpt-4o", label: "GPT-4o", custom: true },
@@ -32,18 +32,18 @@ describe("parsePiCatalog", () => {
 
   it("uses the fallback default when the response omits one and a settings file is absent", () => {
     const catalog = parsePiCatalog(MODELS_LINE + "\n", "openai/gpt-4o");
-    expect(catalog.default).toBe("openai/gpt-4o");
+    expect(catalog.default.model).toBe("openai/gpt-4o");
   });
 
   it("keeps an empty catalog when the probe fails or reports no models", () => {
-    expect(parsePiCatalog("not json\n")).toEqual({ default: "", options: [] });
+    expect(parsePiCatalog("not json\n")).toEqual({ default: { model: "" }, options: [] });
     expect(parsePiCatalog('{"type":"response","command":"get_available_models","success":false}\n')).toEqual({
-      default: "",
+      default: { model: "" },
       options: [],
     });
     expect(
       parsePiCatalog('{"type":"response","command":"get_available_models","success":true,"data":{"models":[]}}\n'),
-    ).toEqual({ default: "", options: [] });
+    ).toEqual({ default: { model: "" }, options: [] });
   });
 
   it("ignores non-response lines (pi emits TUI bookkeeping on stdout too)", () => {
@@ -94,7 +94,7 @@ describe("PiDriver catalog (fake CLI)", () => {
       { id: "openai/gpt-4o", label: "gpt-4o", custom: true },
     ]);
     // no ~/.pi/agent/settings.json in the throwaway home → first option wins
-    expect(catalog.default).toBe("ollama-cloud/glm-5.2");
+    expect(catalog.default.model).toBe("ollama-cloud/glm-5.2");
   });
 
   it("keeps an empty catalog when the probe reports no models", async () => {

@@ -117,7 +117,7 @@ posixOnly("routine failure notification wiring", () => {
           await api("PATCH", `/api/bots/${bot.id}`, {
             name: "Routine Scout",
             notifications: true,
-            modelSelection: { instanceId: "grok", model: "fake-model" },
+            modelSelection: { instanceId: "grok", model: "fake-acp-model" },
           })
         ).status,
       ).toBe(200);

@@ -76,13 +76,6 @@ export function geminiIsAuthenticated(env: Record<string, string | undefined>): 
 const support: AcpSupport = {
   driverKind: "geminiAgent",
   displayName: "Gemini",
-  models: {
-    default: "gemini-2.5-pro",
-    options: [
-      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-    ],
-  },
   defaultCli: "gemini",
   nativeSource: "gemini.acp",
   loginNote:

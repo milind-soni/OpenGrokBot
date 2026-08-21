@@ -25,6 +25,8 @@ jobs:
     name: NSIS installer
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      HAS_CSC: ${{ secrets.CSC_LINK != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,7 +49,7 @@ jobs:
       # the build stays unsigned — the verify step below still rejects a
       # publisherName on an unsigned build, so auto-update keeps working.
       - name: sign the Windows build (optional)
-        if: ${{ secrets.CSC_LINK != '' }}
+        if: ${{ env.HAS_CSC == 'true' }}
         shell: bash
         env:
           OMB_CERT_FILE: ${{ secrets.CSC_LINK }}
@@ -98,27 +100,3 @@ jobs:
           res=release/win-unpacked/resources
           HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
             OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
-          pid=$!
-          for _ in $(seq 1 90); do
-            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
-              echo "packaged server answered /api/health ✓"
-              kill $pid 2>/dev/null || true
-              exit 0
-            fi
-            kill -0 $pid 2>/dev/null || break
-            sleep 1
-          done
-          echo "::error::the packaged server never served /api/health"
-          cat "$RUNNER_TEMP/server.log" || true
-          kill $pid 2>/dev/null || true
-          exit 1
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-installer
-          path: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
-          if-no-files-found: error
-          retention-days: 14

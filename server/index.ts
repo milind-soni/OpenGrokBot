@@ -98,6 +98,8 @@ import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
+import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
+import { scoutProject, suggestTeam } from "./project-scout.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
 import { readThreadEvents } from "./thread-events.ts";
@@ -2998,6 +3000,38 @@ const server = createServer(async (req, res) => {
         const status = (error as { status?: number }).status === 404 ? 404 : 400;
         return json(res, status, { error: error instanceof Error ? error.message : "The GitHub team could not be loaded" });
       }
+    }
+    if (method === "GET" && path === "/api/teams/scout") {
+      // The scout reads a folder and answers with a suggestion — it creates
+      // nothing. Bots and the room come into being only when the human sends
+      // the suggested manifest through /api/teams/import, so "the agent
+      // proposes, the person imports" is enforced by the route split itself.
+      // The folder is whatever validateBotCwd accepts: the same local-user
+      // trust boundary as pointing any bot's working folder at a path.
+      // Deliberately offline — the community directory lives on its own
+      // route below, so a slow network can never delay the suggestion.
+      const validated = validateBotCwd(url.searchParams.get("cwd"));
+      if (!validated.ok) return json(res, 400, { error: validated.error });
+      if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });
+      const profile = scoutProject(validated.cwd);
+      return json(res, 200, { profile, suggestion: suggestTeam(profile) });
+    }
+    if (method === "GET" && path === "/api/teams/scout/directory") {
+      // Community bots that fit the scouted folder — a separate, lazy call
+      // so an unreachable directory degrades to "no extra candidates", never
+      // to a broken scout.
+      const validated = validateBotCwd(url.searchParams.get("cwd"));
+      if (!validated.ok) return json(res, 400, { error: validated.error });
+      if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });
+      let directory: MatchedDirectoryBot[] = [];
+      try {
+        directory = matchDirectoryBots(scoutProject(validated.cwd), await fetchBotDirectory());
+      } catch (error) {
+        // an unreachable directory is a fact of life, not an error — but an
+        // empty section should still be diagnosable from the server log
+        console.warn("bot directory lookup failed:", error instanceof Error ? error.message : String(error));
+      }
+      return json(res, 200, { directory });
     }
     if (method === "POST" && path === "/api/teams/import") {
       // Import is additive-only. A manifest is untrusted input (catalog,

@@ -760,6 +760,48 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("the scout reads a folder, proposes an importable team, and creates nothing until the human imports", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "omb-scout-"));
+    writeFileSync(join(folder, "README.md"), "# Demo Shop\n\nA storefront demo.\n");
+    writeFileSync(
+      join(folder, "package.json"),
+      JSON.stringify({ dependencies: { react: "^19" }, devDependencies: { vitest: "^3" } }),
+    );
+
+    const before = (await api("GET", "/api/bots")).body;
+
+    expect((await api("GET", "/api/teams/scout")).status).toBe(400);
+    expect((await api("GET", `/api/teams/scout?cwd=${encodeURIComponent(join(folder, "nope"))}`)).status).toBe(400);
+
+    const scouted = await api("GET", `/api/teams/scout?cwd=${encodeURIComponent(folder)}`);
+    expect(scouted.status).toBe(200);
+    expect(scouted.body.profile).toMatchObject({ name: "Demo Shop", summary: "A storefront demo." });
+    expect(scouted.body.profile.stacks).toContain("React");
+    expect(scouted.body.suggestion.roomName).toBe("Demo Shop");
+    const keys = scouted.body.suggestion.manifest.team.members.map((member: { key: string }) => member.key);
+    expect(keys).toEqual(["lead", "frontend", "testing"]);
+    expect(Object.keys(scouted.body.suggestion.reasons).sort()).toEqual(keys.slice().sort());
+
+    // scouting is read-only: no bot and no room exists until the import
+    const after = (await api("GET", "/api/bots")).body;
+    expect(after.bots).toHaveLength(before.bots.length);
+    expect(after.groups).toHaveLength(before.groups.length);
+
+    // and the suggestion goes through the real importer verbatim
+    const imported = await api(
+      "POST",
+      `/api/teams/import?mode=project&cwd=${encodeURIComponent(folder)}&room=${encodeURIComponent(scouted.body.suggestion.roomName)}`,
+      scouted.body.suggestion.manifest,
+    );
+    expect(imported.status).toBe(201);
+    expect(imported.body.group).toMatchObject({ name: "Demo Shop", cwd: folder });
+    expect(imported.body.bots).toHaveLength(3);
+
+    expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
+    for (const bot of imported.body.bots) await api("DELETE", `/api/bots/${bot.id}`);
+    rmSync(folder, { recursive: true, force: true });
+  });
+
   it("team import is additive-only: smuggled grants, claimed ids, and re-imports never touch existing records", async () => {
     // an armed bot: every privilege a malicious manifest could try to
     // capture is switched ON here, so any write-through shows up as a diff

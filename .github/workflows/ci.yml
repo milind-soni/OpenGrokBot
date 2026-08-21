@@ -69,6 +69,16 @@ jobs:
           deb=(release/*.deb)
           test "${#deb[@]}" -eq 1
           sudo --preserve-env=CI,RUNNER_TEMP node scripts/smoke-deb-upgrade.mjs "${deb[0]}"
+      - name: Match a normal Ubuntu package parent on the ephemeral runner
+        run: |
+          test ! -L /opt
+          test "$(stat -c '%F %U:%G' /opt)" = "directory root:root"
+          case "$(stat -c '%a' /opt)" in
+            755) ;;
+            775|777) sudo chmod 0755 /opt ;;
+            *) echo "Unexpected /opt mode: $(stat -c '%a' /opt)" >&2; exit 1 ;;
+          esac
+          test "$(stat -c '%U:%G %a' /opt)" = "root:root 755"
       - name: Configure Chromium sandbox for the unpacked app
         run: |
           sudo chown root:root release/linux-unpacked/chrome-sandbox

@@ -97,6 +97,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [vmFrame, setVmFrame] = useState<string | null>(null);
+  // The Local VM's interactive noVNC viewer (passworded, autoconnect). The
+  // preview below is a periodic screenshot that swallows clicks — this URL is
+  // the only way a person can actually drive the VM.
+  const [vmViewerUrl, setVmViewerUrl] = useState<string | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | "provision" | null>(null);
   const [controlPending, setControlPending] = useState(false);
@@ -177,6 +181,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       api("/api/local-computer")
         .then((status) => {
           if (!alive) return;
+          if (typeof status.viewer_url === "string") setVmViewerUrl(status.viewer_url);
           if (status.ready) setPhase("vm");
           else {
             setError(`${status.problem ?? "The Local VM is not ready"}. Open App Settings → Local VM.`);
@@ -556,7 +561,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
-            <img src={frameSrc} alt={`${bot.name}'s screen`} className="h-full w-full object-contain" />
+            <img
+              src={frameSrc}
+              alt={`${bot.name}'s screen`}
+              className="h-full w-full object-contain"
+              title={phase === "vm" ? "Watch-only preview — use Open desktop to click and type" : undefined}
+            />
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
               {phase === "checking" || phase === "starting" || phase === "vm" || (phase === "local" && !isLinux) ? (
@@ -677,6 +687,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
               {phase === "ready" && cloudBackend === "box" && " Use Open desktop to drive."}
+              {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
             </div>
             <button
               onClick={() => controlAction("release")}
@@ -687,6 +698,21 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               Hand control back
             </button>
           </div>
+        )}
+        {phase === "vm" && vmViewerUrl && (
+          <button
+            onClick={() => {
+              // Electron opens the viewer in the system browser; the plain-web
+              // fallback opens a tab. Same URL Settings links as Watch screen.
+              if (window.ogb?.openExternal) void window.ogb.openExternal(vmViewerUrl);
+              else window.open(vmViewerUrl, "_blank", "noopener");
+            }}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover"
+            title="Open the Local VM's interactive desktop — click and type there"
+          >
+            <ExternalLink size={14} />
+            Open desktop
+          </button>
         )}
         {phase === "vm" && !control.held && !control.helpReason && (
           <button

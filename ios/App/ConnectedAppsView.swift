@@ -165,6 +165,4 @@ private extension ConnectorAccount {
         let value = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
         return value?.isEmpty == false ? value : nil
     }
-
-    var isActive: Bool { status.lowercased().contains("active") }
 }

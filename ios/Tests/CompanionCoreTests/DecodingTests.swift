@@ -142,7 +142,7 @@ final class DecodingTests: XCTestCase {
               "status": "ACTIVE",
               "accounts": [
                 {"id": "ca_work", "alias": "Work", "status": "ACTIVE"},
-                {"id": "ca_personal", "status": "ACTIVE"}
+                {"id": "ca_personal", "status": "INACTIVE"}
               ]
             },
             "weather": {
@@ -159,6 +159,8 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(gmail.accounts?.map(\.id), ["ca_work", "ca_personal"])
         XCTAssertEqual(gmail.accounts?.first?.alias, "Work")
         XCTAssertNil(gmail.accounts?.last?.alias)
+        XCTAssertTrue(try XCTUnwrap(gmail.accounts?.first).isActive)
+        XCTAssertFalse(try XCTUnwrap(gmail.accounts?.last).isActive)
 
         let noAuth = try XCTUnwrap(statuses.services["weather"])
         XCTAssertTrue(noAuth.connected)

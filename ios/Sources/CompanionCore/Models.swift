@@ -658,6 +658,12 @@ public struct ConnectorAccount: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var alias: String?
     public var status: String
+
+    /// Composio lifecycle values include both `ACTIVE` and `INACTIVE`; an
+    /// exact normalized comparison avoids rendering the latter as connected.
+    public var isActive: Bool {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "ACTIVE"
+    }
 }
 
 public struct ConnectorStatus: Codable, Hashable, Sendable {

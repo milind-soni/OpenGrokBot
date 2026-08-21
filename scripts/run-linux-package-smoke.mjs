@@ -62,6 +62,36 @@ for (const executable of executables) {
   await cleanupRuntime(runtimeDirectory);
 }
 
+// A desktop watchdog or package manager sends SIGTERM to Electron itself,
+// not a synthetic window close. Exercise that path against the real bundled
+// AppImage and require the same descriptor/runtime cleanup.
+if (process.exitCode === undefined) {
+  const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));
+  chmodSync(runtimeDirectory, 0o700);
+  const signalShutdown = spawnSync(
+    "dbus-run-session",
+    ["--", "xvfb-run", "-a", process.execPath, path.join(root, "scripts", "smoke-linux-package.mjs")],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        XDG_RUNTIME_DIR: runtimeDirectory,
+        OMB_SMOKE_BUNDLED_CUA: "1",
+        OMB_SMOKE_SIGNAL_SHUTDOWN: "1",
+        OMB_SMOKE_EXECUTABLE: path.join(root, "release", appImage),
+      },
+      stdio: "inherit",
+    },
+  );
+  if (signalShutdown.error) throw signalShutdown.error;
+  if (signalShutdown.status !== 0) {
+    console.error(`[run-linux-package-smoke] SIGTERM runtime kept at ${runtimeDirectory}`);
+    process.exitCode = signalShutdown.status ?? 1;
+  } else {
+    await cleanupRuntime(runtimeDirectory);
+  }
+}
+
 if (process.exitCode === undefined) for (const lane of [
   { name: "x11-overlay-free-crash-retry", wayland: false, blocked: false },
   { name: "wayland-safety-block", wayland: true, blocked: true },

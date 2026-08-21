@@ -886,6 +886,22 @@ app.on("window-all-closed", () => {
 // Cap the defer so a wedged daemon cannot keep the app alive forever.
 const CUA_STOP_TIMEOUT_MS = 2500;
 let cuaCleanedUp = false;
+let signalQuitRequested = false;
+
+// Package managers, desktop watchdogs, and terminal launchers commonly stop
+// Linux apps with SIGTERM/SIGINT. Convert the first signal into Electron's
+// normal quit path so the embedded server, Cua descriptor/socket, and private
+// AppImage stage receive the same bounded cleanup as a window close. A second
+// signal keeps Node's default force-quit behavior because these are `once`
+// listeners.
+const requestSignalQuit = () => {
+  if (signalQuitRequested) return;
+  signalQuitRequested = true;
+  app.quit();
+};
+process.once("SIGINT", requestSignalQuit);
+process.once("SIGTERM", requestSignalQuit);
+
 app.on("before-quit", (e) => {
   if (cuaCleanedUp) return;
   e.preventDefault();

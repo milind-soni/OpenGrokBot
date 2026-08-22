@@ -225,10 +225,10 @@ describe("ACP turns (fake CLI)", () => {
       "turn.started",
       "session.started",
       "content.delta",
+      "item.completed", // assistant_text before the tool, not summed on settle
       "item.started", // tool tc-1
       "item.completed", // tool tc-1 done
       "thread.token-usage.updated",
-      "item.completed", // assistant_text (summed) on settle
       "turn.completed",
     ]);
     expect(recorder.events.every((e) => e.turnId === turnId && e.provider === "grokAgent")).toBe(true);
@@ -239,6 +239,34 @@ describe("ACP turns (fake CLI)", () => {
     const done = recorder.events.at(-1)!;
     expect(done).toMatchObject({ type: "turn.completed", ok: true });
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
+  });
+
+  it("emits each assistant text block before the tool that follows it", async () => {
+    await create(GrokAgentDriver, "interleave");
+    await instance.adapter.sendTurn({ threadId: "t-interleave", text: "go", model: "grok-4.5" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const types = recorder.events.map((e) => e.type);
+    expect(types).toEqual([
+      "turn.started",
+      "session.started",
+      "content.delta",
+      "item.completed", // before one
+      "item.started", // tc-1
+      "item.completed", // tc-1
+      "content.delta",
+      "item.completed", // before two
+      "item.started", // tc-2
+      "item.completed", // tc-2
+      "content.delta",
+      "thread.token-usage.updated",
+      "item.completed", // after — no following tool, so settle flushes
+      "turn.completed",
+    ]);
+    const texts = recorder.events
+      .filter((e) => e.type === "item.completed" && (e as { itemType?: string }).itemType === "assistant_text")
+      .map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(["before one", "before two", "after"]);
   });
 
   it("reads token usage from the root of the prompt result", async () => {

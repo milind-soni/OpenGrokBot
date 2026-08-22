@@ -317,6 +317,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
         const stop = () => killCliTree(child);
 
+        const flushAssistantText = () => {
+          const text = state.text;
+          if (!text.trim()) return;
+          state.text = "";
+          emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
+        };
+
         const settle = (ok: boolean, stopReason: string | null) => {
           if (state.settled) return;
           state.settled = true;
@@ -328,9 +335,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           rpcPending.clear();
           active.delete(threadId);
-          if (state.text.trim()) {
-            emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: state.text });
-          }
+          flushAssistantText();
           emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
           stop(); // the agent process does not exit on its own
         };
@@ -342,6 +347,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             return send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
           }
           const params = msg.params ?? {};
+          flushAssistantText();
           const options: Array<{ optionId?: string; kind?: string }> = Array.isArray(params.options) ? params.options : [];
           const optionFor = (want: "allow" | "reject") =>
             options.find((o) => String(o.kind ?? "").startsWith(want) && typeof o.optionId === "string")?.optionId ?? null;
@@ -428,6 +434,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               break;
             }
             case "tool_call": {
+              flushAssistantText();
               emit({
                 ...base(threadId, turnId),
                 type: "item.started",

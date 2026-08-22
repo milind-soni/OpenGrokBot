@@ -154,6 +154,7 @@ export function Composer({
   // queue), but stay off the transcript until drain — the chip here is the
   // pending row so they cannot become the active leaf mid-turn.
   const [queued, setQueued] = useState<string | null>(null);
+  const pendingChip = group ? queued : bot ? state.pendingQueued?.[bot.id] : undefined;
   // a chip on its own is a message: the send control has to appear for it
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const send = () => {
@@ -174,8 +175,7 @@ export function Composer({
       track("message_sent", { room: true });
     } else if (bot) {
       dispatch({ type: "send", botId: bot.id, text: t });
-      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy });
-      if (busy) setQueued((prev) => (prev ? `${prev}\n${t}` : t));
+      track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy && !canSteer });
     }
     setText("");
     setAttachments([]);
@@ -245,11 +245,11 @@ export function Composer({
         </div>
       )}
       <div className="relative mx-auto max-w-[900px]">
-        {queued && (
+        {pendingChip && (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
             <Clock size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Queued — sends when {busyName} finishes: “{queued}”
+              Queued — sends when {busyName} finishes: “{pendingChip}”
             </span>
             {group && (
               <button

@@ -105,3 +105,28 @@ describe("cross-client bot creation", () => {
     expect(greeted.bots[0]?.messages).toEqual([greeting]);
   });
 });
+
+describe("pending queued chip", () => {
+  it("records queue-fallback text and drops it when that user line lands", () => {
+    const bot = {
+      id: "b1",
+      threadId: "t1",
+      name: "Ada",
+      title: "",
+      description: "",
+      notifications: false,
+      color: "green",
+      unread: false,
+      modelSelection: { instanceId: "acp", model: "fake" },
+    } satisfies Omit<Bot, "messages">;
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const queued = reducer(withBot, { type: "pendingQueued", botId: "b1", text: "later" });
+    expect(queued.pendingQueued).toEqual({ b1: "later" });
+    const landed = reducer(queued, {
+      type: "consumePendingQueued",
+      threadId: "t1",
+      text: "later",
+    });
+    expect(landed.pendingQueued).toEqual({});
+  });
+});

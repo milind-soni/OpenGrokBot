@@ -1152,12 +1152,13 @@ bus.subscribe((event: RuntimeEvent) => {
 });
 
 function drainQueuedSends() {
-  drainSteeredMessages(store, (botId, threadId, prompt, userMessage) =>
+  drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds) =>
     // A plain attended turn — no automationSource, no unattended, no comms
     // depth: exactly what typing the same words into an idle bot would run.
     // Drain just appended the held lines; userMessage keeps startTurn
-    // from duplicating the last one.
-    startTurn(botId, prompt, { threadId, userMessage }).catch((err) => {
+    // from duplicating the last one, and excludeIds drops every drained
+    // line from the transcript-replay so they are not also in `prompt`.
+    startTurn(botId, prompt, { threadId, userMessage, excludeMessageIds: excludeIds }).catch((err) => {
       store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
@@ -1282,6 +1283,8 @@ async function startTurn(
   opts?: {
     commsDepth?: number;
     userMessage?: Message;
+    /** Extra transcript ids to omit (every drained queued line, not just the last). */
+    excludeMessageIds?: string[];
     /** Routines run in detached tasks; pin the destination for the whole turn. */
     threadId?: string;
     /** Cloud routines run the whole agent inside the bot's Box VM instead
@@ -1350,9 +1353,10 @@ async function startTurn(
 
   // transcript for API-backed drivers: settled text turns on the ACTIVE
   // branch only — abandoned forks never reach the model
+  const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
   const transcript = store
     .activePath(threadId)
-    .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
+    .filter((m) => m.kind === "text" && m.text && !skipTranscript.has(m.id))
     .slice(-40)
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
 
@@ -3581,7 +3585,7 @@ const server = createServer(async (req, res) => {
           }
         }
         const queued = queueSteeredMessage(bot, text);
-        return json(res, 202, { ok: true, queued: true, messageId: queued.id });
+        return json(res, 202, { ok: true, queued: true, queueId: queued.id });
       }
       await startTurn(bot.id, text);
       return json(res, 202, { ok: true });

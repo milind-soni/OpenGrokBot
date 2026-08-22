@@ -50,11 +50,19 @@ export function queueSteeredMessage(bot: BotRecord, text: string): { id: string 
 /** Drain every queue whose bot is idle: append the held lines (leaf is now
  * the finished turn's last item), then one run per thread whose prompt is
  * the texts joined with newlines. `userMessage` is the last appended line
- * so startTurn does not duplicate it. Entries leave the map BEFORE running
- * so a settle racing another settle can never fire the same queue twice. */
+ * so startTurn does not duplicate it; `excludeIds` is every drained line
+ * so transcript-replay adapters do not also see earlier queued texts.
+ * Entries leave the map BEFORE running so a settle racing another settle
+ * can never fire the same queue twice. */
 export function drainSteeredMessages(
   store: SteerStore,
-  run: (botId: string, threadId: string, prompt: string, userMessage: Message) => void | Promise<void>,
+  run: (
+    botId: string,
+    threadId: string,
+    prompt: string,
+    userMessage: Message,
+    excludeIds: string[],
+  ) => void | Promise<void>,
 ): void {
   // deleting only the entry being visited is safe under Map iteration
   for (const [threadId, entry] of queues) {
@@ -68,13 +76,20 @@ export function drainSteeredMessages(
     // committed to draining: the entry leaves the map before anything runs,
     // so a settle racing another settle can never fire the same queue twice
     queues.delete(threadId);
-    let last: Message | null = null;
+    const appended: Message[] = [];
     for (const item of entry.items) {
-      last = store.appendMessage(threadId, { role: "user", kind: "text", text: item.text });
+      appended.push(store.appendMessage(threadId, { role: "user", kind: "text", text: item.text }));
     }
+    const last = appended.at(-1);
     if (!last) continue;
     const prompt = entry.items.map((item) => item.text).join("\n");
-    void run(entry.botId, threadId, prompt, last);
+    void run(
+      entry.botId,
+      threadId,
+      prompt,
+      last,
+      appended.map((message) => message.id),
+    );
   }
 }
 

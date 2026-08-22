@@ -104,6 +104,7 @@ describe("steer-queue module", () => {
     // appended at drain, last message so startTurn adds nothing new
     expect(store.messages.map((m) => m.text)).toEqual(["first note", "second note"]);
     expect(userMessage.text).toBe("second note");
+    expect(run.mock.calls[0][4]).toEqual(store.messages.map((m) => m.id));
     expect(store.messages.every((m) => !m.queued)).toBe(true);
     expect(_queuedCount("thread-b")).toBe(0);
 

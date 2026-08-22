@@ -1,5 +1,6 @@
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/cn";
+import { useI18n } from "@/lib/i18n-context";
 import { teamImportPreview, type PendingTeamImport } from "@/lib/team-import";
 import { api, useStore, type Bot } from "@/state/store";
 import {
@@ -86,6 +87,7 @@ export function TeamLibraryPanel({
   returnFocusRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<TeamTab>("explore");
@@ -166,12 +168,12 @@ export function TeamLibraryPanel({
   };
 
   const readFile = async (file: File) => {
-    if (file.size > MAX_TEAM_FILE_BYTES) throw new Error("That team file is too large.");
+    if (file.size > MAX_TEAM_FILE_BYTES) throw new Error(t("That team file is too large."));
     let manifest: unknown;
     try {
       manifest = JSON.parse(await file.text());
     } catch (cause) {
-      if (cause instanceof SyntaxError) throw new Error("That team file is not valid JSON.");
+      if (cause instanceof SyntaxError) throw new Error(t("That team file is not valid JSON."));
       throw cause;
     }
     previewManifest(teamImportPreview(manifest), "file");
@@ -266,17 +268,19 @@ export function TeamLibraryPanel({
                   }}
                   disabled={importing}
                   className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
-                  aria-label="Back to teams"
+                  aria-label={t("Back to teams")}
                 >
                   <ArrowLeft size={18} />
                 </button>
               )}
               <h2 id="team-library-title" className="truncate text-[22px] font-semibold tracking-[-0.01em] text-ink">
-                {pending ? pending.name : "Teams"}
+                {pending ? pending.name : t("Teams")}
               </h2>
             </div>
             <p className={cn("mt-1 text-[13px] text-ink-secondary", pending && "ml-9")}>
-              {pending ? `${pending.members.length} ready-to-load bots` : "Start with a complete team or bring your own."}
+              {pending
+                ? t("{count} ready-to-load bots", { count: pending.members.length })
+                : t("Start with a complete team or bring your own.")}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -284,10 +288,10 @@ export function TeamLibraryPanel({
               <button
                 onClick={() => void openExternal(catalog?.repositoryUrl ?? COMMUNITY_TEAMS_REPOSITORY)}
                 className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
-                title="Open the community teams repository"
+                title={t("Open the community teams repository")}
               >
                 <Github size={16} />
-                <span className="max-sm:hidden">Community repo</span>
+                <span className="max-sm:hidden">{t("Community repo")}</span>
                 <ExternalLink size={12} />
               </button>
             )}
@@ -295,7 +299,7 @@ export function TeamLibraryPanel({
               onClick={onClose}
               disabled={importing}
               className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
-              aria-label="Close teams"
+              aria-label={t("Close teams")}
             >
               <X size={21} />
             </button>
@@ -308,7 +312,7 @@ export function TeamLibraryPanel({
               {pending.description && (
                 <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-secondary">{pending.description}</p>
               )}
-              <div className="mt-6 text-[12px] font-medium text-ink-secondary">Team members</div>
+              <div className="mt-6 text-[12px] font-medium text-ink-secondary">{t("Team members")}</div>
               <div className="mt-2 grid grid-cols-1 gap-x-10 md:grid-cols-2">
                 {pending.members.map((member, index) => (
                   <div key={`${member.name}-${index}`} className="flex min-h-[72px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
@@ -317,7 +321,7 @@ export function TeamLibraryPanel({
                     </div>
                     <div className="min-w-0">
                       <div className="truncate text-[14px] font-medium text-ink">{member.name}</div>
-                      <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{member.title || "General assistant"}</div>
+                      <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{member.title || t("General assistant")}</div>
                     </div>
                   </div>
                 ))}
@@ -325,8 +329,8 @@ export function TeamLibraryPanel({
               <div className="mt-6 flex items-start gap-2.5 rounded-xl bg-raised/45 px-4 py-3 text-[12.5px] leading-relaxed text-ink-secondary">
                 <Check size={15} className="mt-0.5 shrink-0 text-success" />
                 <p>
-                  Only roles and appearance are loaded. Your conversations, account connections, permissions, and computer access stay private.
-                  {source === "library" && " Playbooks remain available in the community repo for review."}
+                  {t("Only roles and appearance are loaded. Your conversations, account connections, permissions, and computer access stay private.")}
+                  {source === "library" && ` ${t("Playbooks remain available in the community repo for review.")}`}
                 </p>
               </div>
               {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
@@ -337,17 +341,17 @@ export function TeamLibraryPanel({
                 {currentBotCount > 0 ? (
                   importMode === "replace" ? (
                     <>
-                      Replaces your {currentBotCount} current {currentBotCount === 1 ? "bot" : "bots"}. They&apos;ll be archived with conversations intact.{" "}
-                      <button onClick={() => setImportMode("add")} className="font-medium text-ink hover:underline">Add alongside instead</button>
+                      {t("Replaces your {count} current bots. They'll be archived with conversations intact.", { count: currentBotCount })}{" "}
+                      <button onClick={() => setImportMode("add")} className="font-medium text-ink hover:underline">{t("Add alongside instead")}</button>
                     </>
                   ) : (
                     <>
-                      This team will be added alongside your current bots.{" "}
-                      <button onClick={() => setImportMode("replace")} className="font-medium text-ink hover:underline">Replace current team instead</button>
+                      {t("This team will be added alongside your current bots.")}{" "}
+                      <button onClick={() => setImportMode("replace")} className="font-medium text-ink hover:underline">{t("Replace current team instead")}</button>
                     </>
                   )
                 ) : (
-                  "No room is created—you can make one later if you want."
+                  t("No room is created—you can make one later if you want.")
                 )}
               </div>
               <button
@@ -357,19 +361,19 @@ export function TeamLibraryPanel({
               >
                 {importing && <Loader2 size={15} className="animate-spin" />}
                 {importing
-                  ? "Loading…"
+                  ? t("Loading…")
                   : currentBotCount === 0
-                    ? "Load team"
+                    ? t("Load team")
                     : importMode === "replace"
-                      ? "Replace team"
-                      : "Add team"}
+                      ? t("Replace team")
+                      : t("Add team")}
               </button>
             </footer>
           </>
         ) : (
           <>
             <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-              <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Team source">
+              <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label={t("Team source")}>
                 <button
                   role="tab"
                   aria-selected={tab === "explore"}
@@ -382,7 +386,7 @@ export function TeamLibraryPanel({
                     tab === "explore" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
                   )}
                 >
-                  Explore
+                  {t("Explore")}
                 </button>
                 <button
                   role="tab"
@@ -396,7 +400,7 @@ export function TeamLibraryPanel({
                     tab === "import" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
                   )}
                 >
-                  Import
+                  {t("Import")}
                 </button>
               </div>
               {tab === "explore" && (
@@ -405,8 +409,8 @@ export function TeamLibraryPanel({
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search teams"
-                    aria-label="Search teams"
+                    placeholder={t("Search teams")}
+                    aria-label={t("Search teams")}
                     className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
                   />
                 </label>
@@ -417,17 +421,17 @@ export function TeamLibraryPanel({
               {tab === "explore" && (
                 <div>
                   <div className="mb-3 text-[12px] font-medium text-ink-secondary">
-                    {search ? "Search results" : "Community teams"}
+                    {search ? t("Search results") : t("Community teams")}
                   </div>
                   {catalogLoading && (
                     <div className="flex items-center justify-center gap-2 py-24 text-[13px] text-ink-secondary">
-                      <Loader2 size={16} className="animate-spin" /> Loading teams…
+                      <Loader2 size={16} className="animate-spin" /> {t("Loading teams…")}
                     </div>
                   )}
                   {!catalogLoading && catalogError && (
                     <div className="rounded-xl bg-danger/10 p-4 text-[13px] text-danger">
                       <p>{catalogError}</p>
-                      <button onClick={() => void loadCatalog()} className="mt-3 rounded-full bg-raised px-3.5 py-2 text-ink hover:bg-raised-hover">Try again</button>
+                      <button onClick={() => void loadCatalog()} className="mt-3 rounded-full bg-raised px-3.5 py-2 text-ink hover:bg-raised-hover">{t("Try again")}</button>
                     </div>
                   )}
                   {!catalogLoading && catalog && (
@@ -438,7 +442,7 @@ export function TeamLibraryPanel({
                           <div className="min-w-0 flex-1">
                             <h3 className="truncate text-[14px] font-medium text-ink">{entry.name}</h3>
                             <p className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{entry.summary}</p>
-                            <p className="mt-1 text-[11.5px] text-ink-secondary/80">{entry.members} bots · {entry.skills.length} playbooks</p>
+                            <p className="mt-1 text-[11.5px] text-ink-secondary/80">{t("{bots} bots · {playbooks} playbooks", { bots: entry.members, playbooks: entry.skills.length })}</p>
                           </div>
                           <button
                             onClick={() => void loadLibraryTeam(entry)}
@@ -446,7 +450,7 @@ export function TeamLibraryPanel({
                             className="flex min-w-[72px] items-center justify-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
                           >
                             {busySlug === entry.slug && <Loader2 size={13} className="animate-spin" />}
-                            {busySlug === entry.slug ? "Loading" : "Load"}
+                            {busySlug === entry.slug ? t("Loading") : t("Load")}
                           </button>
                         </article>
                       ))}
@@ -454,8 +458,8 @@ export function TeamLibraryPanel({
                   )}
                   {!catalogLoading && catalog && visibleTeams.length === 0 && (
                     <div className="flex min-h-56 flex-col items-center justify-center text-center">
-                      <div className="text-[14px] font-medium text-ink">No teams found</div>
-                      <div className="mt-1 text-[12.5px] text-ink-secondary">Try a different search.</div>
+                      <div className="text-[14px] font-medium text-ink">{t("No teams found")}</div>
+                      <div className="mt-1 text-[12.5px] text-ink-secondary">{t("Try a different search.")}</div>
                     </div>
                   )}
                 </div>
@@ -475,7 +479,7 @@ export function TeamLibraryPanel({
                       void readFile(file).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
                     }}
                   />
-                  <div className="mb-3 text-[12px] font-medium text-ink-secondary">Bring your own team</div>
+                  <div className="mb-3 text-[12px] font-medium text-ink-secondary">{t("Bring your own team")}</div>
                   <div className="grid gap-5 md:grid-cols-2">
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -497,21 +501,21 @@ export function TeamLibraryPanel({
                       )}
                     >
                       <UploadCloud size={27} className="text-accent" />
-                      <span className="mt-3 text-[14px] font-medium text-ink">Choose a team file</span>
-                      <span className="mt-1 text-[12.5px] text-ink-secondary">or drop a .mausteam.json here</span>
+                      <span className="mt-3 text-[14px] font-medium text-ink">{t("Choose a team file")}</span>
+                      <span className="mt-1 text-[12.5px] text-ink-secondary">{t("or drop a .mausteam.json here")}</span>
                     </button>
 
                     <div className="flex min-h-56 flex-col justify-center rounded-2xl bg-raised/25 px-6">
                       <Github size={25} className="text-ink-secondary" />
-                      <h3 className="mt-3 text-[14px] font-medium text-ink">Load from GitHub</h3>
-                      <p className="mt-1 text-[12.5px] leading-relaxed text-ink-secondary">Paste a public repo or a direct team JSON link.</p>
+                      <h3 className="mt-3 text-[14px] font-medium text-ink">{t("Load from GitHub")}</h3>
+                      <p className="mt-1 text-[12.5px] leading-relaxed text-ink-secondary">{t("Paste a public repo or a direct team JSON link.")}</p>
                       <div className="mt-4 flex gap-2">
                         <input
                           value={githubUrl}
                           onChange={(event) => setGithubUrl(event.target.value)}
                           onKeyDown={(event) => event.key === "Enter" && void loadGithubTeam()}
                           placeholder="github.com/owner/repo"
-                          aria-label="GitHub team URL"
+                          aria-label={t("GitHub team URL")}
                           className="min-w-0 flex-1 rounded-xl bg-raised/80 px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
                         />
                         <button
@@ -520,7 +524,7 @@ export function TeamLibraryPanel({
                           className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-[13px] font-medium text-white hover:bg-accent/90 disabled:opacity-40"
                         >
                           {githubLoading && <Loader2 size={13} className="animate-spin" />}
-                          Load
+                          {t("Load")}
                         </button>
                       </div>
                     </div>

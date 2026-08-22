@@ -10,6 +10,7 @@ import { useStore, formatTime, type Bot, type Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { formatTokens } from "@/lib/format-tokens";
+import { useI18n } from "@/lib/i18n-context";
 
 /** Quiet per-task token tally — input+output combined, because one honest
  * total reads faster than a split; the split lives in the hover title. */
@@ -27,6 +28,7 @@ function TaskUsage({ usage }: { usage: Task["usage"] }) {
 
 export function TaskPicker({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -57,14 +59,14 @@ export function TaskPicker({ bot }: { bot: Bot }) {
       <button
         onClick={() => dispatch({ type: "newTask", botId: bot.id })}
         disabled={bot.busy}
-        title={bot.busy ? "Let this turn finish first" : "New task — a fresh context on this bot"}
+        title={bot.busy ? t("Let this turn finish first") : t("New task — a fresh context on this bot")}
         className={cn(
           "flex items-center gap-1 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40",
           COMPACT_BUBBLE,
         )}
       >
         <Plus size={12} className="@max-4xl/chathead:size-[14px]" />
-        <span className="@max-4xl/chathead:hidden">Task</span>
+        <span className="@max-4xl/chathead:hidden">{t("Task")}</span>
       </button>
     );
   }
@@ -81,8 +83,12 @@ export function TaskPicker({ bot }: { bot: Bot }) {
   const currentLabel = u ? formatTokens(u.input + u.output) : null;
   const switchTitle =
     u && currentLabel
-      ? `Switch task · ${currentLabel} (${u.input.toLocaleString()} in · ${u.output.toLocaleString()} out)`
-      : "Switch task";
+      ? t("Switch task · {tokens} ({input} in · {output} out)", {
+          tokens: currentLabel,
+          input: u.input.toLocaleString(),
+          output: u.output.toLocaleString(),
+        })
+      : t("Switch task");
 
   return (
     <div className="relative" ref={ref}>
@@ -94,7 +100,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
           COMPACT_BUBBLE,
         )}
       >
-        <span className="truncate @max-4xl/chathead:hidden">{current?.title ?? "Task"}</span>
+        <span className="truncate @max-4xl/chathead:hidden">{current?.title ?? t("Task")}</span>
         {/* folded: just the count in the bubble — the title rides the tooltip */}
         <span className="shrink-0 tabular-nums opacity-60 @max-4xl/chathead:opacity-100">{tasks.length}</span>
         <ChevronDown size={12} className="shrink-0 @max-4xl/chathead:hidden" />
@@ -134,7 +140,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
                         setRenaming(task.threadId);
                       }}
                       className="min-w-0 flex-1 text-left"
-                      title="Click to switch · double-click to rename"
+                      title={t("Click to switch · double-click to rename")}
                     >
                       <div className="truncate text-[13px] text-ink">{task.title}</div>
                       <div className="text-[11px] text-ink-secondary">
@@ -146,8 +152,8 @@ export function TaskPicker({ bot }: { bot: Bot }) {
                   <button
                     onClick={() => dispatch({ type: "deleteTask", botId: bot.id, threadId: task.threadId })}
                     disabled={bot.busy && active}
-                    aria-label="Delete task"
-                    title="Delete this task and its conversation"
+                    aria-label={t("Delete task")}
+                    title={t("Delete this task and its conversation")}
                     className="rounded p-1 text-ink-secondary opacity-0 hover:bg-raised hover:text-danger group-hover:opacity-100 disabled:opacity-20"
                   >
                     <Trash2 size={13} />
@@ -164,7 +170,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
             disabled={bot.busy}
             className="mt-1 flex w-full items-center gap-2 border-t border-hairline/40 px-3 py-2 text-left text-[13px] text-ink hover:bg-raised/50 disabled:opacity-40"
           >
-            <Plus size={13} className="text-ink-secondary" /> New task
+            <Plus size={13} className="text-ink-secondary" /> {t("New task")}
           </button>
         </div>
       )}

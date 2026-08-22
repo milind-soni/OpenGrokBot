@@ -30,6 +30,7 @@ import { pendingApprovals } from "./PendingApproval";
 import { cn } from "@/lib/cn";
 import { track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { useI18n } from "@/lib/i18n-context";
 
 /** Spoken answers to a permission card. Anything else is read as a reply
  * to the bot, not as consent — an approval must never be granted by a
@@ -71,6 +72,7 @@ export function CallTargetButton({
   onStart: () => void;
 }) {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const active = useOnCall() === targetId;
   const supported = capabilities.dictation.available && Boolean(window.ogb?.speechStart);
@@ -85,29 +87,29 @@ export function CallTargetButton({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const helpId = useId();
   const label = active
-    ? `Hang up on ${targetName}`
+    ? t("Hang up on {name}", { name: targetName })
     : !capabilitiesReady
-      ? "Checking call availability"
+      ? t("Checking call availability")
       : !supported
-        ? "Calls currently need the macOS desktop app"
+        ? t("Calls currently need the macOS desktop app")
         : !configured
-          ? "Add an ElevenLabs key in an agent profile to make calls"
+          ? t("Add an ElevenLabs key in an agent profile to make calls")
           : !voiceReady
-            ? "Pick a voice in an agent profile to make calls"
-            : `Call ${targetName}`;
+            ? t("Pick a voice in an agent profile to make calls")
+            : t("Call {name}", { name: targetName });
 
   const reason = !capabilitiesReady
-    ? "Checking whether this device can make calls."
+    ? t("Checking whether this device can make calls.")
     : !capabilities.dictation.available
-      ? "Calls require OpenMausBot for macOS because speech recognition runs on-device."
+      ? t("Calls require OpenMausBot for macOS because speech recognition runs on-device.")
       : !window.ogb?.speechStart
-        ? "The speech service is unavailable in this app build. Restart or update OpenMausBot."
+        ? t("The speech service is unavailable in this app build. Restart or update OpenMausBot.")
         : !configured
-          ? "Add an ElevenLabs API key so the bot can speak during calls."
+          ? t("Add an ElevenLabs API key so the bot can speak during calls.")
           : !voiceReady
             ? voices.length > 1
-              ? "Give every room member an ElevenLabs voice before starting a room call."
-              : "Choose an ElevenLabs voice before starting a call."
+              ? t("Give every room member an ElevenLabs voice before starting a room call.")
+              : t("Choose an ElevenLabs voice before starting a call.")
             : "";
 
   useEffect(() => {
@@ -164,10 +166,10 @@ export function CallTargetButton({
         <div
           id={helpId}
           role="group"
-          aria-label="Call unavailable"
+          aria-label={t("Call unavailable")}
           className="animate-pop-in absolute right-0 z-30 mt-1.5 w-[280px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl"
         >
-          <div className="text-[13px] font-medium text-ink">Call unavailable</div>
+          <div className="text-[13px] font-medium text-ink">{t("Call unavailable")}</div>
           <div className="mt-1 text-[12px] leading-[1.45] text-ink-secondary">{reason}</div>
           {voiceSetupRequired && (
             <button
@@ -179,7 +181,7 @@ export function CallTargetButton({
               }}
               className="mt-2.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110"
             >
-              Open agent settings
+              {t("Open agent settings")}
             </button>
           )}
         </div>
@@ -196,6 +198,7 @@ export function CallOverlay({ bot }: { bot: Bot }) {
 
 function Call({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
+  const { t } = useI18n();
   const speech = useSpeech();
   const initialPhase: Phase = bot.busy ? "working" : "listening";
   const [phase, setPhase] = useState<Phase>(initialPhase);
@@ -482,7 +485,7 @@ function Call({ bot }: { bot: Bot }) {
     <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-6 bg-app/95 backdrop-blur-sm">
       <button
         onClick={() => endCall(bot.id)}
-        aria-label="Hang up"
+        aria-label={t("Hang up")}
         className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
       >
         <X size={18} />
@@ -494,7 +497,7 @@ function Call({ bot }: { bot: Bot }) {
         <div className="text-[20px] font-medium text-ink">{bot.name}</div>
         <div className="flex items-center gap-2 text-[13.5px] text-ink-secondary">
           {(phase === "working" || phase === "sending") && <Loader2 size={13} className="animate-spin" />}
-          {status}
+          {t(status)}
         </div>
       </div>
 
@@ -503,7 +506,7 @@ function Call({ bot }: { bot: Bot }) {
         {phase === "listening" ? (
           heard || (
             <span className="text-ink-secondary">
-              {pushToTalk ? "Release Control + Option to send…" : "Say something…"}
+              {pushToTalk ? t("Release Control + Option to send…") : t("Say something…")}
             </span>
           )
         ) : (
@@ -513,12 +516,12 @@ function Call({ bot }: { bot: Bot }) {
 
       {note && (
         <div className="flex max-w-[460px] flex-col items-center gap-2 text-center text-[12.5px] text-warning">
-          <span>{note}</span>
+          <span>{t(note)}</span>
           <button
             onClick={listen}
             className="rounded-full border border-warning/40 px-3 py-1.5 text-[12px] hover:bg-warning/10"
           >
-            Try microphone again
+            {t("Try microphone again")}
           </button>
         </div>
       )}

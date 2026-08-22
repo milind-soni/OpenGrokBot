@@ -37,6 +37,7 @@ import {
   localComputerDisabledReason,
   localComputerSelectable,
 } from "@/lib/local-computer";
+import { useI18n } from "@/lib/i18n-context";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -76,7 +77,7 @@ interface LocalVmStatus {
   viewer_url: string;
 }
 
-function routineScheduleLabel(routine: Routine) {
+function routineScheduleLabel(routine: Routine, t: (source: string) => string) {
   if (routine.schedule.type === "once") {
     return new Date(routine.schedule.at).toLocaleString([], {
       month: "short",
@@ -88,24 +89,25 @@ function routineScheduleLabel(routine: Routine) {
   const days = routine.schedule.weekdays;
   const cadence =
     days.length === 7
-      ? "Every day"
+      ? t("Every day")
       : days.join(",") === "1,2,3,4,5"
-        ? "Weekdays"
-        : days.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ");
+        ? t("Weekdays")
+        : days.map((day) => t(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day])).join(", ");
   const [hour, minute] = routine.schedule.time.split(":").map(Number);
   return `${cadence} · ${new Date(2000, 0, 1, hour, minute).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
-function nextRunLabel(at: number | null) {
-  if (at == null) return "Paused";
+function nextRunLabel(at: number | null, t: (source: string) => string) {
+  if (at == null) return t("Paused");
   const date = new Date(at);
   const today = new Date();
   const sameDay = date.toDateString() === today.toDateString();
-  return `${sameDay ? "Today" : date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${sameDay ? t("Today") : date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 export function ComputerPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const localAvailable = capabilities.localComputer.available;
   const isLinux = capabilities.host.platform === "linux";
@@ -532,7 +534,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       if (!viewerUrl) throw new Error("The computer did not return a live desktop link");
 
       if (window.ogb?.desktopViewer) {
-        const opened = await window.ogb.desktopViewer.open(viewerUrl, `${bot.name}'s live desktop`, bot.id);
+        const opened = await window.ogb.desktopViewer.open(viewerUrl, t("{name}'s live desktop", { name: bot.name }), bot.id);
         if (!opened) throw new Error("OpenMausBot could not open the live desktop");
       } else if (fallbackTab) {
         fallbackTab.location.replace(viewerUrl);
@@ -582,8 +584,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       (action === "vm-recreate" || action === "vm-delete") &&
       !window.confirm(
         action === "vm-delete"
-          ? `Delete ${bot.name}'s Local VM? Its private durable workspace will remain.`
-          : `Replace ${bot.name}'s Local VM? Its private durable workspace will remain.`,
+          ? t("Delete {name}'s Local VM? Its private durable workspace will remain.", { name: bot.name })
+          : t("Replace {name}'s Local VM? Its private durable workspace will remain.", { name: bot.name }),
       )
     ) return;
     setPending(action);
@@ -646,7 +648,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
-          title="Bot settings"
+          title={t("Bot settings")}
         >
           <Settings size={18} />
         </button>
@@ -660,7 +662,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 panelView === "computer" ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
               )}
             >
-              <Monitor size={13} /> Computer
+              <Monitor size={13} /> {t("Computer")}
             </button>
             <button
               onClick={() => setPanelView("android")}
@@ -674,7 +676,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </button>
           </div>
         ) : (
-          <span className="text-[15px] font-semibold text-ink">Computer</span>
+          <span className="text-[15px] font-semibold text-ink">{t("Computer")}</span>
         )}
         <button
           onClick={() => dispatch({ type: "toggleComputer", open: false })}
@@ -692,18 +694,18 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       <div className="flex-1 overflow-y-auto px-5 pb-5">
           {/* Screen preview */}
           <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
-            <span>{bot.name}'s screen</span>
-            {phase === "local" && <span className="text-[11px]">this computer</span>}
-            {phase === "vm" && <span className="text-[11px]">Local VM</span>}
-            {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
+            <span>{t("{name}'s screen", { name: bot.name })}</span>
+            {phase === "local" && <span className="text-[11px]">{t("this computer")}</span>}
+            {phase === "vm" && <span className="text-[11px]">{t("Local VM")}</span>}
+            {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">{t("self-hosted VPS")}</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
             <img
               src={frameSrc}
-              alt={`${bot.name}'s screen`}
+              alt={t("{name}'s screen", { name: bot.name })}
               className="h-full w-full object-contain"
-              title={phase === "vm" ? "Watch-only preview — use Open desktop to click and type" : undefined}
+              title={phase === "vm" ? t("Watch-only preview — use Open desktop to click and type") : undefined}
             />
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
@@ -716,23 +718,23 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               )}
               <span className="text-[12px]">
                 {phase === "ready"
-                  ? "Waiting for the first frame…"
+                  ? t("Waiting for the first frame…")
                   : phase === "vm"
-                    ? "Capturing the Local VM screen…"
+                    ? t("Capturing the Local VM screen…")
                   : phase === "local"
                     ? isLinux
-                      ? "Ready for approved bot actions. Start the separate preview below when you want to watch the screen."
+                      ? t("Ready for approved bot actions. Start the separate preview below when you want to watch the screen.")
                       : localMisses >= 3
-                      ? "No frames yet — the preview needs Screen Recording permission. After granting, relaunch the app."
-                      : "Capturing this computer's screen…"
-                    : emptyState[phase]}
+                      ? t("No frames yet — the preview needs Screen Recording permission. After granting, relaunch the app.")
+                      : t("Capturing this computer's screen…")
+                    : t(emptyState[phase])}
               </span>
               {phase === "local" && !isLinux && localMisses >= 3 && (
                 <button
                   onClick={() => window.ogb?.permOpenSettings?.("screen")}
                   className="mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                 >
-                  Open Settings
+                  {t("Open Settings")}
                 </button>
               )}
               {phase === "vm-unavailable" && (
@@ -745,14 +747,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                     {(pending === "vm-create" || pending === "vm-recreate") && (
                       <Loader2 size={13} className="mr-1.5 inline animate-spin" />
                     )}
-                    {vmStatus.container === "missing" ? `Create ${bot.name}'s VM` : `Replace ${bot.name}'s VM`}
+                    {vmStatus.container === "missing" ? t("Create {name}'s VM", { name: bot.name }) : t("Replace {name}'s VM", { name: bot.name })}
                   </button>
                 ) : (
                   <button
                     onClick={openVmSettings}
                     className="mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                   >
-                    Open Local VM setup
+                    {t("Open Local VM setup")}
                   </button>
                 )
               )}
@@ -761,7 +763,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   onClick={openConnectionSettings}
                   className="mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                 >
-                  Open VPS settings
+                  {t("Open VPS settings")}
                 </button>
               )}
               {phase === "vps-stopped" && bot.computer === "cloud" && (
@@ -771,7 +773,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   className="mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-50"
                 >
                   {pending === "provision" && <Loader2 size={13} className="mr-1.5 inline animate-spin" />}
-                  Start VPS computer
+                  {t("Start VPS computer")}
                 </button>
               )}
             </div>
@@ -780,13 +782,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
-            {error}
+            {t(error)}
           </div>
         )}
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
-              Add a Box API key to give this bot a cloud computer — it spins up right here.
+              {t("Add a Box API key to give this bot a cloud computer — it spins up right here.")}
             </div>
             <ApiKeyRow
               section="box"
@@ -797,13 +799,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {phase === "vps-unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
-              Configure the VPS SSH alias in App Settings → Connections. Auto only reuses an existing ready container.
+              {t("Configure the VPS SSH alias in App Settings → Connections. Auto only reuses an existing ready container.")}
             </div>
             <button
               onClick={openConnectionSettings}
               className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
             >
-              Open VPS settings
+              {t("Open VPS settings")}
             </button>
           </div>
         )}
@@ -812,7 +814,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {(phase === "ready" || phase === "vm") && control.helpReason && !control.held && (
           <div className="mt-3 rounded-xl border border-warning/25 bg-warning/10 p-4">
             <div className="text-[13px] leading-relaxed text-warning">
-              <b>{bot.name}</b> asked for your hands: {control.helpReason}
+              {t("{name} asked for your hands: {reason}", { name: bot.name, reason: control.helpReason })}
             </div>
             <div className="mt-2 flex gap-2">
               <button
@@ -823,14 +825,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
-                Take control
+                {t("Take control")}
               </button>
               <button
                 onClick={() => controlAction("dismiss-help")}
                 disabled={controlPending}
                 className="rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
               >
-                Dismiss
+                {t("Dismiss")}
               </button>
             </div>
           </div>
@@ -838,9 +840,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {(phase === "ready" || phase === "vm") && control.held && (
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
-              You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
-              {phase === "ready" && cloudBackend === "box" && " Use Open desktop to drive."}
-              {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
+              {t("You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.")}
+              {phase === "ready" && cloudBackend === "box" && t(" Use Open desktop to drive.")}
+              {phase === "vm" && t(" Use Open desktop to drive — the preview here is watch-only.")}
             </div>
             <button
               onClick={() => controlAction("release")}
@@ -848,7 +850,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
               <Hand size={14} />
-              Hand control back
+              {t("Hand control back")}
             </button>
           </div>
         )}
@@ -857,10 +859,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             onClick={() => void openDesktop()}
             disabled={pending === "join"}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Open the Local VM's live desktop inside OpenMausBot"
+            title={t("Open the Local VM's live desktop inside OpenMausBot")}
           >
             {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
-            Open live desktop
+            {t("Open live desktop")}
           </button>
         )}
         {phase === "vm" && !control.held && !control.helpReason && (
@@ -868,10 +870,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             onClick={() => void openDesktop()}
             disabled={controlPending || pending === "join" || !vmViewerUrl}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-            title="Pause the bot's hands and open the Local VM's live desktop"
+            title={t("Pause the bot's hands and open the Local VM's live desktop")}
           >
             {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
-            Take control
+            {t("Take control")}
           </button>
         )}
         {phase === "vm" && vmStatus?.mode === "per-bot" && (
@@ -879,10 +881,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             onClick={() => void runVmAction("vm-delete")}
             disabled={pending !== null || bot.busy}
             className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-danger/30 py-2 text-[13px] text-danger hover:bg-danger/10 disabled:opacity-50"
-            title={bot.busy ? "Stop this bot's turn before deleting its VM" : `Delete ${bot.name}'s Local VM`}
+            title={bot.busy ? t("Stop this bot's turn before deleting its VM") : t("Delete {name}'s Local VM", { name: bot.name })}
           >
             {pending === "vm-delete" ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
-            Delete this bot's VM
+            {t("Delete this bot's VM")}
           </button>
         )}
         {/* Cloud-only actions */}
@@ -895,10 +897,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 }
                 disabled={controlPending || pending === "join"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-                title="Pause the bot's hands and drive this computer yourself"
+                title={t("Pause the bot's hands and drive this computer yourself")}
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
-                Take control
+                {t("Take control")}
               </button>
             )}
             {cloudBackend === "box" && control.held && (
@@ -908,7 +910,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
-                Open live desktop
+                {t("Open live desktop")}
               </button>
             )}
             {(cloudBackend === "vps" || boxState !== "archived") && (
@@ -916,10 +918,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 onClick={() => run("sleep")}
                 disabled={pending === "sleep"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-                title="Put the computer to sleep"
+                title={t("Put the computer to sleep")}
               >
                 {pending === "sleep" ? <Loader2 size={14} className="animate-spin" /> : <Moon size={14} />}
-                Sleep
+                {t("Sleep")}
               </button>
             )}
           </div>
@@ -931,19 +933,17 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
         {/* Computer source */}
           <div className="mt-4 rounded-xl bg-card p-4">
-            <div className="text-[15px] font-medium text-ink">Runs on</div>
+            <div className="text-[15px] font-medium text-ink">{t("Runs on")}</div>
             <div className="mt-0.5 text-[13px] text-ink-secondary">
               {!bot.computer &&
                 (isLinux || !localSelectable
                   ? cloudBackend === "vps"
-                    ? "Auto reuses a ready VPS when one is configured; otherwise computer use stays off. "
-                    : `${linuxAutoDescription()} `
+                    ? t("Auto reuses a ready VPS when one is configured; otherwise computer use stays off. ")
+                    : `${t(linuxAutoDescription())} `
                   : cloudBackend === "vps"
-                    ? "Auto reuses a ready VPS when one exists, otherwise this computer. "
-                    : "Auto uses a cloud box when one exists, otherwise this computer. ")}
-              Pick where this bot's computer lives. <b className="text-ink">Local VM</b> is a Cua-controlled Linux desktop
-              in a container on this machine — free and separate from your own desktop. Set it up in App
-              Settings → Local VM.
+                    ? t("Auto reuses a ready VPS when one exists, otherwise this computer. ")
+                    : t("Auto uses a cloud box when one exists, otherwise this computer. "))}
+              {t("Pick where this bot's computer lives. Local VM is a Cua-controlled Linux desktop in a container on this machine — free and separate from your own desktop. Set it up in App Settings → Local VM.")}
           </div>
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
             {(
@@ -971,7 +971,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               <button
                 key={mode}
                 disabled={disabled}
-                title={unavailableTitle}
+                title={unavailableTitle ? t(unavailableTitle) : undefined}
                 onClick={() => {
                   if (mode === bot.computer) return;
                   if (mode === "local" && bot.autoApprove) setLocalAutoWarning(true);
@@ -986,7 +986,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                     : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
                 )}
               >
-                {label}
+                {t(label)}
               </button>
                 );
               })()
@@ -1006,7 +1006,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
               <CalendarClock size={16} className="text-accent" />
-              Scheduled tasks
+              {t("Scheduled tasks")}
             </div>
             {botRoutines.length > 0 && (
               <span className="rounded-full bg-raised px-2 py-0.5 text-[10px] font-medium text-ink-secondary">
@@ -1015,12 +1015,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             )}
           </div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Schedule work for {bot.name}. Use its current setup, or run the whole job inside its cloud VM.
+            {t("Schedule work for {name}. Use its current setup, or run the whole job inside its cloud VM.", { name: bot.name })}
           </div>
           {!computerDestination && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[11.5px] leading-relaxed text-warning">
               <Power size={13} className="mt-0.5 shrink-0" />
-              Scheduled tasks on this computer will not have desktop access while this is Off. Choose Cloud VM in the schedule editor to run the whole job there.
+              {t("Scheduled tasks on this computer will not have desktop access while this is Off. Choose Cloud VM in the schedule editor to run the whole job there.")}
             </div>
           )}
           {activeRoutineRun && (
@@ -1030,7 +1030,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             >
               <Loader2 size={13} className={activeRoutineRun.status === "queued" ? "" : "animate-spin"} />
               <span className="min-w-0 flex-1 truncate">
-                {activeRoutineRun.routineName} · {activeRoutineRun.status === "waiting" ? "needs you" : activeRoutineRun.status}
+                {activeRoutineRun.routineName} · {activeRoutineRun.status === "waiting" ? t("needs you") : t(activeRoutineRun.status)}
               </span>
             </button>
           )}
@@ -1046,10 +1046,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium text-ink">{routine.name}</span>
                     <span className="block truncate text-[10.5px] text-ink-secondary">
-                      {routineScheduleLabel(routine)}{routine.runOn === "cloud" ? " · runs on VM" : ""}
+                      {routineScheduleLabel(routine, t)}{routine.runOn === "cloud" ? t(" · runs on VM") : ""}
                     </span>
                   </span>
-                  <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt)}</span>
+                  <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt, t)}</span>
                 </button>
               ))}
             </div>
@@ -1060,15 +1060,15 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110"
             >
               <Plus size={14} />
-              Create schedule
+              {t("Create schedule")}
             </button>
             <button
               onClick={() => dispatch({ type: "showRoutines" })}
               className="flex items-center justify-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
-              title="Open schedules"
+              title={t("Open schedules")}
             >
               <CalendarDays size={14} />
-              Schedules
+              {t("Schedules")}
             </button>
           </div>
         </div>

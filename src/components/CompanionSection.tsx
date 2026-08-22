@@ -16,6 +16,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Smartphone, Trash2 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { companionPairingLink } from "../lib/companion-pairing";
+import { useI18n } from "../lib/i18n-context";
+import type { TranslationValues } from "../lib/i18n";
 import { Card } from "./SettingsPrimitives";
 
 interface Device {
@@ -64,17 +66,18 @@ const bridge = (): Bridge | null =>
   // SAFETY: the preload owns `ogb.companion`; every call is still guarded for browser builds where it is absent.
   (globalThis as { ogb?: { companion?: Bridge } }).ogb?.companion ?? null;
 
-const relative = (at: number) => {
+const relative = (at: number, t: (source: string, values?: TranslationValues) => string) => {
   const seconds = Math.round((Date.now() - at) / 1000);
-  if (seconds < 90) return "just now";
+  if (seconds < 90) return t("just now");
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60) return t("{count} min ago", { count: minutes });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return `${Math.round(hours / 24)} d ago`;
+  if (hours < 24) return t("{count} h ago", { count: hours });
+  return t("{count} d ago", { count: Math.round(hours / 24) });
 };
 
 export function CompanionSection() {
+  const { t } = useI18n();
   const [state, setState] = useState<CompanionState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,8 +136,8 @@ export function CompanionSection() {
   if (!bridge()) {
     return (
       <Card
-        title="Companion"
-        subtitle="The companion runs as its own process, which only the desktop app can start. Open OpenMausBot on this computer to turn it on."
+        title={t("Companion")}
+        subtitle={t("The companion runs as its own process, which only the desktop app can start. Open OpenMausBot on this computer to turn it on.")}
       >
         <div />
       </Card>
@@ -143,7 +146,7 @@ export function CompanionSection() {
 
   if (!state) {
     return (
-      <Card title="Companion" subtitle="Loading…">
+      <Card title={t("Companion")} subtitle={t("Loading…")}>
         <Loader2 size={15} className="animate-spin text-ink-secondary" />
       </Card>
     );
@@ -178,19 +181,19 @@ export function CompanionSection() {
   return (
     <div className="flex flex-col gap-4">
       <Card
-        title="Companion"
-        subtitle="Let a phone open your chats, answer approvals, and send new work. Off by default: your bots run commands on this computer, so only pair a device you trust, on a network you trust."
+        title={t("Companion")}
+        subtitle={t("Let a phone open your chats, answer approvals, and send new work. Off by default: your bots run commands on this computer, so only pair a device you trust, on a network you trust.")}
       >
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="text-[14px] text-ink">{state.enabled ? "On" : "Off"}</div>
+            <div className="text-[14px] text-ink">{state.enabled ? t("On") : t("Off")}</div>
             <div className="mt-0.5 text-[13px] text-ink-secondary">
               {!state.enabled
-                ? "Nothing on this computer is reachable from the network."
+                ? t("Nothing on this computer is reachable from the network.")
                 : !address
-                  ? `Listening on port ${state.port} — no network address yet.`
+                  ? t("Listening on port {port} — no network address yet.", { port: state.port })
                   : tailnet
-                    ? `Enter ${tailnet}:${state.port} on your phone — that works from anywhere on your tailnet, on any network.`
+                    ? t("Enter {address}:{port} on your phone — that works from anywhere on your tailnet, on any network.", { address: tailnet, port: state.port })
                     : state.discovery?.advertising
                       ? // The address is shown even when Bonjour is working.
                         // Discovery can be advertising happily and still not
@@ -198,14 +201,14 @@ export function CompanionSection() {
                         // clients blocks multicast — and when that happens the
                         // typed address is the way out. Hiding it behind a
                         // failure the panel cannot detect is no help at all.
-                        `Your phone will find this computer as "${state.discovery.name}", or you can enter ${address}:${state.port}.`
-                      : `Listening on ${address}:${state.port} — enter that on your phone.`}
+                        t("Your phone will find this computer as \"{name}\", or you can enter {address}:{port}.", { name: state.discovery.name, address, port: state.port })
+                      : t("Listening on {address}:{port} — enter that on your phone.", { address, port: state.port })}
             </div>
           </div>
           <button
             role="switch"
             aria-checked={state.enabled}
-            aria-label="Companion"
+            aria-label={t("Companion")}
             disabled={busy}
             onClick={() => void act((c) => (state.enabled ? c.stop() : c.start()))}
             className={cnSwitch(state.enabled)}
@@ -215,7 +218,7 @@ export function CompanionSection() {
         </div>
         {state.enabled && tailnet && state.lan && (
           <div className="mt-3 text-[13px] text-ink-secondary">
-            On this network only: {state.lan}:{state.port}
+            {t("On this network only: {address}:{port}", { address: state.lan, port: state.port })}
           </div>
         )}
         {/* A tailnet address with no name is workable on a laptop and not on
@@ -223,16 +226,12 @@ export function CompanionSection() {
             unexplained policy error. */}
         {state.enabled && state.tailscale && !state.tailnetName && (
           <div className="mt-3 text-[13px] text-ink-secondary">
-            You're on a tailnet, but this computer's MagicDNS name couldn't be read from the
-            Tailscale app — either MagicDNS is off, or the Tailscale command line tool isn't
-            where we looked. iPhones can't connect to a bare tailnet address, so check the
-            OpenMausBot log for which paths were tried.
+            {t("You're on a tailnet, but this computer's MagicDNS name couldn't be read from the Tailscale app — either MagicDNS is off, or the Tailscale command line tool isn't where we looked. iPhones can't connect to a bare tailnet address, so check the OpenMausBot log for which paths were tried.")}
           </div>
         )}
         {state.enabled && !state.tailscale && (
           <div className="mt-3 text-[13px] text-ink-secondary">
-            Only reachable on this network. Install Tailscale on both this computer and your phone
-            to reach it from anywhere — including networks that stop devices from seeing each other.
+            {t("Only reachable on this network. Install Tailscale on both this computer and your phone to reach it from anywhere — including networks that stop devices from seeing each other.")}
           </div>
         )}
         {(error || state.error) && (
@@ -241,33 +240,33 @@ export function CompanionSection() {
       </Card>
 
       <Card
-        title="Connect a phone"
+        title={t("Connect a phone")}
         subtitle={
           state.pairing
             ? pairingLink
-              ? "Scan with your phone's Camera, then confirm in OpenMausMobile. You can also use the code manually."
-              : "Open OpenMausMobile, choose this computer, and enter the code."
+              ? t("Scan with your phone's Camera, then confirm in OpenMausMobile. You can also use the code manually.")
+              : t("Open OpenMausMobile, choose this computer, and enter the code.")
             : state.enabled
-              ? "Open a short, single-use pairing window for a trusted phone."
-              : "This turns on Companion and opens a short, single-use pairing window in one step."
+              ? t("Open a short, single-use pairing window for a trusted phone.")
+              : t("This turns on Companion and opens a short, single-use pairing window in one step.")
         }
       >
         {state.pairing ? (
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             {pairingLink && (
-              <div className="w-fit shrink-0 rounded-xl bg-white p-3" aria-label="Phone pairing QR code">
+              <div className="w-fit shrink-0 rounded-xl bg-white p-3" aria-label={t("Phone pairing QR code")}>
                 <QRCodeSVG value={pairingLink} size={144} level="M" bgColor="#ffffff" fgColor="#111111" />
               </div>
             )}
             <div className="min-w-0 flex-1">
-              <div className="text-[12px] font-medium uppercase tracking-wide text-ink-secondary">Manual code</div>
+              <div className="text-[12px] font-medium uppercase tracking-wide text-ink-secondary">{t("Manual code")}</div>
               <div className="mt-1 font-mono text-[28px] tracking-[0.3em] text-ink">{state.pairing.code}</div>
               <div className="mt-1 break-all text-[13px] text-ink-secondary">
-                Expires in {secondsLeft}s{address ? ` · ${address}:${state.port}` : ""}
+                {t("Expires in {seconds}s", { seconds: secondsLeft })}{address ? ` · ${address}:${state.port}` : ""}
               </div>
               {state.discovery?.advertising && (
                 <div className="mt-2 text-[13px] text-ink-secondary">
-                  Or open the mobile app and choose “{state.discovery.name}” under On this network.
+                  {t("Or open the mobile app and choose “{name}” under On this network.", { name: state.discovery.name })}
                 </div>
               )}
               <button
@@ -275,7 +274,7 @@ export function CompanionSection() {
                 onClick={() => void act((c) => c.pairing(false))}
                 className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-raised disabled:opacity-40"
               >
-                Cancel
+                {t("Cancel")}
               </button>
             </div>
           </div>
@@ -285,17 +284,17 @@ export function CompanionSection() {
             onClick={beginSetup}
             className="rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-40"
           >
-            {busy ? "Preparing…" : state.devices.length ? "Pair another phone" : "Set up a phone"}
+            {busy ? t("Preparing…") : state.devices.length ? t("Pair another phone") : t("Set up a phone")}
           </button>
         )}
       </Card>
 
       <Card
-        title="Paired devices"
+        title={t("Paired devices")}
         subtitle={
           state.devices.length
-            ? "Cloud desktop is full interactive access. Enable it only for a phone you trust; removing a device signs it out immediately."
-            : "No phones are paired yet."
+            ? t("Cloud desktop is full interactive access. Enable it only for a phone you trust; removing a device signs it out immediately.")
+            : t("No phones are paired yet.")
         }
       >
         {state.devices.length > 0 && (
@@ -305,14 +304,14 @@ export function CompanionSection() {
                 <Smartphone size={15} className="shrink-0 text-ink-secondary" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] text-ink">{device.name}</div>
-                  <div className="text-[12px] text-ink-secondary">Last seen {relative(device.lastSeenAt)}</div>
+                  <div className="text-[12px] text-ink-secondary">{t("Last seen {time}", { time: relative(device.lastSeenAt, t) })}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[12px] text-ink-secondary">Cloud desktop</span>
+                  <span className="text-[12px] text-ink-secondary">{t("Cloud desktop")}</span>
                   <button
                     role="switch"
                     aria-checked={device.cloudDesktopAccess}
-                    aria-label={`Cloud desktop access for ${device.name}`}
+                    aria-label={t("Cloud desktop access for {name}", { name: device.name })}
                     disabled={busy}
                     onClick={() => void act((c) => c.cloudDesktop(device.id, !device.cloudDesktopAccess))}
                     className={cnSwitch(device.cloudDesktopAccess)}
@@ -323,7 +322,7 @@ export function CompanionSection() {
                 <button
                   disabled={busy}
                   onClick={() => void act((c) => c.revoke(device.id))}
-                  aria-label={`Remove ${device.name}`}
+                  aria-label={t("Remove {name}", { name: device.name })}
                   className="shrink-0 rounded p-1 text-ink-secondary hover:bg-raised hover:text-danger disabled:opacity-40"
                 >
                   <Trash2 size={14} />

@@ -6,9 +6,11 @@ import { useStore } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
 import { botUsage, costCaption, formatTokens, formatUsd, hasFiniteCost, sumUsage } from "@/lib/usage";
+import { useI18n } from "@/lib/i18n-context";
 
 export function UsageSection() {
   const { state } = useStore();
+  const { t } = useI18n();
   const rows = state.bots
     .filter((b) => !b.hidden)
     .map((bot) => {
@@ -27,16 +29,16 @@ export function UsageSection() {
   const billings = new Set(rows.map((r) => r.billing));
 
   return (
-    <Card title="Usage" subtitle="Tokens and cost per bot, added up from every settled turn. Only engines that report a price show one.">
+    <Card title={t("Usage")} subtitle={t("Tokens and cost per bot, added up from every settled turn. Only engines that report a price show one.")}>
       {rows.length === 0 ? (
-        <div className="text-[13px] text-ink-secondary">Nothing spent yet — figures appear after a bot's first turn.</div>
+        <div className="text-[13px] text-ink-secondary">{t("Nothing spent yet — figures appear after a bot's first turn.")}</div>
       ) : (
         <div className="flex flex-col">
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-5 border-b border-hairline/40 pb-2 text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">
-            <span>Bot</span>
-            <span className="text-right">Turns</span>
-            <span className="text-right">Tokens</span>
-            <span className="text-right">Cost</span>
+            <span>{t("Bot")}</span>
+            <span className="text-right">{t("Turns")}</span>
+            <span className="text-right">{t("Tokens")}</span>
+            <span className="text-right">{t("Cost")}</span>
           </div>
           {rows.map(({ bot, usage }) => (
             <div key={bot.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-5 border-b border-hairline/20 py-2 text-[13px]">
@@ -52,14 +54,16 @@ export function UsageSection() {
             </div>
           ))}
           <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-5 pt-2.5 text-[13px] font-medium text-ink">
-            <span>All bots</span>
+            <span>{t("All bots")}</span>
             <span className="text-right tabular-nums">{total.turns}</span>
             <span className="text-right tabular-nums">{formatTokens(total.input + total.output)}</span>
             <span className="text-right tabular-nums">{hasFiniteCost(total.costUsd) ? formatUsd(total.costUsd) : "—"}</span>
           </div>
           {hasFiniteCost(total.costUsd) && (
             <div className="mt-3 text-[12px] leading-relaxed text-ink-secondary">
-              Cost is {billings.size === 1 ? costCaption([...billings][0]) : "as each engine reports it — on a subscription it's an equivalent, not a charge"}.
+              {t("Cost is {description}.", {
+                description: t(billings.size === 1 ? costCaption([...billings][0]) : "as each engine reports it — on a subscription it's an equivalent, not a charge"),
+              })}
             </div>
           )}
         </div>

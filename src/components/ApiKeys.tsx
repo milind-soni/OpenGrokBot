@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { useI18n } from "@/lib/i18n-context";
 
 export type ConfigSection = "composio" | "box" | "opencodeGo";
 
@@ -67,6 +68,7 @@ const CREDENTIALS: Record<
 
 function CredentialHelp({ section }: { section: ConfigSection }) {
   const credential = CREDENTIALS[section];
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -97,7 +99,7 @@ function CredentialHelp({ section }: { section: ConfigSection }) {
       <button
         ref={buttonRef}
         type="button"
-        aria-label={`About ${credential.label}`}
+        aria-label={t("About {label}", { label: t(credential.label) })}
         aria-expanded={open}
         aria-controls={popoverId}
         onClick={() => setOpen((current) => !current)}
@@ -109,14 +111,14 @@ function CredentialHelp({ section }: { section: ConfigSection }) {
         <div
           id={popoverId}
           role="group"
-          aria-label={`${credential.label} help`}
+          aria-label={t("{label} help", { label: t(credential.label) })}
           className="animate-pop-in absolute right-0 z-30 mt-1.5 w-[270px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl"
         >
-          <div className="text-[12px] leading-[1.45] text-ink-secondary">{credential.description}</div>
+          <div className="text-[12px] leading-[1.45] text-ink-secondary">{t(credential.description)}</div>
           {credential.warning && (
             <div className="mt-2 flex gap-1.5 rounded-lg border border-warning/25 bg-warning/10 px-2 py-1.5 text-[11px] leading-[1.4] text-warning">
               <TriangleAlert size={13} className="mt-px shrink-0" aria-hidden="true" />
-              <span>{credential.warning}</span>
+              <span>{t(credential.warning)}</span>
             </div>
           )}
           <a
@@ -126,7 +128,7 @@ function CredentialHelp({ section }: { section: ConfigSection }) {
             onClick={() => setOpen(false)}
             className="mt-2.5 flex items-center gap-1.5 text-[12px] font-medium text-accent hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70"
           >
-            {credential.linkLabel}
+            {t(credential.linkLabel)}
             <ExternalLink size={12} aria-hidden="true" />
           </a>
         </div>
@@ -144,6 +146,7 @@ export function ApiKeyRow({
   onSaved?: (configured: boolean) => void;
 }) {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -176,13 +179,13 @@ export function ApiKeyRow({
     <div>
       <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
         <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
-        <span>{credential.label}</span>
+        <span>{t(credential.label)}</span>
         {credential.optional && (
           <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">
-            Optional
+            {t("Optional")}
           </span>
         )}
-        {configured && <span className="text-[11px] text-success">Connected</span>}
+        {configured && <span className="text-[11px] text-success">{t("Connected")}</span>}
         <CredentialHelp section={section} />
       </div>
       <div className="flex gap-2">
@@ -191,8 +194,8 @@ export function ApiKeyRow({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && save()}
-          placeholder={configured ? "••••••••  (paste to replace)" : credential.placeholder}
-          aria-label={credential.label}
+          placeholder={configured ? t("••••••••  (paste to replace)") : t(credential.placeholder)}
+          aria-label={t(credential.label)}
           autoComplete="off"
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />
@@ -206,9 +209,9 @@ export function ApiKeyRow({
               : "bg-raised text-ink hover:bg-raised-hover",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
-          title={clearing ? "Remove the saved key" : "Save"}
+          title={clearing ? t("Remove the saved key") : t("Save")}
         >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : clearing ? "Clear" : <><Check size={13} />Save</>}
+          {saving ? <Loader2 size={13} className="animate-spin" /> : clearing ? t("Clear") : <><Check size={13} />{t("Save")}</>}
         </button>
       </div>
       {error && <div className="mt-1 text-[12px] text-danger">{error}</div>}
@@ -219,6 +222,7 @@ export function ApiKeyRow({
 /** Non-secret Docker-over-SSH target. Keys and passwords stay with SSH. */
 export function VpsConnection() {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const [alias, setAlias] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -248,24 +252,24 @@ export function VpsConnection() {
     <div>
       <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
         <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
-        <span>Self-hosted VPS</span>
+        <span>{t("Self-hosted VPS")}</span>
         <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">
-          Optional
+          {t("Optional")}
         </span>
-        {configured && <span className="text-[11px] text-success">Connected</span>}
+        {configured && <span className="text-[11px] text-success">{t("Connected")}</span>}
       </div>
       <div className="mb-1.5 text-[12px] leading-relaxed text-ink-secondary">
-        SSH config alias for the Linux VPS. OpenMausBot uses your normal SSH config and agent; it does not store keys or passwords.{" "}
-        See the{" "}
+        {t("SSH config alias for the Linux VPS. OpenMausBot uses your normal SSH config and agent; it does not store keys or passwords.")}{" "}
+        {t("See the")}{" "}
         <a
           href="https://github.com/milind-soni/OpenMausBot/blob/main/docs/byo-vps.md"
           target="_blank"
           rel="noopener noreferrer"
           className="text-accent hover:underline"
         >
-          setup guide
+          {t("setup guide")}
         </a>{" "}
-        for the required SSH alias shape.
+        {t("for the required SSH alias shape.")}
       </div>
       <div className="flex gap-2">
         <input
@@ -274,7 +278,7 @@ export function VpsConnection() {
           onChange={(e) => setAlias(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && save()}
           placeholder="my-vps"
-          aria-label="Self-hosted VPS SSH config alias"
+          aria-label={t("Self-hosted VPS SSH config alias")}
           autoComplete="off"
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />
@@ -286,9 +290,9 @@ export function VpsConnection() {
             !alias.trim() && configured ? "bg-raised text-danger hover:bg-raised-hover" : "bg-raised text-ink hover:bg-raised-hover",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
-          title={!alias.trim() && configured ? "Remove the saved alias" : "Save"}
+          title={!alias.trim() && configured ? t("Remove the saved alias") : t("Save")}
         >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : !alias.trim() && configured ? "Clear" : <><Check size={13} />Save</>}
+          {saving ? <Loader2 size={13} className="animate-spin" /> : !alias.trim() && configured ? t("Clear") : <><Check size={13} />{t("Save")}</>}
         </button>
       </div>
       {error && <div className="mt-1 text-[12px] text-danger">{error}</div>}

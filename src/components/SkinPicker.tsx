@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Check } from "lucide-react";
 import { SKINS, applySkin, readSkin, type SkinId } from "@/lib/skins";
 import { cn } from "@/lib/cn";
+import { useI18n } from "@/lib/i18n-context";
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -64,6 +65,7 @@ function Miniature({ skin }: { skin: SkinId }) {
 }
 
 export function SkinPicker() {
+  const { t } = useI18n();
   // The document is the source of truth, not storage: main.tsx has already
   // stamped it, and reading it back keeps the checkmark honest even if the
   // skin was set some other way.
@@ -100,7 +102,7 @@ export function SkinPicker() {
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-medium text-ink">{skin.name}</div>
                 <div className="mt-0.5 text-[11px] leading-snug text-ink-secondary">
-                  {skin.tagline}
+                  {t(skin.tagline)}
                 </div>
               </div>
               {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}

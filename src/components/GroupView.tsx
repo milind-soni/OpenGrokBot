@@ -16,7 +16,7 @@ import {
 } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
-import { effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
+import { defaultResponderName, effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
 import { ConnectorCard } from "./ConnectorCard";
@@ -150,7 +150,7 @@ const Transcript = memo(function Transcript({
                 </div>
                 {!user && <ReactionBar threadId={group.threadId} message={m} />}
                 <span className="self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100">
-                  {formatTime(m.at)}
+                  {formatTime(m.at, locale)}
                 </span>
               </div>
               <ReactionChips threadId={group.threadId} message={m} members={members} align={user ? "right" : "left"} />
@@ -161,7 +161,7 @@ const Transcript = memo(function Transcript({
           <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && (
               <div className="py-3 text-center text-[13px] text-ink-secondary">
-                {dayLabel(m.at, locale, t)} {formatTime(m.at)}
+                {dayLabel(m.at, locale, t)} {formatTime(m.at, locale)}
               </div>
             )}
             {!user && m.from && newCluster && (
@@ -645,7 +645,9 @@ export function GroupView({ group }: { group: Group }) {
               </div>
               <div className="text-[17px] font-semibold text-ink">{group.name}</div>
               <div className="max-w-[380px] text-[14px] text-ink-secondary">
-                {t(groupResponseHint(group, members))}
+                {t(groupResponseHint(group, members), {
+                  name: defaultResponderName(group, members) ?? t("The lead bot"),
+                })}
               </div>
             </div>
           )}

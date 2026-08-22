@@ -912,4 +912,10 @@ export const zhCN = {
   "Bases and records": "数据表与记录",
   "Files and comments": "文件与评论",
   "Payments and customers": "付款与客户",
+  "{name} responds by default — @mention someone else to choose them instead.": "默认由 {name} 回复；也可以 @ 提及其他 Bot。",
+  "{name} responds": "{name} 回复",
+  "The lead bot": "主 Bot",
+  "Lead": "主 Bot",
+  "Interrupt": "打断",
+  "Hold Control + Option to talk · Space interrupts · Esc hangs up": "按住 Control + Option 说话 · 空格键打断 · Esc 挂断",
 } satisfies Record<string, string>;

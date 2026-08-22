@@ -77,9 +77,9 @@ interface LocalVmStatus {
   viewer_url: string;
 }
 
-function routineScheduleLabel(routine: Routine, t: (source: string) => string) {
+function routineScheduleLabel(routine: Routine, locale: string, t: (source: string) => string) {
   if (routine.schedule.type === "once") {
-    return new Date(routine.schedule.at).toLocaleString([], {
+    return new Date(routine.schedule.at).toLocaleString(locale, {
       month: "short",
       day: "numeric",
       hour: "numeric",
@@ -94,20 +94,20 @@ function routineScheduleLabel(routine: Routine, t: (source: string) => string) {
         ? t("Weekdays")
         : days.map((day) => t(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day])).join(", ");
   const [hour, minute] = routine.schedule.time.split(":").map(Number);
-  return `${cadence} · ${new Date(2000, 0, 1, hour, minute).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${cadence} · ${new Date(2000, 0, 1, hour, minute).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })}`;
 }
 
-function nextRunLabel(at: number | null, t: (source: string) => string) {
+function nextRunLabel(at: number | null, locale: string, t: (source: string) => string) {
   if (at == null) return t("Paused");
   const date = new Date(at);
   const today = new Date();
   const sameDay = date.toDateString() === today.toDateString();
-  return `${sameDay ? t("Today") : date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${sameDay ? t("Today") : date.toLocaleDateString(locale, { month: "short", day: "numeric" })}, ${date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })}`;
 }
 
 export function ComputerPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const localAvailable = capabilities.localComputer.available;
   const isLinux = capabilities.host.platform === "linux";
@@ -1046,10 +1046,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium text-ink">{routine.name}</span>
                     <span className="block truncate text-[10.5px] text-ink-secondary">
-                      {routineScheduleLabel(routine, t)}{routine.runOn === "cloud" ? t(" · runs on VM") : ""}
+                      {routineScheduleLabel(routine, locale, t)}{routine.runOn === "cloud" ? t(" · runs on VM") : ""}
                     </span>
                   </span>
-                  <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt, t)}</span>
+                  <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt, locale, t)}</span>
                 </button>
               ))}
             </div>

@@ -15,7 +15,7 @@ import {
   type Attachment,
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
-import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
+import { defaultResponderName, groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { useI18n } from "@/lib/i18n-context";
@@ -410,7 +410,12 @@ export function Composer({
                   ? t("{name} is working — Enter queues your message", { name: busyName })
                   : t("{name} is working — sends when this turn finishes", { name: busyName })
                 : group
-                  ? t("Message {name} — {hint}", { name: group.name, hint: t(groupComposerHint(group, members ?? [])) })
+                  ? t("Message {name} — {hint}", {
+                      name: group.name,
+                      hint: t(groupComposerHint(group, members ?? []), {
+                        name: defaultResponderName(group, members ?? []) ?? t("Lead"),
+                      }),
+                    })
                   : t("Message {name}", { name: bot?.name ?? "" })
           }
           aria-label={t("Message {name}", { name: group ? group.name : (bot?.name ?? "") })}

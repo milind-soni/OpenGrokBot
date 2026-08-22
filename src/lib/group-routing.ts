@@ -23,8 +23,7 @@ export function groupResponseHint(group: Group, members: Bot[]): string {
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return "Everyone responds unless you @mention specific bots.";
   if (value.kind === "mentions") return "Mention a bot with @ to bring them in.";
-  const name = defaultResponderName(group, members) ?? "The lead bot";
-  return `${name} responds by default — @mention someone else to choose them instead.`;
+  return "{name} responds by default — @mention someone else to choose them instead.";
 }
 
 export function groupComposerHint(group: Group, members: Bot[]): string {
@@ -32,7 +31,7 @@ export function groupComposerHint(group: Group, members: Bot[]): string {
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return "everyone responds";
   if (value.kind === "mentions") return "@ to bring a bot in";
-  return `${defaultResponderName(group, members) ?? "Lead"} responds`;
+  return "{name} responds";
 }
 
 /** Same routing sendGroup uses: explicit @mentions win, otherwise the

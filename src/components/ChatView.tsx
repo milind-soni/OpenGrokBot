@@ -86,7 +86,7 @@ function DaySeparator({ at }: { at: number }) {
   const { locale, t } = useI18n();
   return (
     <div className="py-3 text-center text-[13px] text-ink-secondary">
-      {dayLabel(at, locale, t)} {formatTime(at)}
+      {dayLabel(at, locale, t)} {formatTime(at, locale)}
     </div>
   );
 }
@@ -296,7 +296,7 @@ function Bubble({
   onRegenerate?: () => void;
 }) {
   const { dispatch } = useStore();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const user = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   const text = message.text ?? "";
@@ -456,7 +456,7 @@ function Bubble({
             user ? "order-first mr-1" : "ml-1",
           )}
         >
-          {formatTime(message.at)}
+          {formatTime(message.at, locale)}
         </span>
       </div>
       {/* busy-gated so a flag stranded by a server restart shows nothing */}

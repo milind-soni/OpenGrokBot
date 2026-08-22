@@ -20,6 +20,7 @@ import {
   computerProxyEnv,
   containerComputerAction,
   containerComputerMcp,
+  containerComputerManagedPerBotNames,
   containerComputerScreenshot,
   containerComputerStatus,
   containerRuntimeStatus,
@@ -31,6 +32,7 @@ import {
   type CommandRunner,
   type LocalVmTarget,
 } from "./container-computer.ts";
+import { validPngFixture } from "./testing/png-fixture.ts";
 
 function runner(responses: Record<string, string | Error>) {
   const calls: string[] = [];
@@ -56,11 +58,7 @@ const readinessProbe =
   `${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
   "--screenshot-out-file /tmp/openmausbot-readiness.png";
 const readinessRead = `docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-readiness.png`;
-const validPng = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.alloc(600),
-  Buffer.from("IEND", "ascii"),
-]);
+const validPng = validPngFixture();
 
 function preparedImageInspect() {
   return JSON.stringify([
@@ -136,6 +134,16 @@ function perBotReadyInspect(botId: string, viewerPort: number, targetLabel?: str
 }
 
 describe("containerComputerStatus", () => {
+  it("enumerates managed per-bot containers and fails closed on unknown names", async () => {
+    const suffix = "a".repeat(16);
+    const command = `docker ps -a --filter label=${MANAGED_LABEL}=1 --format {{.Names}}`;
+    const listed = runner({ [command]: `${CONTAINER}\n${CONTAINER}-${suffix}\n` });
+    expect(await containerComputerManagedPerBotNames("docker", listed.run)).toEqual([`${CONTAINER}-${suffix}`]);
+
+    const unknown = runner({ [command]: "openmausbot-computer-legacy\n" });
+    expect(await containerComputerManagedPerBotNames("docker", unknown.run)).toBeNull();
+  });
+
   it("prefers the supported Podman image store when Docker is also healthy on Windows", async () => {
     const fake = runner({
       "where.exe podman": "C:\\Program Files\\RedHat\\Podman\\podman.exe\n",

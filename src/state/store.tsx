@@ -353,8 +353,8 @@ export interface AppState {
     nonce: number;
     kind: Exclude<MausMotion, "none">;
   } | null;
-  /** 1:1 queue-fallback lines waiting for drain; keyed by botId. */
-  pendingQueued: Record<string, string>;
+  /** 1:1 queue-fallback lines waiting for drain; keyed by threadId. */
+  pendingQueued: Record<string, string[]>;
 }
 
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
@@ -397,7 +397,7 @@ export type Action =
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | { type: "send"; botId: string; text: string }
-  | { type: "pendingQueued"; botId: string; text: string }
+  | { type: "pendingQueued"; threadId: string; text: string }
   | { type: "consumePendingQueued"; threadId: string; text: string }
   | { type: "editMessage"; botId: string; messageId: string; text: string }
   | { type: "switchBranch"; botId: string; messageId: string }
@@ -897,27 +897,21 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     // handled entirely by the async wrapper
     case "pendingQueued": {
-      const prev = state.pendingQueued[action.botId];
+      const prev = state.pendingQueued[action.threadId] ?? [];
       return {
         ...state,
-        pendingQueued: {
-          ...state.pendingQueued,
-          [action.botId]: prev ? `${prev}\n${action.text}` : action.text,
-        },
+        pendingQueued: { ...state.pendingQueued, [action.threadId]: [...prev, action.text] },
       };
     }
     case "consumePendingQueued": {
-      const owner = state.bots.find((b) => b.threadId === action.threadId);
-      if (!owner) return state;
-      const prev = state.pendingQueued[owner.id];
-      if (!prev) return state;
-      const lines = prev.split("\n");
-      const at = lines.indexOf(action.text);
+      const prev = state.pendingQueued[action.threadId];
+      if (!prev?.length) return state;
+      const at = prev.indexOf(action.text);
       if (at < 0) return state;
-      const rest = lines.filter((_, i) => i !== at);
+      const rest = prev.filter((_, i) => i !== at);
       const pendingQueued = { ...state.pendingQueued };
-      if (rest.length) pendingQueued[owner.id] = rest.join("\n");
-      else delete pendingQueued[owner.id];
+      if (rest.length) pendingQueued[action.threadId] = rest;
+      else delete pendingQueued[action.threadId];
       return { ...state, pendingQueued };
     }
     case "send":
@@ -1143,8 +1137,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ text: action.text }),
           })
             .then((body) => {
-              if (body?.queued) {
-                rawDispatch({ type: "pendingQueued", botId: action.botId, text: action.text });
+              if (body?.queued && typeof body.threadId === "string") {
+                rawDispatch({ type: "pendingQueued", threadId: body.threadId, text: action.text });
               }
             })
             .catch(showError);

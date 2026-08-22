@@ -107,26 +107,60 @@ describe("cross-client bot creation", () => {
 });
 
 describe("pending queued chip", () => {
+  const bot = {
+    id: "b1",
+    threadId: "t1",
+    name: "Ada",
+    title: "",
+    description: "",
+    notifications: false,
+    color: "green",
+    unread: false,
+    modelSelection: { instanceId: "acp", model: "fake" },
+  } satisfies Omit<Bot, "messages">;
+
   it("records queue-fallback text and drops it when that user line lands", () => {
-    const bot = {
-      id: "b1",
-      threadId: "t1",
-      name: "Ada",
-      title: "",
-      description: "",
-      notifications: false,
-      color: "green",
-      unread: false,
-      modelSelection: { instanceId: "acp", model: "fake" },
-    } satisfies Omit<Bot, "messages">;
     const withBot = reducer(initialState, { type: "botPatched", bot });
-    const queued = reducer(withBot, { type: "pendingQueued", botId: "b1", text: "later" });
-    expect(queued.pendingQueued).toEqual({ b1: "later" });
+    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", text: "later" });
+    expect(queued.pendingQueued).toEqual({ t1: ["later"] });
     const landed = reducer(queued, {
       type: "consumePendingQueued",
       threadId: "t1",
       text: "later",
     });
     expect(landed.pendingQueued).toEqual({});
+  });
+
+  it("keeps a Shift+Enter multiline message as one entry", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const queued = reducer(withBot, {
+      type: "pendingQueued",
+      threadId: "t1",
+      text: "line one\nline two",
+    });
+    expect(queued.pendingQueued).toEqual({ t1: ["line one\nline two"] });
+    const landed = reducer(queued, {
+      type: "consumePendingQueued",
+      threadId: "t1",
+      text: "line one\nline two",
+    });
+    expect(landed.pendingQueued).toEqual({});
+  });
+
+  it("leaves the chip on the old thread after a task switch", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", text: "stay here" });
+    const switched = reducer(queued, {
+      type: "botPatched",
+      bot: { ...bot, threadId: "t2", messages: [] },
+    });
+    expect(switched.pendingQueued).toEqual({ t1: ["stay here"] });
+    expect(switched.pendingQueued[switched.bots[0]!.threadId]).toBeUndefined();
+    const drained = reducer(switched, {
+      type: "consumePendingQueued",
+      threadId: "t1",
+      text: "stay here",
+    });
+    expect(drained.pendingQueued).toEqual({});
   });
 });

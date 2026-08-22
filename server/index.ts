@@ -3585,7 +3585,7 @@ const server = createServer(async (req, res) => {
           }
         }
         const queued = queueSteeredMessage(bot, text);
-        return json(res, 202, { ok: true, queued: true, queueId: queued.id });
+        return json(res, 202, { ok: true, queued: true, queueId: queued.id, threadId: bot.threadId });
       }
       await startTurn(bot.id, text);
       return json(res, 202, { ok: true });

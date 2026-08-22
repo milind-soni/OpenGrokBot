@@ -154,7 +154,11 @@ export function Composer({
   // queue), but stay off the transcript until drain — the chip here is the
   // pending row so they cannot become the active leaf mid-turn.
   const [queued, setQueued] = useState<string | null>(null);
-  const pendingChip = group ? queued : bot ? state.pendingQueued?.[bot.id] : undefined;
+  const pendingChip = group
+    ? queued
+    : bot
+      ? state.pendingQueued?.[bot.threadId]?.join("\n")
+      : undefined;
   // a chip on its own is a message: the send control has to appear for it
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const send = () => {

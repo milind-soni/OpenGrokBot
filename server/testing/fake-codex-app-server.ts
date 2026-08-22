@@ -5,7 +5,7 @@
 // real app-server, it never exits on its own — the driver kills it.
 //
 //   FAKE_CODEX_MODE   happy (default) | approval | resume | stream | windows-command |
-//                     logged-in-stdout | logged-out | unauthorized
+//                     mcp-elicitation | logged-in-stdout | logged-out | unauthorized
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -73,7 +73,7 @@ process.stdin.on("data", (chunk) => {
     }
 
     // response to our own server->client request (approval decision)
-    if (msg.id === 100 && (msg.result !== undefined || msg.error !== undefined)) {
+    if ((msg.id === 100 || msg.id === 101) && (msg.result !== undefined || msg.error !== undefined)) {
       decision = msg.result ?? { error: msg.error };
       finishTurn();
       continue;
@@ -143,7 +143,20 @@ process.stdin.on("data", (chunk) => {
           : "ls -la";
         notify("item/started", { item: { id: "i1", type: "commandExecution", command } });
         notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
-        if (mode === "approval" || mode === "windows-command") {
+        if (mode === "mcp-elicitation") {
+          out({
+            jsonrpc: "2.0",
+            id: 101,
+            method: "mcpServer/elicitation/request",
+            params: {
+              serverName: "agents",
+              mode: "form",
+              _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
+              message: 'Allow the agents MCP server to run tool "list_bots"?',
+              requestedSchema: { type: "object", properties: {} },
+            },
+          });
+        } else if (mode === "approval" || mode === "windows-command") {
           const approvalCommand = mode === "windows-command" ? command : "rm -rf scratch";
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: approvalCommand } });
           // turn continues from the approval response handler above

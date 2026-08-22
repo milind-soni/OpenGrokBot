@@ -249,19 +249,35 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const method = msg.method as string;
         const params = msg.params ?? {};
         const legacy = method === "execCommandApproval" || method === "applyPatchApproval";
+        const isMcpElicitation =
+          method === "mcpServer/elicitation/request" &&
+          params?._meta?.codex_approval_kind === "mcp_tool_call";
         const isQuestion = method === "item/tool/requestUserInput";
+        const mcpTool = isMcpElicitation
+          ? String(params.message ?? "").match(/tool \"([^\"]+)\"/)?.[1]
+          : undefined;
         const tool =
-          method === "item/fileChange/requestApproval" || method === "applyPatchApproval"
+          isMcpElicitation
+            ? (mcpTool ?? "mcp")
+            : method === "item/fileChange/requestApproval" || method === "applyPatchApproval"
             ? "edit"
             : isQuestion
               ? "ask_user"
               : "shell";
         if (config.fullAuto && !isQuestion) {
-          return send({ jsonrpc: "2.0", id: msg.id, result: { decision: legacy ? "approved" : "accept" } });
+          return send({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: isMcpElicitation
+              ? { action: "accept", content: {} }
+              : { decision: legacy ? "approved" : "accept" },
+          });
         }
         const requestId = newId();
         const summary =
-          typeof params.command === "string"
+          isMcpElicitation && typeof params.message === "string"
+            ? params.message
+            : typeof params.command === "string"
             ? params.command
             : Array.isArray(params.questions)
               ? params.questions.map((q: any) => q.question ?? q.header).filter(Boolean).join(" · ")
@@ -284,7 +300,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             send({
               jsonrpc: "2.0",
               id: msg.id,
-              result: { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
+              result: isMcpElicitation
+                ? behavior === "allow"
+                  ? { action: "accept", content: {} }
+                  : { action: "decline" }
+                : { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
             });
           }
           emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source });

@@ -137,7 +137,15 @@ export function LocalComputerSection() {
     const response = await fetch(`/api/local-computer${force ? "?refresh=1" : ""}`, { signal });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? `Status request failed (${response.status})`);
-    setStatus(body.source === "existing" ? body as ExistingStatus : { source: "managed", ...body } as ManagedStatus);
+    let nextStatus: Status;
+    if (body.source === "existing") {
+      // SAFETY: the local-computer endpoint returns the discriminated ExistingStatus contract.
+      nextStatus = body as ExistingStatus;
+    } else {
+      // SAFETY: the local-computer endpoint returns the managed status fields under this branch.
+      nextStatus = { source: "managed", ...body } as ManagedStatus;
+    }
+    setStatus(nextStatus);
     setError(null);
   }, []);
 
@@ -187,6 +195,7 @@ export function LocalComputerSection() {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? `${action} failed`);
+    // SAFETY: local-computer lifecycle endpoints return the same discriminated status contract as refresh().
     setStatus(body as Status);
   };
 
@@ -371,7 +380,12 @@ export function LocalComputerSection() {
               <div className="text-[12.5px] text-ink-secondary">Enter the alias for the Linux VM above, then save it.</div>
             </Step>
             <Step n={2} title="SSH connection" done={existingStatus?.ssh === "connected"}>
-              {existingStatus?.ssh === "unreachable" && <div className="text-[12.5px] text-danger">Check the SSH alias, host key, and SSH agent, then re-check.</div>}
+              {existingStatus?.errorCode === "ssh-missing" && (
+                <div className="text-[12.5px] text-danger">Install OpenSSH so the <code>ssh</code> command is available in OpenMausBot&apos;s PATH, then re-check.</div>
+              )}
+              {existingStatus?.ssh === "unreachable" && existingStatus.errorCode !== "ssh-missing" && (
+                <div className="text-[12.5px] text-danger">Check the SSH alias, host key, and SSH agent, then re-check.</div>
+              )}
             </Step>
             <Step n={3} title="Linux guest" done={existingStatus?.os === "linux"}>
               {existingStatus?.os === "unsupported" && <div className="text-[12.5px] text-danger">The Existing VM must report Linux.</div>}

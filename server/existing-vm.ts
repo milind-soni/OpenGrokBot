@@ -10,6 +10,7 @@ import { CUA_DRIVER_VERSION, wholeScreenshot } from "./container-computer.ts";
 import { isValidSshAlias, localVmSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
+import { z } from "zod";
 
 export const EXISTING_VM_LEASE_KEY = "existing-vm";
 export const EXISTING_VM_REQUIRED_TOOLS = [
@@ -42,6 +43,7 @@ const MAX_MCP_LINE_CHARS = 16 * 1024 * 1024;
 const MCP_CLOSE_GRACE_MS = 1_500;
 
 export type ExistingVmErrorCode =
+  | "ssh-missing"
   | "ssh-unreachable"
   | "remote-os"
   | "cua-missing"
@@ -83,22 +85,63 @@ export type ExistingVmOptions = {
   sshCommand?: string;
   /** Test-only argv prefix for running a fake SSH executable. */
   sshCommandPrefix?: string[];
+  /** Test-only command timeout override. */
+  sshTimeoutMs?: number;
   /** Bypass the short status cache for an explicit user re-check. */
   force?: boolean;
 };
 
+type ExistingVmEnvironment = {
+  ELECTRON_RUN_AS_NODE: string;
+  OMB_CONTROL_URL?: string;
+  OMB_CONTROL_TOKEN?: string;
+};
+type ExistingVmComputerMcp = { command: string; args: string[]; env: ExistingVmEnvironment };
+
 type CommandResult = { stdout: string; stderr: string };
 
-type CommandFailure = Error & {
-  code?: string;
-  stderr?: string;
-};
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+type JsonRpcError = { message?: JsonValue };
+type JsonRpcResponse = { id?: number; result?: JsonValue; error?: JsonRpcError };
+type DesktopImage = { png: string; format: "png" | "jpeg" };
+
+const jsonObjectSchema = z.record(z.string(), z.json());
+const jsonNumberSchema = z.number();
+const jsonStringSchema = z.string();
+
+class CommandFailure extends Error {
+  readonly code?: string;
+  readonly stderr?: string;
+
+  constructor(message: string, code?: string, stderr?: string) {
+    super(message);
+    this.name = "CommandFailure";
+    this.code = code;
+    this.stderr = stderr;
+  }
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return jsonObjectSchema.safeParse(value).success;
+}
+
+function isJsonNumber(value: JsonValue | undefined): value is number {
+  return jsonNumberSchema.safeParse(value).success;
+}
+
+function isJsonString(value: JsonValue | undefined): value is string {
+  return jsonStringSchema.safeParse(value).success;
+}
+
+function spawnErrorCode(error: Error): string | undefined {
+  if (!("code" in error)) return undefined;
+  return error.code === "ENOENT" ? "ENOENT" : undefined;
+}
 
 function commandFailure(message: string, code?: string, stderr?: string): CommandFailure {
-  const error = new Error(message) as CommandFailure;
-  if (code) error.code = code;
-  if (stderr) error.stderr = stderr;
-  return error;
+  return new CommandFailure(message, code, stderr);
 }
 
 /** The only SSH argv used by the Existing VM path. No user-provided options
@@ -142,7 +185,8 @@ function runSshCommand(
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
-      reject(error);
+      const cause = error instanceof Error ? error : new Error(String(error));
+      reject(commandFailure(`SSH could not start: ${cause.message}`, spawnErrorCode(cause)));
       return;
     }
 
@@ -166,7 +210,7 @@ function runSshCommand(
         settleReject(new ExistingVmError("timeout", "SSH command timed out"));
       }, MCP_CLOSE_GRACE_MS);
       killTimer.unref?.();
-    }, PROBE_TIMEOUT_MS);
+    }, options.sshTimeoutMs ?? PROBE_TIMEOUT_MS);
     timeout.unref?.();
 
     const clearTimers = () => {
@@ -209,7 +253,7 @@ function runSshCommand(
     });
     child.stdin.on("error", () => {});
     child.on("error", (error) => {
-      settleReject(commandFailure(`SSH could not start: ${error.message}`, (error as NodeJS.ErrnoException).code));
+      settleReject(commandFailure(`SSH could not start: ${error.message}`, spawnErrorCode(error)));
     });
     child.on("close", (code, signal) => {
       if (settled) return;
@@ -232,15 +276,9 @@ function runSshCommand(
   });
 }
 
-type JsonRpcResponse = {
-  id?: number;
-  result?: unknown;
-  error?: { message?: unknown };
-};
-
 class ExistingVmMcpClient {
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<number, { resolve: (value: JsonValue) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly exited: Promise<void>;
   private buffer = "";
   private nextId = 1;
@@ -291,12 +329,17 @@ class ExistingVmMcpClient {
       if (!line) continue;
       let message: JsonRpcResponse;
       try {
-        message = JSON.parse(line) as JsonRpcResponse;
+        const parsed: JsonValue = JSON.parse(line);
+        if (!isJsonObject(parsed)) throw new Error("not an object");
+        message = {};
+        if (isJsonNumber(parsed.id)) message.id = parsed.id;
+        if (parsed.result !== undefined) message.result = parsed.result;
+        if (isJsonObject(parsed.error)) message.error = { message: parsed.error.message };
       } catch {
         this.fail(new ExistingVmError("mcp", "CUA MCP returned invalid JSON"));
         return;
       }
-      if (typeof message.id !== "number") continue;
+      if (message.id === undefined) continue;
       const waiting = this.pending.get(message.id);
       if (!waiting) continue;
       this.pending.delete(message.id);
@@ -304,7 +347,7 @@ class ExistingVmMcpClient {
       if (message.error) {
         waiting.reject(new ExistingVmError("mcp", String(message.error.message ?? "CUA MCP request failed")));
       } else {
-        waiting.resolve(message.result);
+        waiting.resolve(message.result ?? null);
       }
     }
   }
@@ -317,7 +360,7 @@ class ExistingVmMcpClient {
     }
   }
 
-  request(method: string, params: Record<string, unknown>, timeoutMs = MCP_REQUEST_TIMEOUT_MS): Promise<unknown> {
+  request(method: string, params: JsonObject, timeoutMs = MCP_REQUEST_TIMEOUT_MS): Promise<JsonValue> {
     if (this.closed) return Promise.reject(new ExistingVmError("mcp", "CUA MCP transport is closed"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -337,7 +380,7 @@ class ExistingVmMcpClient {
     });
   }
 
-  notify(method: string, params: Record<string, unknown> = {}): void {
+  notify(method: string, params: JsonObject = {}): void {
     if (this.closed) return;
     try {
       this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
@@ -380,24 +423,21 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function desktopImage(result: unknown): { png: string; format: "png" | "jpeg" } {
-  const content = result && typeof result === "object" && Array.isArray((result as { content?: unknown }).content)
-    ? (result as { content: unknown[] }).content
-    : [];
-  if (result && typeof result === "object" && (result as { isError?: unknown }).isError === true) {
+function isImageContent(value: JsonValue): value is { type: "image"; data: string; mimeType?: string } {
+  return isJsonObject(value) && value.type === "image" && isJsonString(value.data) &&
+    (value.mimeType === undefined || isJsonString(value.mimeType));
+}
+
+function desktopImage(result: JsonValue): DesktopImage {
+  const content = isJsonObject(result) && Array.isArray(result.content) ? result.content : [];
+  if (isJsonObject(result) && result.isError === true) {
     const first = content[0];
-    const message = first && typeof first === "object" && typeof (first as { text?: unknown }).text === "string"
-      ? (first as { text: string }).text
+    const message = isJsonObject(first) && isJsonString(first.text)
+      ? first.text
       : "get_desktop_state reported an error";
     throw new ExistingVmError("desktop", message);
   }
-  const image = content.find(
-    (item): item is { type: "image"; data: string; mimeType?: string } =>
-      Boolean(item) &&
-      typeof item === "object" &&
-      (item as { type?: unknown }).type === "image" &&
-      typeof (item as { data?: unknown }).data === "string",
-  );
+  const image = content.find(isImageContent);
   if (!image) throw new ExistingVmError("desktop", "get_desktop_state returned no desktop image");
   const bytes = Buffer.from(image.data, "base64");
   const checked = wholeScreenshot(bytes);
@@ -416,15 +456,13 @@ async function runMcpProbe(
       capabilities: {},
       clientInfo: { name: "openmausbot-existing-vm", version: "1" },
     });
-    if (!initialized || typeof initialized !== "object" || typeof (initialized as { protocolVersion?: unknown }).protocolVersion !== "string") {
+    if (!isJsonObject(initialized) || !isJsonString(initialized.protocolVersion)) {
       throw new ExistingVmError("mcp", "CUA MCP initialize returned an invalid response");
     }
     client.notify("notifications/initialized");
     const listed = await client.request("tools/list", {});
-    const tools = listed && typeof listed === "object" && Array.isArray((listed as { tools?: unknown }).tools)
-      ? (listed as { tools: unknown[] }).tools
-        .map((tool) => tool && typeof tool === "object" ? (tool as { name?: unknown }).name : undefined)
-        .filter((name): name is string => typeof name === "string")
+    const tools = isJsonObject(listed) && Array.isArray(listed.tools)
+      ? listed.tools.flatMap((tool) => isJsonObject(tool) && isJsonString(tool.name) ? [tool.name] : [])
       : [];
     const missing = EXISTING_VM_REQUIRED_TOOLS.filter((name) => !tools.includes(name));
     if (missing.length) throw new ExistingVmError("mcp", `CUA MCP is missing required tools: ${missing.join(", ")}`);
@@ -461,8 +499,8 @@ function emptyStatus(alias: string | null): ExistingVmStatus {
   };
 }
 
-function safeDetail(error: unknown, alias: string): string {
-  const message = error instanceof Error ? error.message : String(error);
+function safeDetail(error: Error, alias: string): string {
+  const message = error.message;
   return message
     .replaceAll(alias, "the configured SSH host")
     .replace(/\s+/g, " ")
@@ -486,11 +524,16 @@ async function computeStatus(cfg: AppConfig, options: ExistingVmOptions): Promis
     }
     status.os = "linux";
   } catch (error) {
+    const cause = error instanceof Error ? error : new Error(String(error));
+    const missingSsh = spawnErrorCode(cause) === "ENOENT";
+    const timedOut = cause instanceof ExistingVmError && cause.code === "timeout";
     status.ssh = "unreachable";
-    status.errorCode = error instanceof ExistingVmError && error.code === "timeout" ? "timeout" : "ssh-unreachable";
-    status.problem = status.errorCode === "timeout"
+    status.errorCode = timedOut ? "timeout" : missingSsh ? "ssh-missing" : "ssh-unreachable";
+    status.problem = timedOut
       ? "SSH timed out while reaching the Existing VM"
-      : "SSH could not reach the Existing VM; check the alias, host key, and SSH agent";
+      : missingSsh
+        ? "OpenSSH (ssh) is not installed or is not available in PATH on the computer running OpenMausBot"
+        : "SSH could not reach the Existing VM; check the alias, host key, and SSH agent";
     return status;
   }
 
@@ -498,9 +541,11 @@ async function computeStatus(cfg: AppConfig, options: ExistingVmOptions): Promis
   try {
     version = await runSshCommand(alias, ["cua-driver", "--version"], options);
   } catch (error) {
+    const cause = error instanceof Error ? error : new Error(String(error));
+    const detail = safeDetail(cause, alias);
     status.driver = "missing";
     status.errorCode = "cua-missing";
-    status.problem = `CUA Driver is missing or unavailable on the Existing VM${safeDetail(error, alias) ? `: ${safeDetail(error, alias)}` : ""}`;
+    status.problem = `CUA Driver is missing or unavailable on the Existing VM${detail ? `: ${detail}` : ""}`;
     return status;
   }
   const match = /^cua-driver\s+([^\s]+)$/m.exec(version.stdout.trim());
@@ -522,11 +567,12 @@ async function computeStatus(cfg: AppConfig, options: ExistingVmOptions): Promis
     status.errorCode = null;
   } catch (error) {
     const code = error instanceof ExistingVmError ? error.code : "mcp";
+    const detail = error instanceof Error ? safeDetail(error, alias) : "";
     status.mcp = "failed";
     status.errorCode = code;
     status.problem = code === "desktop"
-      ? `SSH reached CUA Driver, but it could not reach the graphical desktop${safeDetail(error, alias) ? `: ${safeDetail(error, alias)}` : ""}`
-      : `SSH-launched CUA MCP transport failed${safeDetail(error, alias) ? `: ${safeDetail(error, alias)}` : ""}`;
+      ? `SSH reached CUA Driver, but it could not reach the graphical desktop${detail ? `: ${detail}` : ""}`
+      : `SSH-launched CUA MCP transport failed${detail ? `: ${detail}` : ""}`;
   }
   return status;
 }
@@ -575,7 +621,7 @@ export async function existingVmScreenshot(
     return (await runMcpProbe(alias, options)).screenshot;
   } catch (error) {
     if (!options.sshCommand) statusCache.delete(alias);
-    const detail = safeDetail(error, alias);
+    const detail = error instanceof Error ? safeDetail(error, alias) : "";
     throw Object.assign(new Error(detail || "The Existing VM did not return a valid desktop image"), {
       status: error instanceof ExistingVmError && error.code === "timeout" ? 504 : 502,
     });
@@ -585,15 +631,17 @@ export async function existingVmScreenshot(
 export function existingVmComputerMcp(
   cfg: AppConfig,
   control?: { url: string; token: string },
-): { command: string; args: string[]; env: Record<string, string> } {
+): ExistingVmComputerMcp {
   const alias = localVmSshAlias(cfg);
   if (!alias) throw new Error("Existing VM is not configured — add an SSH config alias first");
+  const env: ExistingVmEnvironment = { ELECTRON_RUN_AS_NODE: "1" };
+  if (control) {
+    env.OMB_CONTROL_URL = control.url;
+    env.OMB_CONTROL_TOKEN = control.token;
+  }
   return {
     command: process.execPath,
     args: [SPAWNED_PROXIES.existingVmMcp, alias],
-    env: {
-      ELECTRON_RUN_AS_NODE: "1",
-      ...(control ? { OMB_CONTROL_URL: control.url, OMB_CONTROL_TOKEN: control.token } : {}),
-    },
+    env,
   };
 }

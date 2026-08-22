@@ -33,15 +33,19 @@ const args = process.argv.slice(2);
 const alias = args[9];
 const remote = args.slice(10).join(" ");
 
-if (remote === "uname -s") {
+if (alias === "vm-unreachable") {
+  process.stderr.write("Connection refused\n");
+  process.exit(255);
+}
+if (alias === "vm-timeout") {
+  setInterval(() => {}, 1000);
+} else if (remote === "uname -s") {
   process.stdout.write(alias === "vm-windows" ? "Windows_NT\n" : "Linux\n");
   process.exit(0);
-}
-if (remote === "cua-driver --version") {
+} else if (remote === "cua-driver --version") {
   process.stdout.write(alias === "vm-bad-version" ? "cua-driver 0.19.0\n" : "cua-driver 0.20.0\n");
   process.exit(0);
-}
-if (remote !== "cua-driver mcp") process.exit(2);
+} else if (remote !== "cua-driver mcp") process.exit(2);
 
 const image = Buffer.alloc(512);
 image.set(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 0);
@@ -116,6 +120,20 @@ describe("Existing VM transport", () => {
     const frame = await existingVmScreenshot(config("vm-good"), options);
     expect(frame.format).toBe("png");
     expect(frame.png).toBeTruthy();
+  });
+
+  it("distinguishes a missing SSH executable, an unreachable VM, and a timeout", async () => {
+    const missing = await existingVmStatus(config("vm-missing-ssh"), {
+      sshCommand: join(temp, "ssh-not-installed"),
+    });
+    expect(missing.errorCode).toBe("ssh-missing");
+    expect(missing.problem).toContain("OpenSSH (ssh) is not installed");
+
+    const unreachable = await existingVmStatus(config("vm-unreachable"), options);
+    expect(unreachable.errorCode).toBe("ssh-unreachable");
+
+    const timedOut = await existingVmStatus(config("vm-timeout"), { ...options, sshTimeoutMs: 20 });
+    expect(timedOut.errorCode).toBe("timeout");
   });
 
   it.each([

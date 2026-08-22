@@ -5,6 +5,7 @@
 // separate preview remains explicitly user-initiated. Auto never selects a
 // Linux user's desktop.
 import { useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import {
   CalendarDays,
   CalendarClock,
@@ -43,6 +44,11 @@ async function api(path: string, init?: RequestInit): Promise<any> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
   return body;
+}
+
+function stringOrNull(value: string | null | undefined): string | null {
+  const parsed = z.string().safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 type Phase =
@@ -242,9 +248,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       api(`/api/bots/${bot.id}/local-computer`)
         .then((rawStatus) => {
           if (!alive) return;
-          const status: LocalVmStatus = rawStatus.source === "existing"
-            ? rawStatus as ExistingLocalVmStatus
-            : { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
+          let status: LocalVmStatus;
+          if (rawStatus.source === "existing") {
+            // SAFETY: this endpoint's discriminant and existing status shape are owned by the server contract.
+            status = rawStatus as ExistingLocalVmStatus;
+          } else {
+            // SAFETY: managed status fields are returned by the same endpoint and retain the managed shape.
+            status = { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
+          }
           setVmStatus(status);
           // parse at the boundary: our own status endpoint sends a string or nothing
           const viewerUrl = String(status.viewer_url ?? "");
@@ -439,7 +450,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       vmInFlight.current = true;
       try {
         const { image } = await api(`/api/bots/${bot.id}/local-computer/screenshot`, { method: "POST" });
-        if (alive && typeof image === "string") setVmFrame(image);
+        const frame = stringOrNull(image);
+        if (alive && frame) setVmFrame(frame);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -506,7 +518,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           type: "computerControl",
           botId: bot.id,
           held: snap.held === true,
-          helpReason: typeof snap.helpReason === "string" ? snap.helpReason : null,
+          helpReason: stringOrNull(snap.helpReason),
         });
       })
       .catch(() => {});
@@ -524,7 +536,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       type: "computerControl",
       botId: bot.id,
       held: snap.held === true,
-      helpReason: typeof snap.helpReason === "string" ? snap.helpReason : null,
+      helpReason: stringOrNull(snap.helpReason),
     });
     return snap;
   };
@@ -636,9 +648,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           method: "POST",
           body: "{}",
         });
-        const status: LocalVmStatus = rawStatus.source === "existing"
-          ? rawStatus as ExistingLocalVmStatus
-          : { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
+        let status: LocalVmStatus;
+        if (rawStatus.source === "existing") {
+          // SAFETY: this endpoint's discriminant and existing status shape are owned by the server contract.
+          status = rawStatus as ExistingLocalVmStatus;
+        } else {
+          // SAFETY: managed status fields are returned by the same endpoint and retain the managed shape.
+          status = { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
+        }
         setVmStatus(status);
         setPhase(status.ready ? "vm" : "checking");
       } else {

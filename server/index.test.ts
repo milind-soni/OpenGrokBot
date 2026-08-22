@@ -317,6 +317,72 @@ describe("harness HTTP API", () => {
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("adds and removes room members through PATCH", async () => {
+    const [first, second, third] = await Promise.all([
+      api("POST", "/api/bots"),
+      api("POST", "/api/bots"),
+      api("POST", "/api/bots"),
+    ]).then((created) => created.map((response) => response.body.bot));
+    const room = (await api("POST", "/api/groups", { name: "Roster", memberIds: [first.id, second.id] })).body.group;
+    try {
+      const added = await api("PATCH", `/api/groups/${room.id}`, { memberIds: [first.id, second.id, third.id] });
+      expect(added.status).toBe(200);
+      expect(added.body.group.memberIds).toEqual([first.id, second.id, third.id]);
+
+      const removed = await api("PATCH", `/api/groups/${room.id}`, { memberIds: [third.id] });
+      expect(removed.status).toBe(200);
+      expect(removed.body.group.memberIds).toEqual([third.id]);
+
+      const state = (await api("GET", "/api/bots")).body;
+      expect(state.groups.find((group: { id: string }) => group.id === room.id).memberIds).toEqual([third.id]);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      for (const bot of [first, second, third]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("refuses to empty a room's roster", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Never empty", memberIds: [bot.id] })).body.group;
+    try {
+      for (const memberIds of [[], ["no-such-bot"]]) {
+        const attempted = await api("PATCH", `/api/groups/${room.id}`, { memberIds });
+        expect(attempted.status).toBe(400);
+        expect(attempted.body.error).toMatch(/at least one bot/i);
+      }
+      const state = (await api("GET", "/api/bots")).body;
+      expect(state.groups.find((group: { id: string }) => group.id === room.id).memberIds).toEqual([bot.id]);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("keeps direct-message channels a fixed pair at the API boundary", async () => {
+    const attempted = await api("PATCH", "/api/groups/test-dm", { memberIds: ["test-bot-a"] });
+    expect(attempted.status).toBe(400);
+    expect(attempted.body.error).toMatch(/direct-message.*members/i);
+    const state = await api("GET", "/api/bots");
+    const dm = state.body.groups.find((group: { id: string }) => group.id === "test-dm");
+    expect(dm.memberIds).toEqual(["test-bot-a", "test-bot-b"]);
+  });
+
+  it("hands the lead to a remaining member when the lead leaves the room", async () => {
+    const [lead, other] = await Promise.all([api("POST", "/api/bots"), api("POST", "/api/bots")]).then((created) =>
+      created.map((response) => response.body.bot),
+    );
+    const room = (await api("POST", "/api/groups", { name: "Handover", memberIds: [lead.id, other.id] })).body.group;
+    try {
+      expect(room.defaultResponder).toEqual({ kind: "member", botId: lead.id });
+      const patched = await api("PATCH", `/api/groups/${room.id}`, { memberIds: [other.id] });
+      expect(patched.status).toBe(200);
+      expect(patched.body.group.defaultResponder).toEqual({ kind: "member", botId: other.id });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      for (const bot of [lead, other]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
   it("keeps direct-message channels folderless at the API boundary", async () => {
     const attempted = await api("PATCH", "/api/groups/test-dm", { cwd: home });
     expect(attempted.status).toBe(400);

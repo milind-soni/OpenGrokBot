@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ChevronDown, Folder, FolderOpen, Pin, PinOff, X } from "lucide-react";
+import { ArrowDown, ChevronDown, Folder, FolderOpen, Pin, PinOff, Plus, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -23,6 +23,7 @@ import { ConnectorCard } from "./ConnectorCard";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ApprovalCard } from "./ApprovalCard";
+import { ManageMembersPanel } from "./ManageMembersPanel";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { useFocusMessage } from "@/lib/focus-message";
@@ -358,6 +359,7 @@ export function GroupView({ group }: { group: Group }) {
   const [bulletinOpen, setBulletinOpen] = useState(false);
   const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
   const [folderOpen, setFolderOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -415,6 +417,7 @@ export function GroupView({ group }: { group: Group }) {
   useEffect(() => setBulletinDraft(group.bulletin), [group.id, group.bulletin]);
   // an open folder editor belongs to the room it was opened in
   useEffect(() => setFolderOpen(false), [group.id]);
+  useEffect(() => setMembersOpen(false), [group.id]);
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo
   useEffect(() => {
@@ -464,6 +467,23 @@ export function GroupView({ group }: { group: Group }) {
     }
   };
 
+  // Static mauses: one per member, a ring + dot on whoever is working.
+  const memberMauses = members.map((b) => (
+    <span
+      key={b.id}
+      title={`${b.name}${group.busyBotId === b.id ? " — working…" : ""}`}
+      className={cn(
+        "relative inline-flex rounded-full",
+        group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
+      )}
+    >
+      <MausAvatar color={b.color} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} />
+      {group.busyBotId === b.id && (
+        <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
+      )}
+    </span>
+  ));
+
   const isWin = window.ogb?.platform === "win32";
   const drag = isWin ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
@@ -471,6 +491,7 @@ export function GroupView({ group }: { group: Group }) {
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
+      {membersOpen && !group.dm && <ManageMembersPanel group={group} onClose={() => setMembersOpen(false)} />}
       {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
@@ -486,26 +507,24 @@ export function GroupView({ group }: { group: Group }) {
           <GroupCallButton group={group} members={members} />
           {!group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
           {!group.dm && <DefaultResponderSelect group={group} members={members} />}
-          {members.map((b) => (
-            <span
-              key={b.id}
-              title={`${b.name}${group.busyBotId === b.id ? " — working…" : ""}`}
-              className={cn(
-                "relative inline-flex rounded-full",
-                group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
-              )}
+          {group.dm ? (
+            memberMauses
+          ) : (
+            // The roster lives where you already look to see who is in the
+            // room; a dashed + says the row is editable without shouting.
+            <button
+              type="button"
+              onClick={() => setMembersOpen(true)}
+              title="Manage members"
+              aria-label={`Manage members — ${members.length} ${members.length === 1 ? "bot" : "bots"} in this room`}
+              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
             >
-              <MausAvatar
-                color={b.color}
-                state={normalizeState(b.mascotExpression) ?? "happy"}
-                size={24}
-                animated={false}
-              />
-              {group.busyBotId === b.id && (
-                <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
-              )}
-            </span>
-          ))}
+              {memberMauses}
+              <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
+                <Plus size={11} />
+              </span>
+            </button>
+          )}
         </div>
       </div>
 

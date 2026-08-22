@@ -4,8 +4,9 @@
 // suite is deterministic with or without agent CLIs installed — and pins
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, request, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,7 @@ let boxStubPort = 0;
 let home: string;
 let staticDir: string;
 let fakeClaudeDump: string;
+let fakeRetrievalRouter: string;
 let stderr = "";
 
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
@@ -39,6 +41,29 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, body: await res.json() };
+};
+
+const retrievalReceiptFor = (botId: string, threadId: string, taskId: string): any | undefined => {
+  const directory = join(home, ".openmausbot", "retrieval-receipts");
+  if (!existsSync(directory)) return undefined;
+  for (const name of readdirSync(directory)) {
+    if (!name.endsWith(".json")) continue;
+    const record = JSON.parse(readFileSync(join(directory, name), "utf8"));
+    const proof = record?.receipt?.native_session_proof;
+    if (proof?.botId === botId && proof?.threadId === threadId && proof?.taskId === taskId) return record;
+  }
+  return undefined;
+};
+
+const retrievalBlockFromClaudeDump = (): string => {
+  const dump = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
+  const index = dump.argv.indexOf("--append-system-prompt");
+  const system = index >= 0 ? dump.argv[index + 1] : "";
+  const start = system.indexOf("\n\n<untrusted-retrieval");
+  const closing = "</untrusted-retrieval>";
+  const close = system.indexOf(closing, start);
+  if (start < 0 || close < 0) return "";
+  return system.slice(start, close + closing.length);
 };
 
 const uploadAvatar = async (mime = "image/png"): Promise<string> => {
@@ -68,11 +93,57 @@ beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
   staticDir = join(home, "static");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
+  fakeRetrievalRouter = join(home, "fake-retrieval-router.mjs");
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
   mkdirSync(join(staticDir, "assets"), { recursive: true });
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged OpenMausBot</title>");
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body { color: white; }");
+  writeFileSync(fakeRetrievalRouter, `#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const argv = process.argv.slice(2);
+const arg = (flag) => argv[argv.indexOf(flag) + 1];
+const cwd = arg("--cwd");
+const sourcePath = join(cwd, "retrieval-dispatch-source.md");
+mkdirSync(cwd, { recursive: true });
+writeFileSync(sourcePath, "Native dispatch receipt source sentinel");
+const source = readFileSync(sourcePath, "utf8");
+const normalized = source.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n").split("\\n").map((line) => line.trimEnd()).join("\\n").trim() + "\\n";
+const hash = "sha256:" + createHash("sha256").update(normalized).digest("hex");
+const botId = arg("--bot-id");
+const threadId = arg("--thread-id");
+const taskId = arg("--task-id");
+const request = {
+  schema: "retrieval.request.v1", query: arg("--query"), cwd,
+  surface: "openmausbot", session: arg("--session"), botId, threadId, taskId,
+  truth: "working_set", active_only: true, hit_limit: 5,
+};
+const sourceTruth = {
+  requested: "working_set", served: "working_set", eligible: true,
+  verification_scope: "current_source_bytes", repository_root: dirname(sourcePath),
+  source_roots: [dirname(sourcePath)],
+};
+process.stdout.write(JSON.stringify({
+  schema: "retrieval.evidence.v1", request, current_source_verified: true,
+  instruction_authority: false, content_trust: "untrusted_retrieval_evidence",
+  persistent_process_started: false, index_stale: false,
+  requires_current_source_readback: false, truth: "working_set", answerability: "answerable",
+  windows_served: false, windows_active_generation: null,
+  local_manifest_digest: "sha256:" + "a".repeat(64), fallback: "fts5-current-source",
+  hits: [{
+    canonical_path: sourcePath, content_hash: hash, current_source_verified: true,
+    instruction_authority: false, content_trust: "untrusted_retrieval_evidence",
+    line_or_heading: 1, snippet: source, source_truth: sourceTruth,
+    current_source_verification: {
+      verified: true, canonical_path: sourcePath, content_hash: hash,
+      sensitivity: "normal", source_body_recorded: false,
+    },
+  }],
+}));
+`);
+  chmodSync(fakeRetrievalRouter, 0o700);
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({
@@ -222,6 +293,7 @@ beforeAll(async () => {
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
+      OMB_RETRIEVAL_ROUTER: fakeRetrievalRouter,
       FAKE_CLAUDE_MODE: "hang",
       FAKE_CLAUDE_DUMP: fakeClaudeDump,
     },
@@ -439,6 +511,7 @@ describe("harness HTTP API", () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
     const bot = created.body.bot;
+    expect(bot.retrievalProfile).toBe("off");
 
     const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true });
     expect(patched.status).toBe(200);
@@ -460,6 +533,12 @@ describe("harness HTTP API", () => {
     expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: "yes" })).status).toBe(400);
     const gated = await api("PATCH", `/api/bots/${bot.id}`, { composio: false });
     expect(gated.status).toBe(200);
+
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { retrievalProfile: "full-task-scoped" })).status).toBe(400);
+    const retrievalEnabled = await api("PATCH", `/api/bots/${bot.id}`, { retrievalProfile: "task-scoped" });
+    expect(retrievalEnabled.status).toBe(200);
+    expect(retrievalEnabled.body.bot.retrievalProfile).toBe("task-scoped");
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { retrievalProfile: "off" })).body.bot.retrievalProfile).toBe("off");
 
     // sidebar sections: assign, round-trip, trim, clear — and the field
     // drops off the record entirely once cleared rather than lingering
@@ -483,6 +562,108 @@ describe("harness HTTP API", () => {
     const after = await api("GET", "/api/bots");
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
   });
+
+  it("records retrieval only after the native adapter accepts direct and room turns", async () => {
+    const direct = (await api("POST", "/api/bots")).body.bot;
+    const roomBot = (await api("POST", "/api/bots")).body.bot;
+    let room: { id: string; threadId: string } | undefined;
+    const directQuery = "Find the canonical source implementation relationship for this task";
+    const roomQuery = "Find the prior project decision and source relationship for this room";
+    try {
+      for (const bot of [direct, roomBot]) {
+        const selected = await api("PATCH", `/api/bots/${bot.id}`, {
+          modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+          retrievalProfile: "task-scoped",
+          composio: false,
+        });
+        expect(selected.status).toBe(200);
+      }
+
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${direct.id}/messages`, { text: directQuery })).status).toBe(202);
+      await expect.poll(
+        () => retrievalReceiptFor(direct.id, direct.threadId, direct.threadId)?.receipt?.native_dispatch_proof?.status,
+        { timeout: 8_000 },
+      ).toBe("accepted");
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 8_000 }).toBe(true);
+
+      const directRecord = retrievalReceiptFor(direct.id, direct.threadId, direct.threadId);
+      const directContext = retrievalBlockFromClaudeDump();
+      expect(directContext).toContain("Native dispatch receipt source sentinel");
+      expect(directRecord.receipt).toMatchObject({
+        accepted_hits: 1,
+        native_session_proof: { botId: direct.id, threadId: direct.threadId, taskId: direct.threadId },
+        native_dispatch_proof: {
+          status: "accepted",
+          botId: direct.id,
+          threadId: direct.threadId,
+          taskId: direct.threadId,
+          instanceId: "claude",
+          driverKind: "claudeAgent",
+          model: "claude-sonnet-5",
+          failureStage: null,
+        },
+      });
+      expect(directRecord.receipt.native_dispatch_proof.turnId).toMatch(/^[a-z0-9-]+$/i);
+      expect(directRecord.receipt.native_dispatch_proof.contextBytes).toBe(Buffer.byteLength(directContext, "utf8"));
+      expect(directRecord.receipt.native_dispatch_proof.contextSha256).toBe(
+        `sha256:${createHash("sha256").update(directContext, "utf8").digest("hex")}`,
+      );
+      expect(JSON.stringify(directRecord)).not.toContain(directQuery);
+      expect(JSON.stringify(directRecord)).not.toContain("Native dispatch receipt source sentinel");
+
+      await api("POST", `/api/bots/${direct.id}/interrupt`);
+      await expect.poll(async () => {
+        const state = (await api("GET", "/api/bots")).body;
+        return state.bots.find((bot: { id: string }) => bot.id === direct.id)?.busy;
+      }, { timeout: 8_000 }).toBe(false);
+
+      const createdRoom: { id: string; threadId: string } = (await api("POST", "/api/groups", {
+        name: "Retrieval dispatch room",
+        memberIds: [roomBot.id],
+      })).body.group;
+      room = createdRoom;
+      expect((await api("PATCH", `/api/groups/${createdRoom.id}`, {
+        defaultResponder: { kind: "member", botId: roomBot.id },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/groups/${createdRoom.id}/messages`, { text: roomQuery })).status).toBe(202);
+      await expect.poll(
+        () => retrievalReceiptFor(roomBot.id, createdRoom.threadId, createdRoom.threadId)?.receipt?.native_dispatch_proof?.status,
+        { timeout: 8_000 },
+      ).toBe("accepted");
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 8_000 }).toBe(true);
+
+      const roomRecord = retrievalReceiptFor(roomBot.id, createdRoom.threadId, createdRoom.threadId);
+      const roomContext = retrievalBlockFromClaudeDump();
+      expect(roomContext).toContain("Native dispatch receipt source sentinel");
+      expect(roomRecord.receipt.native_dispatch_proof).toMatchObject({
+        status: "accepted",
+        botId: roomBot.id,
+        threadId: createdRoom.threadId,
+        taskId: createdRoom.threadId,
+        instanceId: "claude",
+        driverKind: "claudeAgent",
+        model: "claude-sonnet-5",
+        failureStage: null,
+      });
+      expect(roomRecord.receipt.native_dispatch_proof.contextBytes).toBe(Buffer.byteLength(roomContext, "utf8"));
+      expect(roomRecord.receipt.native_dispatch_proof.contextSha256).toBe(
+        `sha256:${createHash("sha256").update(roomContext, "utf8").digest("hex")}`,
+      );
+      expect(JSON.stringify(roomRecord)).not.toContain(roomQuery);
+      expect(JSON.stringify(roomRecord)).not.toContain("Native dispatch receipt source sentinel");
+    } finally {
+      if (room) {
+        await api("POST", `/api/groups/${room.id}/interrupt`);
+        await api("DELETE", `/api/groups/${room.id}`);
+      }
+      await api("POST", `/api/bots/${direct.id}/interrupt`);
+      await api("POST", `/api/bots/${roomBot.id}/interrupt`);
+      await api("DELETE", `/api/bots/${direct.id}`);
+      await api("DELETE", `/api/bots/${roomBot.id}`);
+    }
+  }, 30_000);
 
   it("saves, serves, and guards image attachments", async () => {
     // a real 1x1 PNG so the bytes round-trip intact
@@ -594,6 +775,7 @@ describe("harness HTTP API", () => {
         { notifications: "yes" },
         { voice: null },
         { speakReplies: 1 },
+        { retrievalProfile: "task-scoped" },
       ]) {
         expect((await api("PATCH", `/api/bots/${bot.id}/profile`, invalid)).status).toBe(400);
       }

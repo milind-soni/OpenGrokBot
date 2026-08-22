@@ -341,6 +341,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "chiefOfStaff"
         | "approvePeerComms"
         | "composio"
+        | "retrievalProfile"
         | "modelSelection"
       >
     > & { acknowledgeLocalAuto?: boolean },
@@ -490,6 +491,36 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 className={cn(
                   "absolute top-[3px] size-5 rounded-full bg-white transition-all",
                   bot.approvePeerComms ? "left-[21px]" : "left-[3px]",
+                )}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
+            <div>
+              <div className="text-[15px] font-medium text-ink">Task-scoped retrieval</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                {bot.retrievalProfile === "task-scoped"
+                  ? "Add bounded, current-source-verified project references to this bot's turns. This does not grant tools or credentials."
+                  : "Keep shared project references out of this bot's context. Existing memory stays separate."}
+              </div>
+            </div>
+            <button
+              role="switch"
+              aria-checked={bot.retrievalProfile === "task-scoped"}
+              aria-label="Task-scoped retrieval"
+              onClick={() => patch({
+                retrievalProfile: bot.retrievalProfile === "task-scoped" ? "off" : "task-scoped",
+              })}
+              className={cn(
+                "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
+                bot.retrievalProfile === "task-scoped" ? "bg-accent" : "bg-raised",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
+                  bot.retrievalProfile === "task-scoped" ? "left-[21px]" : "left-[3px]",
                 )}
               />
             </button>

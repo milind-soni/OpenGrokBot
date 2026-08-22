@@ -14,6 +14,7 @@ import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
+import { retrievalProfileSchema, type RetrievalProfile } from "../shared/retrieval-profile.ts";
 
 export type MausColor =
   | "green"
@@ -303,6 +304,9 @@ export interface BotRecord {
    * start false — a shared persona must not reach the user's Gmail on
    * turn one. */
   composio?: boolean;
+  /** Optional task-bound reference context. Absent is the backwards-
+   * compatible persisted form of off; it never changes tool permissions. */
+  retrievalProfile?: RetrievalProfile;
   /** Derived from `activity` — kept so the 200+ readers across the app and
    * tests keep working unchanged. Write through setActivity(), never here. */
   busy?: boolean;
@@ -447,6 +451,10 @@ export class Store {
       b.activity = "idle";
       if (b.cloudBackend !== undefined && b.cloudBackend !== "box" && b.cloudBackend !== "vps") {
         delete b.cloudBackend;
+        botsMigrated = true;
+      }
+      if (b.retrievalProfile !== undefined && !retrievalProfileSchema.safeParse(b.retrievalProfile).success) {
+        delete b.retrievalProfile;
         botsMigrated = true;
       }
       const avatar = botAvatarProfile(b);
@@ -785,6 +793,7 @@ export class Store {
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
+      retrievalProfile: "off",
       resumeCursors: {},
       createdAt: Date.now(),
     };

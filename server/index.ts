@@ -1155,8 +1155,8 @@ function drainQueuedSends() {
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage) =>
     // A plain attended turn — no automationSource, no unattended, no comms
     // depth: exactly what typing the same words into an idle bot would run.
-    // The messages are already in the transcript; userMessage keeps
-    // startTurn from appending the joined prompt as a duplicate.
+    // Drain just appended the held lines; userMessage keeps startTurn
+    // from duplicating the last one.
     startTurn(botId, prompt, { threadId, userMessage }).catch((err) => {
       store.appendMessage(threadId, {
         role: "bot",
@@ -3580,8 +3580,8 @@ const server = createServer(async (req, res) => {
             return json(res, 202, { ok: true, steered: true });
           }
         }
-        const message = queueSteeredMessage(store, bot, text);
-        return json(res, 202, { ok: true, queued: true, messageId: message.id });
+        const queued = queueSteeredMessage(bot, text);
+        return json(res, 202, { ok: true, queued: true, messageId: queued.id });
       }
       await startTurn(bot.id, text);
       return json(res, 202, { ok: true });

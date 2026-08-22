@@ -82,9 +82,67 @@ export function hermesAcpModelId(modelId: string | null | undefined): string | n
   return `custom:${inject.host}:${inject.model}`;
 }
 
+/** The id used when Hermes should run on the provider its own config names.
+ *
+ * Deliberately not an inject id: `hermesAcpModelId` returns null for it, so
+ * `configureSession` sends no `session/set_model` and Hermes falls through to
+ * the model in its own `config.yaml`. `spawnArgs` passes no `-m` either (ACP
+ * ignores it), so nothing overrides that choice.
+ */
+export const HERMES_CONFIG_MODEL_ID = "hermes-default";
+
+/** Model Hermes' own config will use, when a remote provider is configured.
+ *
+ * Hermes is a BYOK harness and OpenMausBot only ever offered it *local* hosts
+ * (Ollama, LM Studio, EXO...). A user who has configured Hermes with a hosted
+ * provider — an OpenRouter key in `~/.hermes/.env`, which is how `hermes setup`
+ * stores it — had no selectable model at all: the picker showed "No local
+ * models found" and greyed the agent out, despite Hermes being installed,
+ * authenticated and perfectly able to answer.
+ *
+ * Read-only on purpose. `ensureHermesInjectProvider` writes `config.yaml`, and
+ * doing that from a catalog probe would rewrite the user's real Hermes config
+ * as a side effect of opening a menu.
+ *
+ * Returns null when no hosted key is configured, which leaves the catalog
+ * exactly as it was for local-only setups.
+ */
+export function hermesConfiguredModel(
+  env: Record<string, string | undefined> = process.env,
+): { id: string; label: string } | null {
+  const dir = hermesHome(env);
+  let secrets = "";
+  try {
+    secrets = readFileSync(join(dir, ".env"), "utf8");
+  } catch {
+    return null;
+  }
+  // Only an uncommented, non-empty assignment counts; the shipped file has the
+  // key present but commented out, and that must not read as "configured".
+  const keyed = /^[ \t]*OPENROUTER_API_KEY[ \t]*=[ \t]*(\S+)/m.exec(secrets);
+  if (!keyed) return null;
+
+  let model = "";
+  try {
+    const cfg = readFileSync(join(dir, "config.yaml"), "utf8");
+    const m = /^[ \t]*default[ \t]*:[ \t]*["']?([\w./:+-]+)["']?[ \t]*$/m.exec(cfg);
+    if (m) model = m[1];
+  } catch {
+    /* config unreadable — the id still works, only the label is less specific */
+  }
+  return {
+    id: HERMES_CONFIG_MODEL_ID,
+    label: model ? `${model} (Hermes config)` : "Hermes default (config)",
+  };
+}
+
 async function resolveModels(env: Record<string, string | undefined>): Promise<ModelCatalog> {
   const catalog = await mergeLocalInject(EMPTY, env);
-  return { default: catalog.options[0]?.id ?? "", options: catalog.options };
+  const configured = hermesConfiguredModel(env);
+  // Listed first so it is the default: someone who configured a hosted provider
+  // meant to use it, and a local host may not even be running.
+  const options = configured ? [configured, ...catalog.options] : catalog.options;
+  return { default: options[0]?.id ?? "", options };
 }
 
 async function applySetting(

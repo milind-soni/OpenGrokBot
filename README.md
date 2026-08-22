@@ -1,304 +1,201 @@
-> ⚠️ **No affiliation with any cryptocurrency.** OpenMausBot has no token. Any coin using the OpenMausBot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
+# OpenMausBot 本地化 / Localization
 
-<div align="center">
+将 [OpenMausBot](https://github.com/milind-soni/OpenMausBot)（Electron 桌面应用）的界面文案替换为任意支持的语言。原理是直接改写已安装应用 `resources/ui` 目录下的 Next.js 编译产物（纯前端静态资源），不改动 `app.asar` 主程序逻辑，风险低、可随时还原。
 
-# OpenMausBot
+Localize the UI of the [OpenMausBot](https://github.com/milind-soni/OpenMausBot) desktop app into any supported language. It rewrites the Next.js build output under `resources/ui` (static front-end files only) — the `app.asar` program logic is untouched, so it is low-risk and fully reversible.
 
-**Your own team of AI bots, in a chat app.**
-
-<sub>An open-source version of **Grok Bot** — bring-your-own-agent, local-first, on the models you already have.</sub>
-
-Every bot in the sidebar is a real agent — Claude or Codex running locally under the hood — with its own
-personality, its own model, its own cloud computer, and its own connected apps.
-Talk to them like contacts. Watch them work. Approve what matters.
-
-![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
-![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
-![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
-![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
-
-<br>
-
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Apple%20silicon%29&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest OpenMausBot for Mac with Apple silicon (.dmg)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-intel.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Intel%29&labelColor=070707&color=2a9d8f&cacheSeconds=300" alt="Download the latest OpenMausBot for Intel Macs (.dmg)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest OpenMausBot for Windows (.exe)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Ubuntu&labelColor=070707&color=e95420&cacheSeconds=300" alt="Download the latest OpenMausBot for Ubuntu (.deb)" height="40">
-</a>
-
-<sub>macOS: Apple silicon & Intel · signed & notarized .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta &nbsp;·&nbsp; [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
-
-<br>
-<br>
-
-<img src="docs/screenshots/hero.png" alt="OpenMausBot — a Telegram-style chat app where every chat is a real AI agent" width="900">
-
-</div>
+> 针对 **v0.1.25** 的 Web UI 编译产物测试通过。其他版本可能因编译产物哈希变化而失效，请按「重新生成词典」更新。
+> Tested against the **v0.1.25** Web UI bundle. Other versions may differ (hashed filenames); see "Regenerating the dictionary".
 
 ---
 
-## Why
+## 特性 / Features
 
-One assistant in one box is the wrong shape for agents. OpenMausBot is an open-source take on **Grok Bot** —
-it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each with its own personality,
-memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
-already have:
+- **多语言**：从 `locales/` 目录动态发现语言，新增一个语言文件即可支持，脚本内无任何硬编码语言
+  **Multilingual**: languages are discovered dynamically from `locales/` — add a file, no code changes.
+- **交互式选择器**：彩色编号菜单，`--lang <code>` 可跳过直接指定
+  **Interactive picker** with a numbered menu; `--lang <code>` bypasses it.
+- **自动检测**安装目录（Windows / macOS / Linux），也支持 `--path` 手动指定
+  **Auto-detects** the install dir; `--path` overrides.
+- 自动读取 `app.asar` 内的 `package.json` 识别**版本号** **Auto-reads the version** from the packaged app.
+- 应用前**自动备份**，支持 `--restore` 一键还原 **Auto backup** + one-command restore.
+- **精确替换**：仅在字符串字面量内部替换，并做双重边界检查（前后字符须为非字母数字，且不能紧邻 JS 运算符），杜绝 `On`→`Connection`、`Date.now()`、`On=!1` 这类误伤
+  **Precise matching**: string-literal only, plus a boundary check that rejects matches adjacent to JS operators, so identifiers/code are never mangled.
+- 自动剔除**不可翻译**的安全敏感串（键盘键名、被代码比较的常量、JS 类型名等）
+  **Auto-excludes** non-translatable, safety-sensitive strings (key names, compared constants, JS type names).
+- `--dry-run` 预览 / `--check` 语法自检（需 node.js）/ `--no-backup`
+  **--dry-run** preview, **--check** JS syntax validation (needs node.js), **--no-backup**.
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
-  — your existing logins and subscriptions, no new accounts, no proxy in the middle. Point any engine at a
-  custom CLI binary (a versioned build or wrapper) in **Settings → Engines**.
-- **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
-  events live in `~/.openmausbot`, not a cloud.
-- **Agents with hands.** Each bot can use a cloud Linux desktop, an isolated Local VM, or your own computer,
-  plus 500+ apps through Composio. Host control is available on macOS and as an explicit Ubuntu GNOME beta.
+---
 
-## Features
+## 环境要求 / Requirements
 
-<table>
-<tr>
-<td width="50%" valign="top">
+- Python 3.8+（无第三方依赖） / no third-party dependencies
+- OpenMausBot 桌面应用已安装 / installed OpenMausBot
+- 可选：node.js（用于 `--check` 语法自检） / optional: node.js (for `--check`)
 
-### 🧠 Pick a brain per bot
+## 快速开始 / Quick start
 
-A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
-providers dimmed with the reason. Switch a bot's model mid-conversation.
+```bash
+# 运行并弹出语言选择菜单（自动检测安装目录）
+# Run with interactive language picker (auto-detects the install dir)
+python hanhua.py
 
-<img src="docs/screenshots/model-picker.png" alt="Model picker with provider rail" width="100%">
+# 直接指定语言 / pick a language directly
+python hanhua.py --lang ja-JP
+python hanhua.py --lang ru-RU
 
-</td>
-<td width="50%" valign="top">
+# 列出所有可用语言 / list available languages
+python hanhua.py --list
 
-### 🖥️ Every bot gets a computer
+# 指定安装目录 / point at a specific install dir
+python hanhua.py --path "D:\Programs\openmausbot" --lang fr-FR
 
-Open the Computer panel and the bot's cloud desktop spins up on its own — live screen preview while it
-works, "Open desktop" to take over in your browser, or point the bot at *this Mac* instead.
+# 只预览，不写入 / preview only, write nothing
+python hanhua.py --dry-run --lang de-DE
 
-<img src="docs/screenshots/computer-panel.png" alt="Computer panel with live screen preview" width="100%">
+# 预览 + 用 node 校验生成的 JS 语法 / preview + validate JS syntax with node
+python hanhua.py --dry-run --check --lang ru-RU
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
+# 还原为英文（默认用最早的原始备份）/ restore original English (earliest backup)
+python hanhua.py --restore
 
-### 🙋 Bots ask before they act
+# 从指定备份还原 / restore from a specific backup
+python hanhua.py --restore --backup 0.1.25-20260820-172245
 
-Shell commands, file edits, and questions surface as inline cards — Allow / Deny / answer in chat. A
-permission broker turns every risky action into a decision you make, for cloud and local computers alike.
-
-<img src="docs/screenshots/approval-card.png" alt="Approval and question cards in chat" width="100%">
-
-</td>
-<td width="50%" valign="top">
-
-### 🔌 Connected apps
-
-A one-click marketplace over Composio Sessions: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
-OAuth once, and every bot can use them as tools.
-
-<img src="docs/screenshots/marketplace.png" alt="Connected apps marketplace" width="100%">
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🗂 Manage bots like chats
-
-Right-click any bot: pin, mark unread, edit profile, duplicate, copy conversation ID, hide, delete. It's a
-messaging app — your agents behave like contacts.
-
-<img src="docs/screenshots/context-menu.png" alt="Bot context menu" width="100%">
-
-</td>
-<td width="50%" valign="top">
-
-### 🔑 Keys once, everything lights up
-
-Paste credentials in App Settings — they persist locally and the provider fleet hot-reloads instantly.
-Secrets are write-only: the UI only ever sees "configured" flags.
-
-<img src="docs/screenshots/app-settings.png" alt="App-level settings with API keys" width="100%">
-
-</td>
-</tr>
-</table>
-
-### 🎧 Bots that talk back
-
-Press the speaker on any reply, or switch a bot to read its answers out as they land — so you can listen
-to what ran overnight while you make breakfast. Hit **call** and it's a conversation: it hears you, tells
-you what it's doing while it works, and asks for approvals out loud.
-
-Bring your own ElevenLabs key — paste it once in App Settings, pick a voice, and every bot can talk.
-Give a bot its own voice and a room stops sounding like one person.
-
-**Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
-composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
-expressions · screenshots of the bot's work folded into the transcript.
-
-## How it works
-
-Two processes. The app holds no transports of its own — it sends typed commands over HTTP and folds one SSE
-event stream into state. The harness server owns every agent process and normalizes each provider's native
-protocol into one canonical runtime event stream (logged per-thread as NDJSON).
-
-```mermaid
-flowchart LR
-    subgraph app ["App — React + Tailwind (5199)"]
-        UI[Chat UI · model picker · computer panel]
-    end
-    subgraph server ["Harness server (127.0.0.1:8799)"]
-        REG[Driver registry] --> BUS[Event bus → SSE]
-        BROKER[Permission broker]
-    end
-    subgraph agents ["Agents on your computer"]
-        CL[claude CLI]
-        CX[codex CLI]
-        GR[grok CLI]
-    end
-    UI -- "HTTP commands" --> server
-    BUS -- "one SSE stream" --> UI
-    REG --> CL & CX & GR
-    CL & CX & GR -- "permission requests" --> BROKER
-    server -- "Box API" --> BOX[("Cloud computer<br/>box.ascii.dev")]
-    server -- "Composio Session" --> APPS[("Gmail · Slack · GitHub · …")]
+# 应用但不创建备份 / apply without creating a backup
+python hanhua.py --no-backup --lang ko-KR
 ```
 
-| Layer | Where | What it does |
+Windows 上也可直接双击 `localize.bat`，用编号菜单操作（1 本地化 / 2 还原英文 / 3 列出语言 / 4 退出）。
+On Windows you can also double-click `localize.bat` for a numbered menu (1 Localize / 2 Restore English / 3 List / 4 Exit).
+
+**macOS / Linux**：无 `.bat`，直接用 Python 脚本（命令相同，用 `python3`）。脚本会自动识别 macOS `.app` 包内的 `Contents/Resources` 目录，也可用 `--path` 指定：
+**macOS / Linux**: no `.bat` — run the Python script directly (same commands, use `python3`). The macOS `.app` bundle layout (`Contents/Resources`) is auto-detected; `--path` also works:
+```bash
+python3 hanhua.py --dry-run --lang zh-TW   # 先预览 / preview first
+python3 hanhua.py --lang zh-TW             # 再应用 / then apply
+python3 hanhua.py --restore                # 还原英文 / restore English
+```
+
+> **换语言前先还原**：应用已汉化后直接换语言，只替换剩余英文、旧译文不会变。正确顺序：`--restore` 还原英文 → 再 `--lang <code>` 应用新语言。
+> **Switch languages via restore first**: if the app is already localized, applying a new language only replaces the remaining English. Do `--restore` first, then apply the new language.
+
+应用完成后 **重启 OpenMausBot** 即可看到目标语言界面。
+After applying, **restart OpenMausBot** to see the translated interface.
+
+---
+
+## 支持的语言 / Supported languages
+
+| 代码 / Code | 语言 / Language | 语言文件内注释 / Note in file |
 |---|---|---|
-| Drivers | `server/drivers/` | One per provider: Claude, Codex, and Grok Build over their local CLIs (stream-JSON / JSON-RPC / ACP), plus a cloud-computer agent. Unknown drivers degrade to "unavailable", never crash the fleet. |
-| Harness | `server/harness/` | Registry (configs → live instances) and the fan-in event bus every client folds. |
-| API | `server/index.ts` | Bots, turns, approvals, model catalog, computer lifecycle, connectors, config — HTTP + SSE. |
-| Voice | `server/tts/` | ElevenLabs, bring your own key. Runs on the harness so the key never reaches the UI; markdown is rewritten into something worth hearing before it is spoken. |
-| App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
-| Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and platform capabilities; Apple speech stays macOS-only, while a release-pinned bundled CUA runtime enables guarded Ubuntu GNOME local control. |
+| `zh-CN` | 简体中文 | 内置语言，由项目维护 |
+| `zh-TW` | 繁體中文 | 社區維護 |
+| `ja-JP` | 日本語 | コミュニティ翻訳 |
+| `ko-KR` | 한국어 | 커뮤니티 번역 |
+| `es-ES` | Español | Traducción de la comunidad |
+| `fr-FR` | Français | Traduction de la communauté |
+| `de-DE` | Deutsch | Community-Übersetzung |
+| `ru-RU` | Русский | Перевод сообщества |
 
-## Quick start
+---
 
-**Released builds:** the harness server is embedded, so no separate server setup is required.
+## 添加新语言 / Adding a language
 
-| | Download | Install |
-|---|---|---|
-| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
-| **macOS** (Intel) | [OpenMausBot-intel.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-intel.dmg) | Same app, built for Intel Macs. Signed & notarized. |
-| **Windows** (x64) | [OpenMausBot-setup.exe](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
-| **Ubuntu 24.04** (x64) | [OpenMausBot-amd64.deb](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb) · [OpenMausBot.AppImage](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.AppImage) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
+1. 复制 `locales/zh-CN.json` 为 `locales/<code>.json`（例如 `pt-BR.json`）
+   Copy `locales/zh-CN.json` to `locales/<code>.json` (e.g. `pt-BR.json`).
+2. 填写 `_meta`（`code` / `flag` / `name` / `name_en` / `note`），并翻译所有 value。
+   Fill in `_meta` and translate every value.
+3. **key 必须与 zh-CN 完全一致**——包括前导空格、弯引号 `’`、省略号 `…`、`·`、`→`、emoji 等字符；不得增删。
+   **Keys must match zh-CN exactly** — including leading spaces, curly quotes `’`, ellipses `…`, `·`, `→`, emoji; do not add or remove keys.
+4. 校验：`python hanhua.py --list` 确认出现新语言；`python hanhua.py --dry-run --check --lang <code>` 预览并自检语法。
+   Validate: `hanhua.py --list` then `hanhua.py --dry-run --check --lang <code>`.
+5. 全量校验：`python tools/validate_dict.py` 通过后再使用。
+   Run `python tools/validate_dict.py` until it reports `RESULT: OK`.
 
-See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabilities, and troubleshooting.
+> 翻译值不要包含键盘键名或可能被代码比较的常量词；含 `.` `-` 等符号的值会自动被边界检查拦截在代码位置，但为安全起见仍建议使用普通文字。
+> Avoid values that are key names or compared constants; punctuation-heavy values are auto-blocked at code positions by the boundary check, but plain words are safest.
 
-**From source:**
+---
 
-```sh
-git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
-pnpm install
+## 工作原理 / How it works
 
-pnpm dev:server    # harness server → 127.0.0.1:8799
-pnpm dev           # app → http://127.0.0.1:5199
-pnpm dev:desktop   # Electron shell; keep the two commands above running
+1. **发现语言** `discover_locales()`：扫描 `locales/*.json`，读取 `_meta` 生成语言列表（顺序即菜单顺序）。
+   Locales are discovered from `_meta` — the file order is the menu order.
+2. **定位应用**：常见安装路径 + 按名字扫描；读取 `resources/app.asar` 头部索引内的 `package.json` 得到版本。
+   The app dir and version are resolved from standard paths and the asar header.
+3. **备份**：复制 `resources/ui` 下待改文件到 `backups/<版本>-<时间戳>/`，写 `manifest.json`（记录源目录、版本）。
+   A timestamped backup (with `manifest.json`) is written before any change.
+4. **替换**：对每个 UI 文件做一次正则扫描——仅在 `"` / `'` / `` ` `` 字符串字面量内替换，key 按长度降序避免交叉污染，并做边界检查：
+   Replacement is a single regex pass over each file. Only matches inside string literals are replaced; keys are sorted longest-first; a boundary check rejects any match whose neighbors are alphanumeric, `_`/`$`, or JS operators (`= ! ? : ; , ( ) [ ] { } < > + - * / % & | ^ ~ \`). This is what keeps code such as `var $t=null,On=!1` intact while still translating the UI string `"On"`.
+   - 字符串字面量内部（`scan_literals`）
+   - 边界：前/后字符不能是字母数字、`_$`、或 JS 运算符
+   - 按目标语言转义引号与 `${`（模板字符串内）
+5. **注入**：`index.html` 的 `<html lang="en">` 改为目标语言代码。
+   The `<html lang>` attribute is set to the language code.
+6. **自检（可选）**：`--check` 调用 `node --check` 验证产物语法。
+
+---
+
+## 安全说明 / Safety
+
+- 仅改动 `resources/ui` 下的静态 JS/HTML，不触碰 `app.asar`。
+  Only static files under `resources/ui` are touched.
+- 所有 key 在写入前经 `tools/validate_dict.py` 用**备份中的原始 bundle** 校验为原包子串。
+  Keys are validated against the **pristine backup bundle** before writing.
+- 关键逻辑串（键盘键名、`Browser`/`Android`/`Deny`/`Allow` 等比较常量、`Date`/`Worker` 等 JS 类型名、`Files` 剪贴板类型）在词典生成阶段即被排除。
+  Safety-critical strings are excluded at dictionary-build time.
+- 文件以 UTF-8 无 BOM 写回；每处替换均按原引号类型转义。
+  Files are written as UTF-8 without BOM; values are escaped per the surrounding quote type.
+- 如某次替换异常，用 `--restore` 还原；备份含 `manifest.json` 记录来源目录。
+  If anything looks wrong, `--restore` reverts from the latest backup.
+
+---
+
+## 重新生成词典 / Regenerating the dictionary (new app versions)
+
+`tools/` 提供提取与校验工具链 / helper tools live in `tools/`:
+
+1. `tools/extract_strings.py`：从 UI 主包提取候选字符串 → `candidates.json`
+   Extract candidate strings from the UI bundle.
+2. 人工筛选出可翻译 UI 文案，写入 `locales/zh-CN.json`（key = 原文，value = 中文），再同步补齐其他语言文件。
+   Curate the strings into `locales/zh-CN.json`, then update the other languages to match.
+3. `tools/validate_dict.py`：校验所有语言文件的 key 集与 zh-CN 一致、每个 key 都是原始 bundle 的子串、无危险用法（`toLowerCase`/`includes`/`===`/`new Date` 等）。
+   Validates: identical key sets, all keys are substrings of the pristine bundle, no dangerous usages.
+4. `tools/check_keys.py`：扫描 key 是否以 `case` 标签 / `===` 比较 / `.includes()` 等危险方式出现，命中则剔除。
+   Scans keys for dangerous code usages and drops them.
+5. `tools/verify_lang.py <code>`：对已安装 UI 做幂等性校验——重跑应零改动（`REAPPLY_COUNT: 0`）、无残留英文 key、语言属性匹配、无外来脚本字符，全部通过输出 `VERDICT: OK`。
+   Verifies the installed UI is idempotent (`REAPPLY_COUNT: 0`), has no residual untranslated keys, correct `lang` attribute, and no foreign script characters.
+
+---
+
+## 目录结构 / Project structure
+
+```
+hanhua.py              主脚本（多语言，含交互式选择器） / main script
+locales/               语言词典目录 / language dictionaries
+  zh-CN.json           基准词典（590 条 + _meta，key 以此为准）
+  zh-TW.json  ja-JP.json  ko-KR.json  es-ES.json  fr-FR.json  de-DE.json  ru-RU.json
+backups/               （运行时生成）备份 / runtime backups
+tools/                 提取与校验工具 / extraction & validation tools
+README.md              本文档
 ```
 
-Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
-[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
-in the model picker automatically.
+---
 
-Package the desktop application:
+## 常见问题 / Troubleshooting
 
-```sh
-pnpm package:mac      # macOS: DMG + ZIP; requires Swift/Xcode tools
-pnpm package:win      # Windows: installer + ZIP
-pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
-```
+| 问题 / Problem | 解决 / Fix |
+|---|---|
+| `OpenMausBot not found` | 用 `--path` 指定安装目录 / pass `--path`. |
+| `Cannot write ...` | 应用正在运行，先退出 OpenMausBot 再执行 / quit the app first. |
+| 替换数量为 0 | 应用可能已被汉化，或版本不匹配需重新生成词典 / already translated, or regenerate the dictionary. |
+| `--check` 显示需 node | 安装 node.js 后重试，或省略 `--check` / install node.js or drop `--check`. |
+| 想恢复英文 | `python hanhua.py --restore`（默认还原最早的原始备份），重启应用 / restore & restart. |
 
-### Desktop capability status
-
-| Capability | macOS | Ubuntu 24.04 Xorg | Ubuntu 24.04 Wayland |
-|---|---|---|---|
-| Packaged app, embedded harness, local agent CLIs | Supported | Beta | Beta |
-| Composio and Box/cloud computers | Supported | Beta | Beta |
-| Explicit preview-only local screen capture | Supported | Beta | Beta |
-| Bot control of this computer | Supported | Beta: opt-in, bundled Cua 0.19.3 | Beta: GNOME only, opt-in, bundled Cua 0.19.3; separately installed WinRects v8 helper |
-| Native on-device dictation | Supported | Planned | Planned |
-
-The Linux preview is user-initiated and never enables local bot control or Auto routing. Packaged Linux builds ship
-the exact Cua Driver 0.19.3 runtime outside ASAR; control still requires explicit app opt-in and an explicit per-bot
-**This computer** selection, and every local action asks for approval. GNOME/Wayland additionally requires the
-versioned WinRects v8 helper and a
-passing prompt-free AT-SPI/capture/portal health report. Other Wayland compositors fail closed without blocking
-chat or cloud features. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and
-tracking issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29) and
-[#79](https://github.com/milind-soni/OpenMausBot/issues/79) / [#109](https://github.com/milind-soni/OpenMausBot/issues/109) / [#113](https://github.com/milind-soni/OpenMausBot/issues/113).
-
-The Linux packager downloads only the tag-pinned upstream archive during the build, verifies its size, SHA-256,
-complete member allowlist, and inner executable hashes, then packages only the CLI and cursor-theme sidecar. The
-installed app never downloads or self-updates native automation code. Cua's MIT notice, Inter's SIL OFL, a generated
-third-party license report, and a CycloneDX inventory ship with the runtime. See
-[`third_party/cua-driver/`](third_party/cua-driver/) for the reviewed provenance record.
-
-These credentials are optional — local chat works without them. Paste a key once in **App Settings** (gear
-in the sidebar footer) when you want to enable its integration:
-
-| Credential | What it enables | Where to get it |
-|---|---|---|
-| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
-| Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
-| ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
-
-Composio and Box are third-party services with their own accounts and terms. Box is a paid service after
-its trial, and using a cloud computer may incur charges.
-
-```sh
-pnpm typecheck     # app + server
-pnpm test          # unit, driver, API, and desktop capability tests
-pnpm build         # typecheck + production build
-pnpm check:electron # syntax-check Electron main/preload files
-pnpm package:win   # Windows installer + zip → release/
-pnpm package:linux # Ubuntu x64 .deb + AppImage → release/
-```
-
-### Routines and webhook triggers
-
-Routines can run once or on selected weekdays, using either a MAUS's configured model/computer or the
-Cloud VM runner. Webhook triggers are independent from schedules but reuse the same queued task executor
-and calendar receipts.
-
-OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
-Set `OMB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
-or rotated. Bearer authentication is recommended so the secret stays out of request URLs and most access
-logs; a single capability URL remains available for senders that cannot configure headers. The receiver
-exposes only `/health` and secret `/hooks/...` endpoints; it never exposes the app's broader API.
-OpenMausBot must remain running to accept a delivery. For public internet delivery, proxy only this
-dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
-
-## Status
-
-Early but real — the loop works end to end: message → agent → streamed reply → tools → approvals →
-computer use. macOS, Windows, and Ubuntu 24.04 x64 have released builds; Ubuntu remains a beta with the
-capability limits above. Rough edges to expect: hosted/mobile connectivity is still being built, and webhook
-triggers currently use the local receiver rather than an always-on hosted relay.
-Voice needs an ElevenLabs key, and calls are macOS-only for now (they ride the same on-device dictation as
-the composer mic) — see [`docs/voice-mode.md`](docs/voice-mode.md) for the design and the known gaps.
-
-Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
-small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.
+---
 
 ## License
 
-[Apache License 2.0](LICENSE) © 2026 Milind Soni and OpenMausBot contributors.
-
-Packaged Cua Driver components retain their upstream MIT, SIL OFL 1.1, MPL-2.0, and other dependency terms;
-the corresponding notices, license texts, source locations, and SBOM are in
-[`third_party/cua-driver/`](third_party/cua-driver/) and ship beside the native runtime.
-
-OpenMausBot is an independent, open-source project inspired by Grok Bot. It is
-not affiliated with, endorsed by, or associated with xAI; "Grok" is a trademark
-of its respective owner.
+MIT

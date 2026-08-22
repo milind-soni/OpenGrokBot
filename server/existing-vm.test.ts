@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,9 +11,11 @@ import {
   existingVmMcpArgs,
   existingVmScreenshot,
   existingVmStatus,
+  closeExistingVmScreenshotSessions,
   type ExistingVmOptions,
 } from "./existing-vm.ts";
 import type { AppConfig } from "./config.ts";
+import { validPngFixture } from "./testing/png-fixture.ts";
 
 const FIXED_SSH_OPTIONS = [
   "-T",
@@ -27,29 +29,48 @@ const FIXED_SSH_OPTIONS = [
   "ServerAliveCountMax=2",
 ];
 
-const fakeSshSource = String.raw`import { Buffer } from "node:buffer";
+const validPng = validPngFixture();
+const malformedPng = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(600),
+  Buffer.from("IEND", "ascii"),
+]);
+const fakeSshSource = String.raw`import { appendFileSync, readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 
 const args = process.argv.slice(2);
 const alias = args[9];
 const remote = args.slice(10).join(" ");
+const validImage = Buffer.from(${JSON.stringify(validPng.toString("base64"))}, "base64");
+const malformedImage = Buffer.from(${JSON.stringify(malformedPng.toString("base64"))}, "base64");
+
+const trace = process.env.EXISTING_VM_TEST_TRACE;
+const traceNumber = trace && remote === "cua-driver mcp"
+  ? readFileSync(trace, "utf8").split("\n").filter(Boolean).length + 1
+  : 0;
+if (trace && remote === "cua-driver mcp") appendFileSync(trace, alias + "\n");
 
 if (alias === "vm-unreachable") {
   process.stderr.write("Connection refused\n");
   process.exit(255);
 }
-if (alias === "vm-timeout") {
+if (alias === "vm-overflow" && remote === "cua-driver mcp") {
+  process.stdout.write("x".repeat(2048));
+  setInterval(() => {}, 1000);
+} else if (alias === "vm-timeout") {
   setInterval(() => {}, 1000);
 } else if (remote === "uname -s") {
-  process.stdout.write(alias === "vm-windows" ? "Windows_NT\n" : "Linux\n");
-  process.exit(0);
+  const output = alias === "vm-windows" ? "Windows_NT\n" : "Linux\n";
+  if (alias === "vm-slow") setTimeout(() => { process.stdout.write(output); process.exit(0); }, 30);
+  else {
+    process.stdout.write(output);
+    process.exit(0);
+  }
 } else if (remote === "cua-driver --version") {
   process.stdout.write(alias === "vm-bad-version" ? "cua-driver 0.19.0\n" : "cua-driver 0.20.0\n");
   process.exit(0);
 } else if (remote !== "cua-driver mcp") process.exit(2);
 
-const image = Buffer.alloc(512);
-image.set(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 0);
-image.set(Buffer.from("IEND"), image.length - 4);
 const tools = ["get_desktop_state", "list_apps", "click", "type_text", "press_key", "scroll"];
 if (alias === "vm-missing-tool") tools.pop();
 let pending = "";
@@ -67,7 +88,12 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "initialize") result = { protocolVersion: "2024-11-05" };
     else if (message.method === "tools/list") result = { tools: tools.map((name) => ({ name })) };
     else if (message.method === "tools/call" && alias === "vm-no-image") result = { content: [{ type: "text", text: "no image" }] };
-    else if (message.method === "tools/call") result = { content: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }] };
+    else if (message.method === "tools/call") {
+      const image = alias === "vm-invalid-image" || (alias === "vm-session-failure" && traceNumber % 2 === 0)
+        ? malformedImage
+        : validImage;
+      result = { content: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }] };
+    }
     else result = {};
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
   }
@@ -120,6 +146,69 @@ describe("Existing VM transport", () => {
     const frame = await existingVmScreenshot(config("vm-good"), options);
     expect(frame.format).toBe("png");
     expect(frame.png).toBeTruthy();
+  });
+
+  it("rejects a PNG-shaped response with invalid chunk structure", async () => {
+    const status = await existingVmStatus(config("vm-invalid-image"), options);
+    expect(status.ready).toBe(false);
+    expect(status.errorCode).toBe("desktop");
+  });
+
+  it("reuses and recreates the bounded screenshot MCP session", async () => {
+    const trace = join(temp, "screenshot-trace.log");
+    writeFileSync(trace, "", "utf8");
+    process.env.EXISTING_VM_TEST_TRACE = trace;
+    const sessionOptions = { ...options, screenshotSessionIdleMs: 5_000 };
+    try {
+      await existingVmScreenshot(config("vm-reusable"), sessionOptions);
+      await existingVmScreenshot(config("vm-reusable"), sessionOptions);
+      const reusedCount = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).length;
+      expect(reusedCount).toBe(3);
+
+      await new Promise((resolve) => setTimeout(resolve, 5_100));
+      await existingVmScreenshot(config("vm-reusable"), sessionOptions);
+      const recreatedCount = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).length;
+      expect(recreatedCount).toBe(5);
+    } finally {
+      delete process.env.EXISTING_VM_TEST_TRACE;
+      closeExistingVmScreenshotSessions();
+    }
+  });
+
+  it("recreates a screenshot session after a transport or image failure", async () => {
+    const trace = join(temp, "failure-trace.log");
+    writeFileSync(trace, "", "utf8");
+    process.env.EXISTING_VM_TEST_TRACE = trace;
+    try {
+      await expect(existingVmScreenshot(config("vm-session-failure"), options)).rejects.toThrow();
+      await expect(existingVmScreenshot(config("vm-session-failure"), options)).rejects.toThrow();
+      const count = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).length;
+      expect(count).toBe(4);
+    } finally {
+      delete process.env.EXISTING_VM_TEST_TRACE;
+      closeExistingVmScreenshotSessions();
+    }
+  });
+
+  it("closes an MCP client after output-limit overflow", async () => {
+    const status = await existingVmStatus(config("vm-overflow"), { ...options, mcpLineLimit: 64 });
+    expect(status.errorCode).toBe("mcp");
+    expect(status.problem).toContain("output limit");
+  });
+
+  it("deduplicates simultaneous forced readiness probes", async () => {
+    const trace = join(temp, "force-trace.log");
+    writeFileSync(trace, "", "utf8");
+    process.env.EXISTING_VM_TEST_TRACE = trace;
+    try {
+      const forced = { ...options, cacheStatus: true, force: true };
+      await Promise.all([existingVmStatus(config("vm-slow"), forced), existingVmStatus(config("vm-slow"), forced)]);
+      const count = readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).length;
+      expect(count).toBe(1);
+    } finally {
+      delete process.env.EXISTING_VM_TEST_TRACE;
+      closeExistingVmScreenshotSessions();
+    }
   });
 
   it("distinguishes a missing SSH executable, an unreachable VM, and a timeout", async () => {

@@ -37,6 +37,7 @@ const SSH_OPTIONS = [
 const PROBE_TIMEOUT_MS = 10_000;
 const MCP_REQUEST_TIMEOUT_MS = 15_000;
 const SCREENSHOT_TIMEOUT_MS = 20_000;
+const SCREENSHOT_SESSION_IDLE_MS = 30_000;
 const STATUS_CACHE_TTL_MS = 10_000;
 const MAX_PROBE_OUTPUT = 64 * 1024;
 const MAX_MCP_LINE_CHARS = 16 * 1024 * 1024;
@@ -87,6 +88,12 @@ export type ExistingVmOptions = {
   sshCommandPrefix?: string[];
   /** Test-only command timeout override. */
   sshTimeoutMs?: number;
+  /** Test-only MCP line limit override. */
+  mcpLineLimit?: number;
+  /** Test-only screenshot session idle timeout override. */
+  screenshotSessionIdleMs?: number;
+  /** Test-only status cache enablement for injected SSH commands. */
+  cacheStatus?: boolean;
   /** Bypass the short status cache for an explicit user re-check. */
   force?: boolean;
 };
@@ -298,11 +305,16 @@ class ExistingVmMcpClient {
     this.child.stdin.on("error", () => {});
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
-    this.child.stdout.on("data", (chunk: string) => this.read(chunk));
+    this.child.stdout.on("data", (chunk: string) => this.read(chunk, options.mcpLineLimit ?? MAX_MCP_LINE_CHARS));
     this.child.stderr.on("data", (chunk: string) => {
       this.stderr = `${this.stderr}${chunk}`.slice(-4_096);
     });
-    this.child.on("error", (error) => this.fail(new ExistingVmError("mcp", `SSH MCP transport could not start: ${error.message}`)));
+    this.child.on("error", (error) => this.fail(new ExistingVmError(
+      spawnErrorCode(error) === "ENOENT" ? "ssh-missing" : "mcp",
+      spawnErrorCode(error) === "ENOENT"
+        ? "OpenSSH (ssh) is not installed or is not available in PATH on the computer running OpenMausBot"
+        : `SSH MCP transport could not start: ${error.message}`,
+    )));
     this.child.on("close", (code, signal) => {
       this.closed = true;
       const detail = this.stderr.trim();
@@ -315,17 +327,28 @@ class ExistingVmMcpClient {
     });
   }
 
-  private read(chunk: string): void {
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  private read(chunk: string, lineLimit: number): void {
     if (this.closed) return;
     this.buffer += chunk;
-    if (this.buffer.length > MAX_MCP_LINE_CHARS) {
+    const failOutputLimit = () => {
+      this.buffer = "";
+      this.closed = true;
       this.fail(new ExistingVmError("mcp", "CUA MCP response exceeded its output limit"));
-      return;
-    }
+      void this.close().catch(() => {});
+    };
     let newline: number;
     while ((newline = this.buffer.indexOf("\n")) !== -1) {
-      const line = this.buffer.slice(0, newline).trim();
+      const rawLine = this.buffer.slice(0, newline);
       this.buffer = this.buffer.slice(newline + 1);
+      if (rawLine.length > lineLimit) {
+        failOutputLimit();
+        return;
+      }
+      const line = rawLine.trim();
       if (!line) continue;
       let message: JsonRpcResponse;
       try {
@@ -350,6 +373,7 @@ class ExistingVmMcpClient {
         waiting.resolve(message.result ?? null);
       }
     }
+    if (this.buffer.length > lineLimit) failOutputLimit();
   }
 
   private fail(error: Error): void {
@@ -451,21 +475,7 @@ async function runMcpProbe(
 ): Promise<{ tools: string[]; screenshot: { png: string; format: "png" | "jpeg" } }> {
   const client = new ExistingVmMcpClient(alias, options);
   try {
-    const initialized = await client.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "openmausbot-existing-vm", version: "1" },
-    });
-    if (!isJsonObject(initialized) || !isJsonString(initialized.protocolVersion)) {
-      throw new ExistingVmError("mcp", "CUA MCP initialize returned an invalid response");
-    }
-    client.notify("notifications/initialized");
-    const listed = await client.request("tools/list", {});
-    const tools = isJsonObject(listed) && Array.isArray(listed.tools)
-      ? listed.tools.flatMap((tool) => isJsonObject(tool) && isJsonString(tool.name) ? [tool.name] : [])
-      : [];
-    const missing = EXISTING_VM_REQUIRED_TOOLS.filter((name) => !tools.includes(name));
-    if (missing.length) throw new ExistingVmError("mcp", `CUA MCP is missing required tools: ${missing.join(", ")}`);
+    const tools = await initializeMcpClient(client);
     const result = await client.request(
       "tools/call",
       { name: "get_desktop_state", arguments: {} },
@@ -475,6 +485,94 @@ async function runMcpProbe(
   } finally {
     await client.close();
   }
+}
+
+async function initializeMcpClient(client: ExistingVmMcpClient): Promise<string[]> {
+  const initialized = await client.request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "openmausbot-existing-vm", version: "1" },
+    });
+  if (!isJsonObject(initialized) || !isJsonString(initialized.protocolVersion)) {
+    throw new ExistingVmError("mcp", "CUA MCP initialize returned an invalid response");
+  }
+  client.notify("notifications/initialized");
+  const listed = await client.request("tools/list", {});
+  const tools = isJsonObject(listed) && Array.isArray(listed.tools)
+    ? listed.tools.flatMap((tool) => isJsonObject(tool) && isJsonString(tool.name) ? [tool.name] : [])
+    : [];
+  const missing = EXISTING_VM_REQUIRED_TOOLS.filter((name) => !tools.includes(name));
+  if (missing.length) throw new ExistingVmError("mcp", `CUA MCP is missing required tools: ${missing.join(", ")}`);
+  return tools;
+}
+
+type ExistingVmScreenshotSession = {
+  client: ExistingVmMcpClient;
+  initialized: Promise<string[]>;
+  tail: Promise<void>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+};
+
+const screenshotSessions = new Map<string, ExistingVmScreenshotSession>();
+
+function discardScreenshotSession(alias: string, session: ExistingVmScreenshotSession): void {
+  if (screenshotSessions.get(alias) !== session) return;
+  screenshotSessions.delete(alias);
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  void session.client.close().catch(() => {});
+}
+
+function armScreenshotSessionIdle(alias: string, session: ExistingVmScreenshotSession, idleMs: number): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  session.idleTimer = setTimeout(() => {
+    if (screenshotSessions.get(alias) !== session) return;
+    discardScreenshotSession(alias, session);
+  }, idleMs);
+  session.idleTimer.unref?.();
+}
+
+function screenshotSessionFor(alias: string, options: ExistingVmOptions): ExistingVmScreenshotSession {
+  const current = screenshotSessions.get(alias);
+  if (current && !current.client.isClosed()) return current;
+  if (current) discardScreenshotSession(alias, current);
+  const client = new ExistingVmMcpClient(alias, options);
+  const session = {
+    client,
+    initialized: Promise.resolve<string[]>([]),
+    tail: Promise.resolve(),
+    idleTimer: null,
+  } satisfies ExistingVmScreenshotSession;
+  session.initialized = initializeMcpClient(client).catch((error) => {
+    discardScreenshotSession(alias, session);
+    throw error;
+  });
+  screenshotSessions.set(alias, session);
+  return session;
+}
+
+async function screenshotFromSession(alias: string, options: ExistingVmOptions): Promise<{ png: string; format: "png" | "jpeg" }> {
+  const session = screenshotSessionFor(alias, options);
+  const operation = session.tail.then(async () => {
+    await session.initialized;
+    const result = await session.client.request(
+      "tools/call",
+      { name: "get_desktop_state", arguments: {} },
+      SCREENSHOT_TIMEOUT_MS,
+    );
+    armScreenshotSessionIdle(alias, session, options.screenshotSessionIdleMs ?? SCREENSHOT_SESSION_IDLE_MS);
+    return desktopImage(result);
+  });
+  session.tail = operation.then(() => undefined, () => undefined);
+  try {
+    return await operation;
+  } catch (error) {
+    discardScreenshotSession(alias, session);
+    throw error;
+  }
+}
+
+export function closeExistingVmScreenshotSessions(): void {
+  for (const [alias, session] of screenshotSessions) discardScreenshotSession(alias, session);
 }
 
 function emptyStatus(alias: string | null): ExistingVmStatus {
@@ -586,14 +684,14 @@ export async function existingVmStatus(
 ): Promise<ExistingVmStatus> {
   const alias = localVmSshAlias(cfg);
   if (!alias) return emptyStatus(null);
-  const cacheable = !options.sshCommand;
+  const cacheable = !options.sshCommand || options.cacheStatus === true;
   if (options.force) statusCache.delete(alias);
   if (cacheable) {
+    const inFlight = statusInFlight.get(alias);
+    if (inFlight) return inFlight;
     if (!options.force) {
       const cached = statusCache.get(alias);
       if (cached && cached.expiresAt > Date.now()) return cached.status;
-      const inFlight = statusInFlight.get(alias);
-      if (inFlight) return inFlight;
     }
   }
   const promise = computeStatus(cfg, options);
@@ -618,7 +716,7 @@ export async function existingVmScreenshot(
     throw Object.assign(new Error(status.problem ?? "The Existing VM is not ready"), { status: 409 });
   }
   try {
-    return (await runMcpProbe(alias, options)).screenshot;
+    return await screenshotFromSession(alias, options);
   } catch (error) {
     if (!options.sshCommand) statusCache.delete(alias);
     const detail = error instanceof Error ? safeDetail(error, alias) : "";

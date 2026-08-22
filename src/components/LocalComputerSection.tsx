@@ -154,10 +154,12 @@ export function LocalComputerSection() {
     if (configuredSource) setSource(configuredSource);
   }, [state.config?.localVm.source, status?.source]);
 
+  const existingStatusAlias = status?.source === "existing" ? status.sshAlias ?? "" : null;
+
   useEffect(() => {
     if (state.config?.localVm.sshAlias !== undefined) setAlias(state.config.localVm.sshAlias);
-    else if (status?.source === "existing") setAlias(status.sshAlias ?? "");
-  }, [state.config?.localVm.sshAlias, status?.source, status?.source === "existing" ? status.sshAlias : null]);
+    else if (existingStatusAlias !== null) setAlias(existingStatusAlias);
+  }, [state.config?.localVm.sshAlias, existingStatusAlias]);
 
   useEffect(() => {
     let active = true;
@@ -305,6 +307,7 @@ export function LocalComputerSection() {
               <button
                 key={value}
                 type="button"
+                aria-pressed={source === value}
                 disabled={policyPending}
                 onClick={() => void saveSource(value)}
                 className={cn(
@@ -443,6 +446,7 @@ export function LocalComputerSection() {
             <button
               key={value}
               type="button"
+              aria-pressed={source === value}
               disabled={policyPending || pending !== null}
               onClick={() => void saveSource(value)}
               className={cn(
@@ -509,6 +513,7 @@ export function LocalComputerSection() {
               key={mode}
               type="button"
               disabled={!status || policyPending}
+              aria-pressed={managedStatus?.mode === mode}
               onClick={() => void savePolicy(mode, managedStatus?.max_instances ?? 2)}
               className={cn(
                 "flex-1 px-3 py-2 text-[13px] disabled:opacity-50",

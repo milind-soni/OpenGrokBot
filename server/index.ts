@@ -64,7 +64,7 @@ import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
 import { buildNotification, type Notification } from "./notify.ts";
-import { isEffortLevel, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
+import { isEffortLevel, type ProviderInstance, type RequestOutcome, type RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
@@ -144,6 +144,7 @@ const bus = new EventBus();
 bus.attach(registry.instances());
 const activeTurnIds = new Map<string, string>();
 const staleTurnIds = new Set<string>();
+const pendingTurnInterrupts = new Set<string>();
 
 function rememberStaleTurn(turnId: string): void {
   staleTurnIds.add(turnId);
@@ -157,6 +158,17 @@ function beginTurnThread(threadId: string): void {
   const previous = activeTurnIds.get(threadId);
   if (previous) rememberStaleTurn(previous);
   activeTurnIds.delete(threadId);
+  pendingTurnInterrupts.delete(threadId);
+}
+
+async function interruptProviderTurn(
+  instance: ProviderInstance | null | undefined,
+  threadId: string,
+  queueIfNotActive = false,
+): Promise<void> {
+  if (!instance) return;
+  if (queueIfNotActive) pendingTurnInterrupts.add(threadId);
+  await instance.adapter.interruptTurn(threadId).catch(() => {});
 }
 
 function observeTurnStarted(event: RuntimeEvent): void {
@@ -621,7 +633,7 @@ const watchdog = new TurnWatchdog({
     repeats.settle(turn.threadId);
     const bot = store.bot(turn.botId);
     const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
-    void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
+    void interruptProviderTurn(instance, turn.threadId, true);
     const minutes = Math.round(TURN_STALL_MS / 60_000);
     store.appendMessage(turn.threadId, {
       role: "bot",
@@ -673,6 +685,7 @@ bus.subscribe((event: RuntimeEvent) => {
     stopHumanWaitLeaseRenewal(event.threadId);
   }
   else if (event.type === "turn.completed") {
+    pendingTurnInterrupts.delete(event.threadId);
     clearStalledTurnRelease(event.threadId);
     watchdog.settle(event.threadId);
   }
@@ -1842,6 +1855,12 @@ async function startTurn(
         integrations,
         cwd,
       });
+      // An interrupt can arrive after the bot becomes busy but before a
+      // provider registers its active turn. Replay that request now that the
+      // adapter owns the thread instead of leaving a hung process running.
+      if (pendingTurnInterrupts.delete(threadId)) {
+        await instance.adapter.interruptTurn(threadId).catch(() => {});
+      }
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       // and this engine now owns the thread's most recent turn
@@ -1854,6 +1873,7 @@ async function startTurn(
         startScreenPoller(bot.id, previewCapture, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
     } catch (e) {
+      pendingTurnInterrupts.delete(threadId);
       releaseLocalVmThread(threadId);
       releaseExistingVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
@@ -1898,7 +1918,7 @@ routines = new RoutineManager({
       : bot
         ? registry.get(bot.modelSelection.instanceId)
         : null;
-    await instance?.adapter.interruptTurn(threadId);
+    await interruptProviderTurn(instance, threadId, true);
   },
   onRunFailed: (run) => {
     const bot = store.bot(run.botId);
@@ -2167,7 +2187,7 @@ async function runGroupMemberTurn(
       else if (e.type === "turn.completed") finish("settled");
     });
     timer = scheduleRoomTurnTimeout(timeoutMinutes, () => {
-      void instance.adapter.interruptTurn(group.threadId).catch(() => {});
+      void interruptProviderTurn(instance, group.threadId, true);
       store.appendMessage(group.threadId, {
         role: "bot",
         kind: "activity",
@@ -3502,7 +3522,7 @@ const server = createServer(async (req, res) => {
       if (!group) return json(res, 404, { error: "no such room" });
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
-      await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
+      await interruptProviderTurn(instance, group.threadId, Boolean(busy));
       closeOpenApprovals(group.threadId);
       return json(res, 200, { ok: true });
     }
@@ -3744,10 +3764,11 @@ const server = createServer(async (req, res) => {
         patch.alwaysAllow = [...new Set(body.alwaysAllow as string[])].slice(0, 200);
       }
       if (existingBot?.computer === "local" && body.computer !== undefined && body.computer !== "local") {
-        await registry
-          .get(existingBot.modelSelection.instanceId)
-          ?.adapter.interruptTurn(existingBot.threadId)
-          .catch(() => {});
+        await interruptProviderTurn(
+          registry.get(existingBot.modelSelection.instanceId),
+          existingBot.threadId,
+          existingBot.busy,
+        );
       }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -3771,7 +3792,7 @@ const server = createServer(async (req, res) => {
         store.bots
           .filter((bot) => bot.computer === "local")
           .map((bot) =>
-            registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId),
+            interruptProviderTurn(registry.get(bot.modelSelection.instanceId), bot.threadId, bot.busy),
           )
           .filter((turn): turn is Promise<void> => Boolean(turn)),
       );
@@ -3809,7 +3830,7 @@ const server = createServer(async (req, res) => {
           }
         }
         // a running turn dies with its bot
-        await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
+        await interruptProviderTurn(registry.get(bot.modelSelection.instanceId), bot.threadId, true);
         stopScreenPoller(bot.id);
         activeVpsThreads.delete(bot.id);
         for (const [threadId, ownerBotId] of existingVmThreadIds) {
@@ -4033,10 +4054,10 @@ const server = createServer(async (req, res) => {
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
       if (busyGroup) {
-        await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
+        await interruptProviderTurn(instance, busyGroup.threadId, true);
         closeOpenApprovals(busyGroup.threadId);
       }
-      await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+      await interruptProviderTurn(instance, bot.threadId, bot.busy);
       closeOpenApprovals(bot.threadId);
       return json(res, 200, { ok: true });
     }

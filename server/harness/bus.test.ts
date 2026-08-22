@@ -87,6 +87,29 @@ describe("EventBus", () => {
     expect(logged).toContain("«redacted");
   });
 
+  it("redacts exact protected values before logging or transcript delivery", () => {
+    const canary = "exact-canary-value-847263";
+    process.env.BUS_TEST_API_KEY = canary;
+    try {
+      const bus = new EventBus();
+      const seen: RuntimeEvent[] = [];
+      bus.subscribe((event) => seen.push(event));
+      bus.publish(testEvent({
+        threadId: "known-value-redaction",
+        type: "item.completed",
+        itemType: "assistant_text",
+        text: `copied ${canary}`,
+      }));
+
+      const logged = readFileSync(join(EVENTS_DIR, "known-value-redaction.ndjson"), "utf8");
+      expect(logged).not.toContain(canary);
+      expect(JSON.stringify(seen)).not.toContain(canary);
+      expect(logged).toContain("redacted");
+    } finally {
+      delete process.env.BUS_TEST_API_KEY;
+    }
+  });
+
   it("still delivers when the NDJSON log cannot be written", () => {
     rmSync(EVENTS_DIR, { recursive: true, force: true });
     const bus = new EventBus();

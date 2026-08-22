@@ -15,6 +15,7 @@ export type BotUpdatePatch = Partial<
     | "avatarUrl"
     | "avatarCrop"
     | "autoApprove"
+    | "accessProfile"
     | "speakReplies"
     | "voice"
     | "pinned"

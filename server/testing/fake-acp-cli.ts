@@ -54,6 +54,20 @@ const configOptions = () =>
         },
       ]
     : null;
+// cursor-shaped surface: the session advertises `models.availableModels` with
+// parameterised ids (`default[]`) that differ from the argv `--model` slugs
+// (`auto`). Off unless FAKE_ACP_SESSION_MODELS is set, so every existing mode
+// stays byte-identical. Format: "id|Name,id|Name" — the name is optional.
+const acpModels = (process.env.FAKE_ACP_SESSION_MODELS ?? "")
+  .split(",")
+  .filter(Boolean)
+  .map((entry) => {
+    const [modelId, name] = entry.split("|");
+    return name ? { modelId, name } : { modelId };
+  });
+const sessionModels = () =>
+  acpModels.length ? { currentModelId: acpModels[0].modelId, availableModels: acpModels } : null;
+
 const argv = process.argv.slice(2);
 const dumpEnv = Object.fromEntries(
   [
@@ -248,12 +262,18 @@ function handle(msg: any) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));
       }
       const opts = configOptions();
-      result(msg.id, opts ? { sessionId: "fake-acp-session", configOptions: opts } : { sessionId: "fake-acp-session" });
+      const mdls = sessionModels();
+      result(msg.id, {
+        sessionId: "fake-acp-session",
+        ...(opts ? { configOptions: opts } : {}),
+        ...(mdls ? { models: mdls } : {}),
+      });
       break;
     }
     case "session/load": {
       const opts = configOptions();
-      result(msg.id, opts ? { configOptions: opts } : {});
+      const mdls = sessionModels();
+      result(msg.id, { ...(opts ? { configOptions: opts } : {}), ...(mdls ? { models: mdls } : {}) });
       break;
     }
     // per-session settings (droid sets model/autonomy here, not via argv).
@@ -265,6 +285,11 @@ function handle(msg: any) {
       if (mode === "no-session-config") {
         // an older agent that predates these methods
         return out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+      }
+      if (mode === "set-model-invalid-params" && msg.method === "session/set_model") {
+        // an agent whose ACP model namespace does not contain the id it was
+        // sent — Cursor's answer when handed an argv slug like `auto`.
+        return out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "Invalid params" } });
       }
       const settingId = msg.method === "session/set_mode" ? "modeId" : "modelId";
       if (typeof msg.params?.sessionId !== "string" || typeof msg.params?.[settingId] !== "string") {

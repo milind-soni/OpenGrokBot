@@ -127,6 +127,12 @@ export interface AcpSupport {
     sessionId: string;
     config: AcpConfig;
     turn: SendTurnInput;
+    /** `session/new` (or `session/load`) advertised model list, verbatim. Some
+     * CLIs namespace their ACP model ids differently from their argv `--model`
+     * slugs (Cursor answers `default[]` where the CLI calls it `auto`), so a
+     * driver that only knows the argv slug cannot form a valid set_model
+     * without this. Empty when the agent advertised none. */
+    sessionModels: Array<{ modelId?: string; name?: string }>;
   }): Promise<void>;
 }
 
@@ -605,6 +611,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   sessionId,
                   config,
                   turn: cliTurn,
+                  sessionModels: Array.isArray(sessionResult?.models?.availableModels)
+                    ? sessionResult.models.availableModels
+                    : [],
                 });
                 // initialize's currentModelId is the CLI default (grok-4.6),
                 // not the model this turn asked for. After a successful pin,

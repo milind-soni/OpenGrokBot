@@ -117,8 +117,12 @@ export class ProviderRegistry {
     return [...this.byId.values()].flatMap((e) => (e.live ? [e.live] : []));
   }
 
-  /** instance snapshots for the model picker: id, driver, models, health */
-  async describe() {
+  /** Instance snapshots for the model picker: id, driver, models, health.
+   * Live model discovery is opt-out for existing callers, but the HTTP picker
+   * route passes refreshModels:false so opening cached UI never fans out to
+   * unrelated CLIs or local providers. */
+  async describe(options: { refreshModels?: boolean } = {}) {
+    const refreshModels = options.refreshModels !== false;
     // Multiple instances may share a driver. Scan each default binary once
     // per response instead of repeating filesystem work for every row.
     const candidatesByName = new Map<string, string[]>();
@@ -155,7 +159,7 @@ export class ProviderRegistry {
         const inst = entry.live;
         let snapshot: ProviderSnapshot;
         try {
-          await inst.refreshModels?.();
+          if (refreshModels) await inst.refreshModels?.();
           snapshot = await inst.snapshot();
         } catch (e) {
           snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };

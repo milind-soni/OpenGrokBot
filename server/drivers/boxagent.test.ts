@@ -176,4 +176,23 @@ describe("BoxAgentDriver turns (fake API)", () => {
       .map((e) => (e as { text: string }).text);
     expect(texts).toEqual(["before", "done"]);
   });
+
+  it("flushes pending assistant text when the turn is interrupted", async () => {
+    restoreFetch = installFakeBox([
+      {
+        events: [{ id: "e1", type: "response", text: "half" }],
+        status: { promptRun: { status: "running" } },
+      },
+    ]);
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-cancel", text: "go", integrations: { computer } });
+    await recorder.until((e) => e.type === "content.delta");
+    await instance.adapter.interruptTurn("t-cancel");
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "interrupted" });
+    const texts = recorder.events
+      .filter((e) => e.type === "item.completed" && (e as { itemType: string }).itemType === "assistant_text")
+      .map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(["half"]);
+  });
 });

@@ -214,9 +214,11 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
             }
           }
           // cancelled
+          flushAssistantText();
           active.delete(threadId);
           emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
         } catch (e) {
+          flushAssistantText();
           active.delete(threadId);
           emit({ ...base(threadId, turnId), type: "runtime.error", message: (e as Error).message });
           emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "error", cost: null });

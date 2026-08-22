@@ -144,12 +144,17 @@ describe("preparing a harness response for a device", () => {
   it("scrubs a well-formed body and re-frames it", async () => {
     respond = (res) => {
       res.writeHead(200, { "content-type": "application/json", "transfer-encoding": "chunked" });
-      res.end(JSON.stringify({ bots: [{ id: "b1" }], resumeCursors: { agent: "cursor-value" } }));
+      res.end(JSON.stringify({
+        bots: [{ id: "b1" }],
+        resumeCursors: { agent: "cursor-value" },
+        localVm: { source: "existing", configured: true, sshAlias: "personal-linux-vm" },
+      }));
     };
 
     const { status, text } = await device();
     expect(status).toBe(200);
-    expect(JSON.parse(text)).toEqual({ bots: [{ id: "b1" }] });
+    expect(JSON.parse(text)).toEqual({ bots: [{ id: "b1" }], localVm: { source: "existing", configured: true } });
     expect(text).not.toContain("cursor-value");
+    expect(text).not.toContain("personal-linux-vm");
   });
 });

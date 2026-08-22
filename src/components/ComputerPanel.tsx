@@ -59,7 +59,8 @@ type Phase =
   | "off"
   | "error";
 
-interface LocalVmStatus {
+interface ManagedLocalVmStatus {
+  source: "managed";
   mode: "shared" | "per-bot";
   max_instances: number;
   image: boolean;
@@ -75,6 +76,26 @@ interface LocalVmStatus {
   problem: string | null;
   viewer_url: string;
 }
+
+interface ExistingLocalVmStatus {
+  source: "existing";
+  configured: boolean;
+  sshAlias: string | null;
+  ssh: "not-configured" | "connected" | "unreachable";
+  os: "unknown" | "linux" | "unsupported";
+  driver: "unknown" | "compatible" | "missing" | "incompatible";
+  mcp: "unknown" | "ready" | "failed";
+  tools: string[];
+  desktopReady: boolean;
+  ready: boolean;
+  problem: string | null;
+  errorCode: string | null;
+  driver_version: string;
+  viewer_url: "";
+  watch_only: true;
+}
+
+type LocalVmStatus = ManagedLocalVmStatus | ExistingLocalVmStatus;
 
 function routineScheduleLabel(routine: Routine) {
   if (routine.schedule.type === "once") {
@@ -139,6 +160,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   );
+  const managedVmStatus = vmStatus?.source === "managed" ? vmStatus : null;
+  const vmWatchOnly = phase === "vm" && vmStatus?.source === "existing" && vmStatus.watch_only;
+  const localComputerLabel = state.config?.localVm.source === "existing" ? "Existing VM" : "Local VM";
 
   useEffect(() => {
     return window.ogb?.desktopViewer?.onState((viewer) => {
@@ -177,7 +201,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     bot.computer === "cloud"
       ? cloudBackend === "vps" ? "this self-hosted VPS" : "this cloud box"
       : bot.computer === "vm"
-        ? "the Local VM"
+        ? state.config?.localVm.source === "existing" ? "the Existing VM" : "the Local VM"
       : bot.computer === "local"
         ? "this computer"
         : bot.computer === "off"
@@ -218,7 +242,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       api(`/api/bots/${bot.id}/local-computer`)
         .then((rawStatus) => {
           if (!alive) return;
-          const status: LocalVmStatus = rawStatus;
+          const status: LocalVmStatus = rawStatus.source === "existing"
+            ? rawStatus as ExistingLocalVmStatus
+            : { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
           setVmStatus(status);
           // parse at the boundary: our own status endpoint sends a string or nothing
           const viewerUrl = String(status.viewer_url ?? "");
@@ -226,6 +252,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           if (status.ready) {
             vmReadinessAttempts.current = 0;
             setPhase("vm");
+          } else if (status.source === "existing") {
+            setError(`${status.problem ?? "The Existing VM is not ready"}. Open App Settings → Local VM.`);
+            setPhase("vm-unavailable");
           } else if (
             status.container === "running" &&
             status.imageMatches &&
@@ -369,6 +398,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     cloudSupported,
     vpsSupported,
     state.config?.vps?.sshAlias,
+    state.config?.localVm.source,
   ]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll
@@ -507,6 +537,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   };
 
   const openDesktop = async () => {
+    if (vmWatchOnly) {
+      setError("Existing VM is watch-only; OpenMausBot cannot open a live viewer or take control.");
+      return;
+    }
     setPending("join");
     setControlPending(true);
     setError(null);
@@ -598,14 +632,17 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         });
       }
       if (action !== "vm-delete") {
-        const status: LocalVmStatus = await api(`/api/bots/${bot.id}/local-computer/run`, {
+        const rawStatus = await api(`/api/bots/${bot.id}/local-computer/run`, {
           method: "POST",
           body: "{}",
         });
+        const status: LocalVmStatus = rawStatus.source === "existing"
+          ? rawStatus as ExistingLocalVmStatus
+          : { source: "managed", ...rawStatus } as ManagedLocalVmStatus;
         setVmStatus(status);
         setPhase(status.ready ? "vm" : "checking");
       } else {
-        setVmStatus((current) => current ? { ...current, container: "missing", ready: false } : current);
+        setVmStatus((current) => current?.source === "managed" ? { ...current, container: "missing", ready: false } : current);
         setPhase("vm-unavailable");
       }
     } catch (e) {
@@ -694,7 +731,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
             <span>{bot.name}'s screen</span>
             {phase === "local" && <span className="text-[11px]">this computer</span>}
-            {phase === "vm" && <span className="text-[11px]">Local VM</span>}
+            {phase === "vm" && <span className="text-[11px]">{vmWatchOnly ? "Existing VM · watch-only" : "Local VM"}</span>}
             {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
@@ -703,7 +740,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               src={frameSrc}
               alt={`${bot.name}'s screen`}
               className="h-full w-full object-contain"
-              title={phase === "vm" ? "Watch-only preview — use Open desktop to click and type" : undefined}
+              title={phase === "vm" ? vmWatchOnly ? "Watch-only preview — live viewer and Take Control are unavailable" : "Watch-only preview — use Open desktop to click and type" : undefined}
             />
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
@@ -718,7 +755,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 {phase === "ready"
                   ? "Waiting for the first frame…"
                   : phase === "vm"
-                    ? "Capturing the Local VM screen…"
+                    ? vmWatchOnly ? "Showing the Existing VM screen (watch-only)…" : "Capturing the Local VM screen…"
                   : phase === "local"
                     ? isLinux
                       ? "Ready for approved bot actions. Start the separate preview below when you want to watch the screen."
@@ -736,16 +773,16 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 </button>
               )}
               {phase === "vm-unavailable" && (
-                vmStatus?.mode === "per-bot" && vmStatus.image && vmStatus.create_supported ? (
+                managedVmStatus?.mode === "per-bot" && managedVmStatus.image && managedVmStatus.create_supported ? (
                   <button
-                    onClick={() => void runVmAction(vmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
+                    onClick={() => void runVmAction(managedVmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
                     disabled={pending !== null}
                     className="mt-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50"
                   >
                     {(pending === "vm-create" || pending === "vm-recreate") && (
                       <Loader2 size={13} className="mr-1.5 inline animate-spin" />
                     )}
-                    {vmStatus.container === "missing" ? `Create ${bot.name}'s VM` : `Replace ${bot.name}'s VM`}
+                    {managedVmStatus.container === "missing" ? `Create ${bot.name}'s VM` : `Replace ${bot.name}'s VM`}
                   </button>
                 ) : (
                   <button
@@ -815,16 +852,22 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               <b>{bot.name}</b> asked for your hands: {control.helpReason}
             </div>
             <div className="mt-2 flex gap-2">
-              <button
-                onClick={() =>
-                  phase === "vm" || cloudBackend === "box" ? void openDesktop() : controlAction("take")
-                }
-                disabled={controlPending || pending === "join"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
-              >
-                {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
-                Take control
-              </button>
+              {vmWatchOnly ? (
+                <div className="flex-1 rounded-lg bg-raised px-3 py-2 text-center text-[12px] text-ink-secondary">
+                  Existing VM is watch-only; Take Control is unavailable.
+                </div>
+              ) : (
+                <button
+                  onClick={() =>
+                    phase === "vm" || cloudBackend === "box" ? void openDesktop() : controlAction("take")
+                  }
+                  disabled={controlPending || pending === "join"}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+                >
+                  {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
+                  Take control
+                </button>
+              )}
               <button
                 onClick={() => controlAction("dismiss-help")}
                 disabled={controlPending}
@@ -840,7 +883,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
               {phase === "ready" && cloudBackend === "box" && " Use Open desktop to drive."}
-              {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
+              {phase === "vm" && (vmWatchOnly ? " Existing VM is watch-only; release the stale hold to let the bot continue." : " Use Open desktop to drive — the preview here is watch-only.")}
             </div>
             <button
               onClick={() => controlAction("release")}
@@ -852,7 +895,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </button>
           </div>
         )}
-        {phase === "vm" && vmViewerUrl && control.held && (
+        {phase === "vm" && !vmWatchOnly && vmViewerUrl && control.held && (
           <button
             onClick={() => void openDesktop()}
             disabled={pending === "join"}
@@ -863,7 +906,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             Open live desktop
           </button>
         )}
-        {phase === "vm" && !control.held && !control.helpReason && (
+        {phase === "vm" && !vmWatchOnly && !control.held && !control.helpReason && (
           <button
             onClick={() => void openDesktop()}
             disabled={controlPending || pending === "join" || !vmViewerUrl}
@@ -874,7 +917,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             Take control
           </button>
         )}
-        {phase === "vm" && vmStatus?.mode === "per-bot" && (
+        {phase === "vm" && managedVmStatus?.mode === "per-bot" && (
           <button
             onClick={() => void runVmAction("vm-delete")}
             disabled={pending !== null || bot.busy}
@@ -941,15 +984,21 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   : cloudBackend === "vps"
                     ? "Auto reuses a ready VPS when one exists, otherwise this computer. "
                     : "Auto uses a cloud box when one exists, otherwise this computer. ")}
-              Pick where this bot's computer lives. <b className="text-ink">Local VM</b> is a Cua-controlled Linux desktop
-              in a container on this machine — free and separate from your own desktop. Set it up in App
-              Settings → Local VM.
+               Pick where this bot's computer lives. {state.config?.localVm.source === "existing" ? (
+                 <>
+                   <b className="text-ink">Existing VM</b> is a user-managed Linux desktop reached through your SSH config. OpenMausBot validates it and shows a watch-only preview; it does not create, isolate, or control the VM. Configure it in App Settings → Local VM.
+                 </>
+               ) : (
+                 <>
+                   <b className="text-ink">Local VM</b> is a Cua-controlled Linux desktop in a container on this machine — free and separate from your own desktop. Set it up in App Settings → Local VM.
+                 </>
+               )}
           </div>
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
             {(
               [
                 ["cloud", "Cloud"],
-                ["vm", "Local VM"],
+                ["vm", localComputerLabel],
                 ["local", "This computer"],
                 ["off", "Off"],
               ] as const
@@ -961,7 +1010,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   (mode === "local" && !localSelectable);
                 const unavailableTitle =
                   mode === "vm" && !vmSupported
-                    ? "This model engine cannot use the Local VM"
+                    ? `This model engine cannot use the ${localComputerLabel}`
                     : mode === "cloud" && !cloudSupported
                       ? "This model engine cannot use cloud computer tools"
                       : mode === "local" && !localSelectable

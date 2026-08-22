@@ -1209,7 +1209,7 @@ describe("harness HTTP API", () => {
     const first = (await api("POST", "/api/bots")).body.bot;
     const second = (await api("POST", "/api/bots")).body.bot;
     const before = await api("GET", "/api/config");
-    expect(before.body.localVm).toEqual({ mode: "shared", maxInstances: 2 });
+    expect(before.body.localVm).toEqual({ source: "managed", mode: "shared", maxInstances: 2, sshAlias: "" });
 
     const shared = await api("GET", `/api/bots/${first.id}/local-computer`);
     expect(shared.status).toBe(200);
@@ -1219,7 +1219,7 @@ describe("harness HTTP API", () => {
       localVm: { mode: "per-bot", maxInstances: 3 },
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
+    expect(saved.body.localVm).toEqual({ source: "managed", mode: "per-bot", maxInstances: 3, sshAlias: "" });
 
     const [firstStatus, secondStatus] = await Promise.all([
       api("GET", `/api/bots/${first.id}/local-computer`),
@@ -1238,6 +1238,69 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
     await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
+  });
+
+  it("persists the Existing VM source without exposing lifecycle or Take Control actions", async () => {
+    const created = await api("POST", "/api/bots", {});
+    const botId = created.body.bot.id;
+    await api("PATCH", `/api/bots/${botId}`, { name: "Existing VM Guard Fixture" });
+    try {
+      const saved = await api("PATCH", "/api/config", {
+        localVm: { source: "existing", sshAlias: "fixture-existing-vm" },
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.localVm).toEqual({
+        source: "existing",
+        sshAlias: "fixture-existing-vm",
+      });
+      expect((await api("GET", "/api/config")).body.localVm).toEqual({
+        source: "existing",
+        sshAlias: "fixture-existing-vm",
+      });
+
+      const invalid = await api("PATCH", "/api/config", { localVm: { sshAlias: "vm; reboot" } });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.error).toContain("localVm.sshAlias");
+
+      const lifecycle = await api("POST", "/api/local-computer/start", {});
+      expect(lifecycle.status).toBe(409);
+      expect(lifecycle.body.error).toContain("user-managed");
+
+      const selected = await api("PATCH", `/api/bots/${botId}`, { computer: "vm" });
+      expect(selected.status).toBe(200);
+      const engine = await api("PATCH", `/api/bots/${botId}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      });
+      expect(engine.status).toBe(200);
+      const started = await api("POST", `/api/bots/${botId}/messages`, { text: "hold the Existing VM turn" });
+      expect(started.status).toBe(202);
+      await expect.poll(async () => {
+        const state = (await api("GET", "/api/bots")).body;
+        return state.bots.find((bot: { id: string }) => bot.id === botId)?.busy;
+      }, { timeout: 5_000 }).toBe(true);
+      const destination = await api("PATCH", `/api/bots/${botId}`, { computer: "cloud" });
+      expect(destination.status).toBe(409);
+      expect(destination.body.error).toContain("active Existing VM turn");
+      await api("POST", `/api/bots/${botId}/interrupt`);
+      await expect.poll(async () => {
+        const state = (await api("GET", "/api/bots")).body;
+        return state.bots.find((bot: { id: string }) => bot.id === botId)?.busy;
+      }, { timeout: 5_000 }).toBe(false);
+      const take = await api("POST", `/api/bots/${botId}/computer/control`, { action: "take" });
+      expect(take.status).toBe(409);
+      expect(take.body.error).toContain("watch-only");
+      const viewer = await api("POST", `/api/bots/${botId}/computer/join`, {});
+      expect(viewer.status).toBe(409);
+      expect(viewer.body.error).toContain("watch-only");
+      await api("PATCH", "/api/config", { localVm: { sshAlias: "" } });
+      const status = await api("GET", "/api/local-computer");
+      expect(status.body).toMatchObject({ source: "existing", ready: false, ssh: "not-configured" });
+      expect(status.body).not.toHaveProperty("mode");
+      expect(status.body).not.toHaveProperty("max_instances");
+    } finally {
+      await api("PATCH", "/api/config", { localVm: { source: "managed", sshAlias: "" } });
+      await api("DELETE", `/api/bots/${botId}`);
+    }
   });
 
   it("keeps an active turn alive when only the room timeout changes", async () => {

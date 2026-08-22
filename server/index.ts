@@ -46,6 +46,8 @@ import {
   loadConfig,
   localVmMaxInstances,
   localVmMode,
+  localVmSource,
+  localVmSshAlias,
   parseConfigPatch,
   roomTurnTimeoutMinutes,
   saveConfig,
@@ -97,6 +99,12 @@ import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
 import { RepeatDetector, callKey } from "./repeat-detector.ts";
 import * as vps from "./vps-computer.ts";
+import {
+  EXISTING_VM_LEASE_KEY,
+  existingVmComputerMcp,
+  existingVmScreenshot,
+  existingVmStatus,
+} from "./existing-vm.ts";
 import { RoutineManager, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
 import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
@@ -596,6 +604,7 @@ const watchdog = new TurnWatchdog({
       if (currentBot?.busy) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
+        releaseExistingVmThread(turn.threadId);
         store.setActivity(currentBot.id, "idle");
       }
     }, 6_000);
@@ -657,6 +666,9 @@ let localVmImageBusy = false;
 let localVmProvisionBusy = false;
 let localVmModeChangeBusy = false;
 const activeVpsThreads = new Map<string, string>();
+const existingVmLease = localVmLeases.forTarget(EXISTING_VM_LEASE_KEY);
+const existingVmThreadIds = new Map<string, string>();
+const existingVmActiveThreads = new Map<string, string>();
 const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
 const localVmIdles = new Map<string, LocalVmIdleTimer>();
 
@@ -701,9 +713,18 @@ function releaseLocalVmThread(threadId: string): void {
   localVmThreadTargets.delete(threadId);
 }
 
+function releaseExistingVmThread(threadId: string): void {
+  const botId = existingVmThreadIds.get(threadId);
+  if (!botId) return;
+  existingVmLease.release(threadId);
+  if (existingVmActiveThreads.get(botId) === threadId) existingVmActiveThreads.delete(botId);
+  existingVmThreadIds.delete(threadId);
+}
+
 // A running VM may have survived an app/server restart. Start its idle
 // backstop even if nobody opens Settings or begins a turn this session.
 void (async () => {
+  if (localVmSource(cfg) !== "managed") return;
   const targets = localVmMode(cfg) === "per-bot"
     ? store.bots.filter((bot) => bot.computer === "vm").map((bot) => perBotLocalVmTarget(bot.id))
     : [SHARED_LOCAL_VM_TARGET];
@@ -719,8 +740,10 @@ bus.subscribe((event: RuntimeEvent) => {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
     localVmIdleFor(localVmTarget).touch();
   }
+  if (existingVmThreadIds.has(event.threadId)) existingVmLease.touch(event.threadId);
   if (event.type === "turn.completed") {
     releaseLocalVmThread(event.threadId);
+    releaseExistingVmThread(event.threadId);
   }
   broadcast({ kind: "runtime", event });
   const routineRun = routines?.handleRuntimeEvent(event) ?? null;
@@ -1445,7 +1468,7 @@ async function startTurn(
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
-      let computerKind: "box" | "vps" | "vm" | "local" | null = null;
+      let computerKind: "box" | "vps" | "vm" | "existing-vm" | "local" | null = null;
 
       // Explicit destinations are strict. In particular, Local VM must never
       // fall through to host CUA and accidentally click on the user's Mac.
@@ -1453,29 +1476,47 @@ async function startTurn(
         if (!mountsComputerMcp || instance.driverKind === "boxAgent") {
           throw new Error("this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination");
         }
-        const localVmTarget = localVmTargetForBot(bot.id);
-        if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
-          throw new Error("this Local VM is being started, stopped, or replaced — wait for setup to finish");
+        if (localVmSource(cfg) === "existing") {
+          // Existing VM is one user-owned desktop, regardless of the managed
+          // Local VM's shared/per-bot policy. Keep a separate stable lease lane
+          // so switching sources never lets two bots drive it at once.
+          if (!existingVmLease.claim(threadId, bot.id, localVmOwnerBusy)) {
+            throw new Error("this Existing VM is already being used by another turn — wait for that turn to finish");
+          }
+          existingVmThreadIds.set(threadId, bot.id);
+          existingVmActiveThreads.set(bot.id, threadId);
+          const existing = await existingVmStatus(cfg);
+          if (!existing.ready) {
+            throw new Error(`${existing.problem ?? "the Existing VM is not ready"} (App Settings → Local VM)`);
+          }
+          integrations.localComputer = existingVmComputerMcp(cfg, controlIntegration(bot.id));
+          previewCapture = async () => existingVmScreenshot(cfg);
+          computerKind = "existing-vm";
+        } else {
+          const localVmTarget = localVmTargetForBot(bot.id);
+          if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
+            throw new Error("this Local VM is being started, stopped, or replaced — wait for setup to finish");
+          }
+          // Claim before the first await. The lifecycle route performs its
+          // matching check synchronously, so neither side can enter while the
+          // other is between inspection and mutation.
+          if (!localVmLeaseFor(localVmTarget).claim(threadId, bot.id, localVmOwnerBusy)) {
+            throw new Error("this Local VM is already being used by another turn — wait for that turn to finish");
+          }
+          localVmThreadTargets.set(threadId, localVmTarget);
+          localVmActiveThreads.set(localVmTarget.key, threadId);
+          localVmIdleFor(localVmTarget).touch();
+          const localVm = await containerComputerStatus(undefined, undefined, localVmTarget);
+          if (!localVm.ready || !localVm.runtime) {
+            throw new Error(`${localVm.problem ?? "the Local VM is not ready"} (App Settings → Local VM)`);
+          }
+          integrations.localComputer = containerComputerMcp(
+            localVm.runtime,
+            controlIntegration(bot.id),
+            localVmTarget,
+          );
+          computerKind = "vm";
         }
-        // Claim before the first await. The lifecycle route performs its
-        // matching check synchronously, so neither side can enter while the
-        // other is between inspection and mutation.
-        if (!localVmLeaseFor(localVmTarget).claim(threadId, bot.id, localVmOwnerBusy)) {
-          throw new Error("this Local VM is already being used by another turn — wait for that turn to finish");
-        }
-        localVmThreadTargets.set(threadId, localVmTarget);
-        localVmActiveThreads.set(localVmTarget.key, threadId);
-        localVmIdleFor(localVmTarget).touch();
-        const localVm = await containerComputerStatus(undefined, undefined, localVmTarget);
-        if (!localVm.ready || !localVm.runtime) {
-          throw new Error(`${localVm.problem ?? "the Local VM is not ready"} (App Settings → Local VM)`);
-        }
-        integrations.localComputer = containerComputerMcp(
-          localVm.runtime,
-          controlIntegration(bot.id),
-          localVmTarget,
-        );
-        computerKind = "vm";
       } else if (wants === "local") {
         if (!shouldMountLocalComputer({
           requested: "local",
@@ -1632,6 +1673,8 @@ async function startTurn(
             ? " You have your own cloud computer. In Chrome, prefer browser_snapshot with browser_click/browser_fill for semantic, trusted actions; use screenshot/click/type_text for visual or non-browser UI, open_url for navigation, and computer_exec for Linux tasks. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable pixel actions with computer_batch."
             : computerKind === "vps"
               ? " You have your own self-hosted remote Linux computer through the official Cua tools. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully."
+              : computerKind === "existing-vm"
+                ? " You have a user-managed Linux VM through the official Cua tools. Its filesystem may be persistent and is controlled by the user outside OpenMausBot; do not assume it is disposable, isolated, or owned by OpenMausBot. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully."
               : computerKind === "local"
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
               : "") +
@@ -1670,6 +1713,7 @@ async function startTurn(
       }
     } catch (e) {
       releaseLocalVmThread(threadId);
+      releaseExistingVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
       watchdog.settle(threadId);
       turnUsage.delete(threadId);
@@ -2192,9 +2236,13 @@ function stderrOf(err: unknown): string {
   return typeof s === "string" ? s : Buffer.isBuffer(s) ? s.toString("utf8") : "";
 }
 
-async function localVmPayload(target: LocalVmTarget) {
+async function localVmPayload(target: LocalVmTarget, forceExistingRefresh = false) {
+  if (localVmSource(cfg) === "existing") {
+    return existingVmStatus(cfg, { force: forceExistingRefresh });
+  }
   const status = await containerComputerStatus(undefined, undefined, target);
   return {
+    source: "managed" as const,
     ...status,
     commands: setupCommands(status.runtime, process.platform, target),
     idle_timeout_ms: LOCAL_VM_IDLE_MS,
@@ -2226,6 +2274,7 @@ async function perBotLocalVmCountForModeChange(): Promise<number | null> {
 }
 
 function configStatus() {
+  const source = localVmSource(cfg);
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: {
@@ -2242,10 +2291,9 @@ function configStatus() {
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
-    localVm: {
-      mode: localVmMode(cfg),
-      maxInstances: localVmMaxInstances(cfg),
-    },
+    localVm: source === "existing"
+      ? { source, sshAlias: localVmSshAlias(cfg) ?? "" }
+      : { source, mode: localVmMode(cfg), maxInstances: localVmMaxInstances(cfg), sshAlias: localVmSshAlias(cfg) ?? "" },
   };
 }
 
@@ -2264,6 +2312,8 @@ async function reloadProviders() {
       localVmLeaseFor(target).current(localVmOwnerBusy)?.botId === b.id
     )?.[0];
     if (vmThread) releaseLocalVmThread(vmThread);
+    const existingThread = [...existingVmThreadIds.entries()].find(([, ownerBotId]) => ownerBotId === b.id)?.[0];
+    if (existingThread) releaseExistingVmThread(existingThread);
     stopScreenPoller(b.id);
     activeVpsThreads.delete(b.id);
     finalizeDelegationWatch(
@@ -3313,6 +3363,14 @@ const server = createServer(async (req, res) => {
       const nextSelection = (body as Record<string, unknown>).modelSelection as
         | { instanceId?: string; effort?: string }
         | undefined;
+      const existingVmTurnActive = existingVmActiveThreads.has(m[1]) || (
+        existingBot?.busy === true &&
+        existingBot.computer === "vm" &&
+        localVmSource(cfg) === "existing"
+      );
+      if (body.computer !== undefined && existingVmTurnActive && body.computer !== existingBot?.computer) {
+        return json(res, 409, { error: "stop the active Existing VM turn before changing its computer destination" });
+      }
       if (nextSelection?.effort !== undefined) {
         if (!isEffortLevel(nextSelection.effort)) {
           return json(res, 400, { error: `effort "${String(nextSelection.effort)}" is not recognized` });
@@ -3461,7 +3519,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      if (localVmMode(cfg) === "per-bot") {
+      if (localVmSource(cfg) === "managed" && localVmMode(cfg) === "per-bot") {
         const target = perBotLocalVmTarget(bot.id);
         if (localVmActiveThreads.has(target.key) || localVmLifecycleBusy.has(target.key)) {
           return json(res, 409, { error: "stop this bot's Local VM turn or setup action before deleting the bot" });
@@ -3480,6 +3538,9 @@ const server = createServer(async (req, res) => {
       await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
       stopScreenPoller(bot.id);
       activeVpsThreads.delete(bot.id);
+      for (const [threadId, ownerBotId] of existingVmThreadIds) {
+        if (ownerBotId === bot.id) releaseExistingVmThread(threadId);
+      }
       routines!.disableForBot(bot.id);
       webhooks.disableForBot(bot.id);
       lastReply.delete(bot.threadId);
@@ -3755,7 +3816,7 @@ const server = createServer(async (req, res) => {
     // what the user's machine can host: which runtime is installed, whether
     // its daemon is up, and whether the desktop image and container exist
     if (method === "GET" && path === "/api/local-computer") {
-      return json(res, 200, await localVmPayload(SHARED_LOCAL_VM_TARGET));
+      return json(res, 200, await localVmPayload(SHARED_LOCAL_VM_TARGET, url.searchParams.get("refresh") === "1"));
     }
     m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
     if (m && method === "POST") {
@@ -3767,6 +3828,11 @@ const server = createServer(async (req, res) => {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const action = z.enum(["pull", "run", "start", "stop", "remove"]).parse(m[1]);
+      if (localVmSource(cfg) === "existing") {
+        return json(res, 409, {
+          error: "Existing VM is user-managed; OpenMausBot does not create, start, stop, replace, or delete it",
+        });
+      }
       if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(SHARED_LOCAL_VM_TARGET.key)) {
         return json(res, 409, { error: "another Local VM setup action is still running" });
       }
@@ -3784,6 +3850,7 @@ const server = createServer(async (req, res) => {
         if (action === "run" || action === "start") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
         if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
         return json(res, 200, {
+          source: "managed" as const,
           ...status,
           commands: setupCommands(status.runtime, process.platform, SHARED_LOCAL_VM_TARGET),
           idle_timeout_ms: LOCAL_VM_IDLE_MS,
@@ -3796,6 +3863,10 @@ const server = createServer(async (req, res) => {
       }
     }
     if (method === "POST" && path === "/api/local-computer/screenshot") {
+      if (localVmSource(cfg) === "existing") {
+        const frame = await existingVmScreenshot(cfg);
+        return json(res, 200, { image: `data:image/${frame.format};base64,${frame.png}` });
+      }
       localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
       return json(res, 200, {
         image: await containerComputerScreenshot(undefined, undefined, SHARED_LOCAL_VM_TARGET),
@@ -3806,7 +3877,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, await localVmPayload(localVmTargetForBot(bot.id)));
+      return json(res, 200, await localVmPayload(localVmTargetForBot(bot.id), url.searchParams.get("refresh") === "1"));
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|stop|remove)$/);
     if (m && method === "POST") {
@@ -3816,6 +3887,11 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const action = z.enum(["run", "stop", "remove"]).parse(m[2]);
+      if (localVmSource(cfg) === "existing") {
+        return json(res, 409, {
+          error: "Existing VM is user-managed; OpenMausBot does not create, start, stop, replace, or delete it",
+        });
+      }
       const target = localVmTargetForBot(bot.id);
       if (target.key === SHARED_LOCAL_VM_TARGET.key) {
         return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
@@ -3849,6 +3925,7 @@ const server = createServer(async (req, res) => {
         if (action === "run") localVmIdleFor(target).touch();
         if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
         return json(res, 200, {
+          source: "managed" as const,
           ...status,
           commands: setupCommands(status.runtime, process.platform, target),
           idle_timeout_ms: LOCAL_VM_IDLE_MS,
@@ -3864,6 +3941,10 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (localVmSource(cfg) === "existing") {
+        const frame = await existingVmScreenshot(cfg);
+        return json(res, 200, { image: `data:image/${frame.format};base64,${frame.png}` });
+      }
       const target = localVmTargetForBot(bot.id);
       localVmIdleFor(target).touch();
       return json(res, 200, {
@@ -4000,6 +4081,20 @@ const server = createServer(async (req, res) => {
         const nextAlias = vpsSshAlias({ ...cfg, vps: patch.vps });
         const aliasError = vpsAliasChangeError(currentAlias, nextAlias, activeVpsThreads.size > 0);
         if (aliasError) return json(res, 409, { error: aliasError });
+      }
+      if (patch.localVm !== undefined) {
+        const nextLocalVmConfig = {
+          ...cfg,
+          localVm: { ...cfg.localVm, ...patch.localVm },
+        };
+        const sourceChanged = localVmSource(nextLocalVmConfig) !== localVmSource(cfg);
+        const aliasChanged = localVmSshAlias(nextLocalVmConfig) !== localVmSshAlias(cfg);
+        if ((sourceChanged || aliasChanged) && existingVmActiveThreads.size > 0) {
+          return json(res, 409, { error: "stop the active Existing VM turn before changing its source or SSH config alias" });
+        }
+        if (sourceChanged && localVmActiveThreads.size > 0) {
+          return json(res, 409, { error: "stop the active Local VM turn before changing its source" });
+        }
       }
       providerConfigBusy = true;
       const changingLocalVmMode = patch.localVm?.mode !== undefined && patch.localVm.mode !== localVmMode(cfg);
@@ -4248,6 +4343,12 @@ const server = createServer(async (req, res) => {
         }
         const body = await readBody(req);
         const action = String(body.action ?? "");
+        if (action === "take" && (
+          existingVmActiveThreads.has(bot.id) ||
+          (bot.computer === "vm" && localVmSource(cfg) === "existing")
+        )) {
+          return json(res, 409, { error: "Existing VM is watch-only; Take control is not available" });
+        }
         if (action === "take") return json(res, 200, computerControl.take(bot.id));
         if (action === "release") return json(res, 200, computerControl.release(bot.id));
         if (action === "dismiss-help") return json(res, 200, computerControl.dismissHelp(bot.id));
@@ -4267,6 +4368,9 @@ const server = createServer(async (req, res) => {
       // both backends — the Box branch runs commands too.
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
+      }
+      if (bot.computer === "vm" && localVmSource(cfg) === "existing") {
+        return json(res, 409, { error: "Existing VM is watch-only; live viewer and cloud computer actions are unavailable" });
       }
       if (bot.cloudBackend === "vps") {
         if (m[2] === "join" || m[2] === "exec") {

@@ -52,6 +52,7 @@ const roomConfigSchema = z.object({
     .max(MAX_ROOM_TURN_TIMEOUT_MINUTES),
 });
 const localVmConfigSchema = z.object({
+  source: z.enum(["managed", "existing"]).optional(),
   mode: z.enum(["shared", "per-bot"]).optional(),
   maxInstances: z
     .number()
@@ -59,6 +60,9 @@ const localVmConfigSchema = z.object({
     .min(MIN_LOCAL_VM_MAX_INSTANCES)
     .max(MAX_LOCAL_VM_MAX_INSTANCES)
     .optional(),
+  sshAlias: z.string().refine((value) => value === "" || isValidSshAlias(value), {
+    message: "must be a simple SSH config alias",
+  }).optional(),
 });
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
@@ -102,9 +106,14 @@ export interface AppConfig {
   imageGen?: { key?: string };
   profile?: { name?: string; email?: string };
   rooms?: { turnTimeoutMinutes: number };
-  /** Shared preserves the historical singleton. Per-bot gives every bot a
-   * separate container, durable workspace, viewer and lease. */
-  localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
+  /** Managed preserves the historical container-backed Local VM. Existing is
+   * one user-owned Linux VM reached through a validated SSH alias. */
+  localVm?: {
+    source?: "managed" | "existing";
+    mode?: "shared" | "per-bot";
+    maxInstances?: number;
+    sshAlias?: string;
+  };
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
@@ -137,6 +146,14 @@ export function localVmMode(cfg: AppConfig): "shared" | "per-bot" {
 
 export function localVmMaxInstances(cfg: AppConfig): number {
   return cfg.localVm?.maxInstances ?? DEFAULT_LOCAL_VM_MAX_INSTANCES;
+}
+
+export function localVmSource(cfg: AppConfig): "managed" | "existing" {
+  return cfg.localVm?.source === "existing" ? "existing" : "managed";
+}
+
+export function localVmSshAlias(cfg: AppConfig): string | null {
+  return isValidSshAlias(cfg.localVm?.sshAlias) ? cfg.localVm.sshAlias : null;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.

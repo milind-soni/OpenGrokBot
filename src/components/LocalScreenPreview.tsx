@@ -3,6 +3,7 @@ import { Loader2, Monitor, RotateCcw, Square } from "lucide-react";
 
 import { requestScreenPreview, stopScreenPreview } from "@/lib/screen-preview";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { useI18n } from "@/lib/i18n-context";
 
 type PreviewPhase =
   | "idle"
@@ -22,6 +23,7 @@ const phaseCopy: Record<Exclude<PreviewPhase, "requesting" | "streaming">, strin
 };
 
 export function LocalScreenPreview() {
+  const { t } = useI18n();
   const { capabilities, ready } = useDesktopCapabilities();
   const preview = capabilities.screenPreview;
   const isLinux = capabilities.host.platform === "linux";
@@ -122,14 +124,14 @@ export function LocalScreenPreview() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <div id="local-preview-title" className="text-[15px] font-medium text-ink">
-            Preview this computer
+            {t("Preview this computer")}
           </div>
           <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
-            Preview only — starting a preview does not grant local control.
+            {t("Preview only — starting a preview does not grant local control.")}
           </div>
         </div>
         <span className="shrink-0 rounded-full bg-raised px-2 py-1 text-[10px] font-medium text-ink-secondary">
-          Preview only
+          {t("Preview only")}
         </span>
       </div>
 
@@ -139,7 +141,7 @@ export function LocalScreenPreview() {
           autoPlay
           muted
           playsInline
-          aria-label="Live preview of the selected screen"
+          aria-label={t("Live preview of the selected screen")}
           className={phase === "streaming" ? "h-full w-full object-contain" : "hidden"}
         />
         {phase !== "streaming" && (
@@ -151,10 +153,10 @@ export function LocalScreenPreview() {
             )}
             <span className="text-[12px]" aria-live="polite">
               {!ready
-                ? "Checking screen preview…"
+                ? t("Checking screen preview…")
                 : preview.available
-                  ? message
-                  : phaseCopy.unavailable}
+                  ? t(message)
+                  : t(phaseCopy.unavailable)}
             </span>
           </div>
         )}
@@ -163,10 +165,10 @@ export function LocalScreenPreview() {
       {phase === "streaming" && (
         <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-ink-secondary">
           <span className="truncate" title={sourceLabel}>
-            {preview.interaction === "portal-picker" ? sourceLabel : "This computer"}
+            {preview.interaction === "portal-picker" ? sourceLabel : t("This computer")}
           </span>
           <span className="flex items-center gap-1.5 text-success">
-            <span className="h-1.5 w-1.5 rounded-full bg-success" /> Sharing
+            <span className="h-1.5 w-1.5 rounded-full bg-success" /> {t("Sharing")}
           </span>
         </div>
       )}
@@ -191,14 +193,14 @@ export function LocalScreenPreview() {
           <Monitor size={14} />
         )}
         {phase === "requesting"
-          ? "Choose a screen…"
+          ? t("Choose a screen…")
           : phase === "streaming"
-            ? "Stop preview"
+            ? t("Stop preview")
             : retry
-              ? "Try again"
+              ? t("Try again")
               : preview.interaction === "portal-picker"
-                ? "Choose a screen"
-                : "Start preview"}
+                ? t("Choose a screen")
+                : t("Start preview")}
       </button>
     </section>
   );

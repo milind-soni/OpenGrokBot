@@ -15,9 +15,10 @@ import {
   type Attachment,
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
-import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
+import { defaultResponderName, groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { useI18n } from "@/lib/i18n-context";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -46,6 +47,7 @@ export function Composer({
 }) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
+  const { t } = useI18n();
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -65,8 +67,8 @@ export function Composer({
       members?.find((b) => b.id === group.busyBotId)
     : bot;
   const busyName = group
-    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? "A bot")
-    : (bot?.name ?? "The bot");
+    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? t("A bot"))
+    : (bot?.name ?? t("The bot"));
   // Per-thread draft: switching bots unmounts this component, so both the
   // text and its attachment chips have to outlive it (see lib/drafts).
   const [text, setText, attachments, setAttachments] = useComposerDraft(
@@ -158,22 +160,22 @@ export function Composer({
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const send = () => {
     if (attachments.some((attachment) => attachment.kind === "image") && !imageTargetsSupport(text)) {
-      dispatch({ type: "error", message: "The selected responder does not support image attachments." });
+      dispatch({ type: "error", message: t("The selected responder does not support image attachments.") });
       return;
     }
-    const t = composeMessage(text, attachments);
-    if (!t) return;
+    const composed = composeMessage(text, attachments);
+    if (!composed) return;
     if (busy && group) {
-      setQueued(t);
+      setQueued(composed);
       setText("");
       setAttachments([]);
       return;
     }
     if (group) {
-      dispatch({ type: "sendGroup", groupId: group.id, text: t });
+      dispatch({ type: "sendGroup", groupId: group.id, text: composed });
       track("message_sent", { room: true });
     } else if (bot) {
-      dispatch({ type: "send", botId: bot.id, text: t });
+      dispatch({ type: "send", botId: bot.id, text: composed });
       track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy });
     }
     setText("");
@@ -182,7 +184,7 @@ export function Composer({
   useEffect(() => {
     if (!busy && queued && group) {
       if (queued.includes("<attached-image ") && !imageTargetsSupport(queued)) {
-        dispatch({ type: "error", message: "The selected responder does not support image attachments." });
+        dispatch({ type: "error", message: t("The selected responder does not support image attachments.") });
         setQueued(null);
         return;
       }
@@ -211,10 +213,10 @@ export function Composer({
     const offEnd = bridge.onSpeechEnd(({ code }) => {
       setRecording(false);
       if (code === 2) {
-        setSpeechError("Dictation is only available on macOS for now.");
+        setSpeechError(t("Dictation is only available on macOS for now."));
       } else if (code === 1) {
         setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
+          t("Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security."),
         );
       }
     });
@@ -228,7 +230,7 @@ export function Composer({
 
   const toggleMic = () => {
     if (!capabilities.dictation.available || !window.ogb) {
-      setSpeechError("Dictation isn't available in this build.");
+      setSpeechError(t("Dictation isn't available in this build."));
       return;
     }
     baseText.current = text.trim();
@@ -247,11 +249,11 @@ export function Composer({
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
             <Clock size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Queued — sends when {busyName} finishes: “{queued}”
+              {t("Queued — sends when {name} finishes: “{message}”", { name: busyName, message: queued })}
             </span>
             <button
               onClick={() => setQueued(null)}
-              aria-label="Discard queued message"
+              aria-label={t("Discard queued message")}
               className="rounded p-0.5 hover:bg-raised hover:text-ink"
             >
               <X size={13} />
@@ -261,7 +263,7 @@ export function Composer({
         {pickerOpen && (
           <div
             role="listbox"
-            aria-label="Tag a bot"
+            aria-label={t("Tag a bot")}
             className="absolute bottom-full left-2 z-20 mb-2 w-72 overflow-hidden rounded-xl border border-hairline/40 bg-raised shadow-lg"
           >
             {candidates.map((peer, i) => (
@@ -288,7 +290,7 @@ export function Composer({
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? "Agent" : "Room"}</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? t("Agent") : t("Room")}</span>
               </button>
             ))}
           </div>
@@ -398,20 +400,25 @@ export function Composer({
           disabled={Boolean(approval)}
           placeholder={
             approval
-              ? "Answer the approval above to continue"
+              ? t("Answer the approval above to continue")
               : recording
-              ? "Listening…"
+              ? t("Listening…")
               : busy && canSteer
-                ? `${busyName} is working — Enter sends this into the running turn`
+                ? t("{name} is working — Enter sends this into the running turn", { name: busyName })
               : busy
                 ? group
-                  ? `${busyName} is working — Enter queues your message`
-                  : `${busyName} is working — sends when this turn finishes`
+                  ? t("{name} is working — Enter queues your message", { name: busyName })
+                  : t("{name} is working — sends when this turn finishes", { name: busyName })
                 : group
-                  ? `Message ${group.name} — ${groupComposerHint(group, members ?? [])}`
-                  : `Message ${bot?.name ?? ""}`
+                  ? t("Message {name} — {hint}", {
+                      name: group.name,
+                      hint: t(groupComposerHint(group, members ?? []), {
+                        name: defaultResponderName(group, members ?? []) ?? t("Lead"),
+                      }),
+                    })
+                  : t("Message {name}", { name: bot?.name ?? "" })
           }
-          aria-label={`Message ${group ? group.name : (bot?.name ?? "")}`}
+          aria-label={t("Message {name}", { name: group ? group.name : (bot?.name ?? "") })}
           className="max-h-40 w-full resize-none self-center bg-transparent py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
         {busy && (
@@ -420,9 +427,9 @@ export function Composer({
               if (group) dispatch({ type: "interruptGroup", groupId: group.id });
               else if (bot) dispatch({ type: "interrupt", botId: bot.id });
             }}
-            aria-label="Stop this turn"
+            aria-label={t("Stop this turn")}
             className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
-            title="Stop"
+            title={t("Stop")}
           >
             <Square size={14} className="fill-current" />
           </button>
@@ -430,14 +437,14 @@ export function Composer({
         {!busy && !hasContent && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
-            aria-label={recording ? "Stop dictation" : "Start dictation"}
+            aria-label={recording ? t("Stop dictation") : t("Start dictation")}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full",
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
                 : "text-ink-secondary hover:bg-raised hover:text-ink",
             )}
-            title={recording ? "Stop dictation (Esc)" : "Dictate"}
+            title={recording ? t("Stop dictation (Esc)") : t("Dictate")}
           >
             <Mic size={18} />
           </button>
@@ -445,8 +452,8 @@ export function Composer({
         {hasContent && (
           <button
             onClick={send}
-            aria-label={busy && canSteer ? "Send into the running turn" : busy ? "Queue message" : "Send message"}
-            title={busy && canSteer ? "Send into the running turn" : busy ? "Sends when the current turn finishes" : "Send"}
+            aria-label={busy && canSteer ? t("Send into the running turn") : busy ? t("Queue message") : t("Send message")}
+            title={busy && canSteer ? t("Send into the running turn") : busy ? t("Sends when the current turn finishes") : t("Send")}
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
               busy && !canSteer ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",

@@ -6,6 +6,7 @@ import { Pencil } from "lucide-react";
 import { nextRename } from "@/lib/rename";
 import { cn } from "@/lib/cn";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
+import { useI18n } from "@/lib/i18n-context";
 
 export function RenameTitle({
   value,
@@ -26,6 +27,7 @@ export function RenameTitle({
   className?: string;
   inputClassName?: string;
 }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
@@ -51,7 +53,7 @@ export function RenameTitle({
         autoFocus
         value={draft}
         maxLength={BOT_PROFILE_LIMITS.name}
-        aria-label="Rename"
+        aria-label={t("Rename")}
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => finish(true)}
@@ -87,9 +89,9 @@ export function RenameTitle({
           <button
             type="button"
             onClick={onActivate}
-            aria-label={`Open ${value}'s profile`}
+            aria-label={t("Open {name}'s profile", { name: value })}
             className={cn("min-w-0 truncate text-left", className)}
-            title="Open agent profile"
+            title={t("Open agent profile")}
           >
             {value}
           </button>
@@ -99,8 +101,8 @@ export function RenameTitle({
         <button
           type="button"
           onClick={startRename}
-          aria-label={`Rename ${value}`}
-          title="Rename agent"
+          aria-label={t("Rename {name}", { name: value })}
+          title={t("Rename agent")}
           className="flex size-10 shrink-0 items-center justify-center rounded text-ink-secondary opacity-70 hover:bg-raised hover:text-ink hover:opacity-100"
         >
           <Pencil size={12} />
@@ -112,10 +114,10 @@ export function RenameTitle({
   return (
     <span
       className={cn("cursor-text", className)}
-      title="Double-click to rename"
+      title={t("Double-click to rename")}
       tabIndex={0}
       role="button"
-      aria-label={`Rename ${value}`}
+      aria-label={t("Rename {name}", { name: value })}
       onDoubleClick={startRename}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {

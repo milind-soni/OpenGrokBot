@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
+import { useI18n } from "@/lib/i18n-context";
 
 export function Card({
   title,
@@ -21,6 +22,7 @@ export function Card({
 
 /** A command the user is meant to run, with one-click copy. */
 export function CommandLine({ command }: { command: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<number | null>(null);
 
@@ -49,7 +51,7 @@ export function CommandLine({ command }: { command: string }) {
       </code>
       <button
         onClick={() => void copy()}
-        aria-label="Copy command"
+        aria-label={t("Copy command")}
         className="shrink-0 rounded p-1 text-ink-secondary hover:bg-raised hover:text-ink"
       >
         {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}

@@ -16,7 +16,7 @@ import {
 } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
-import { effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
+import { defaultResponderName, effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
 import { ConnectorCard } from "./ConnectorCard";
@@ -36,15 +36,19 @@ import {
   resolveTranscriptWindow,
   tailWindowStart,
 } from "@/lib/transcript-window";
+import { useI18n } from "@/lib/i18n-context";
+import type { TranslationValues } from "@/lib/i18n";
 
-function dayLabel(at: number): string {
+type Translate = (source: string, values?: TranslationValues) => string;
+
+function dayLabel(at: number, locale: string, t: Translate): string {
   const d = new Date(at);
   const now = new Date();
   const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  if (diffDays === 0) return t("Today");
+  if (diffDays === 1) return t("Yesterday");
+  return d.toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" });
 }
 
 /** 16px maus + name, shown once per sender cluster. */
@@ -67,6 +71,7 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: st
 /** Pin toggle for one room message — one pin per room, patchGroup path. */
 function PinToggle({ group, message }: { group: Group; message: Message }) {
   const { dispatch } = useStore();
+  const { t } = useI18n();
   const pinned = group.pinnedMessageId === message.id;
   return (
     <button
@@ -77,9 +82,9 @@ function PinToggle({ group, message }: { group: Group; message: Message }) {
           patch: { pinnedMessageId: pinned ? "" : message.id },
         })
       }
-      aria-label={pinned ? "Unpin message" : "Pin message"}
+      aria-label={pinned ? t("Unpin message") : t("Pin message")}
       className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-      title={pinned ? "Unpin this message" : "Pin this message to the top of the room"}
+      title={pinned ? t("Unpin this message") : t("Pin this message to the top of the room")}
     >
       {pinned ? <PinOff size={14} /> : <Pin size={14} />}
     </button>
@@ -96,6 +101,7 @@ const Transcript = memo(function Transcript({
   /** The windowed suffix of group.messages — the boundary lives in GroupView. */
   messages: Message[];
 }) {
+  const { locale, t } = useI18n();
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const textMessages = messages;
   return (
@@ -144,7 +150,7 @@ const Transcript = memo(function Transcript({
                 </div>
                 {!user && <ReactionBar threadId={group.threadId} message={m} />}
                 <span className="self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100">
-                  {formatTime(m.at)}
+                  {formatTime(m.at, locale)}
                 </span>
               </div>
               <ReactionChips threadId={group.threadId} message={m} members={members} align={user ? "right" : "left"} />
@@ -155,7 +161,7 @@ const Transcript = memo(function Transcript({
           <div key={m.id} className="contents" data-mid={m.id}>
             {newDay && (
               <div className="py-3 text-center text-[13px] text-ink-secondary">
-                {dayLabel(m.at)} {formatTime(m.at)}
+                {dayLabel(m.at, locale, t)} {formatTime(m.at, locale)}
               </div>
             )}
             {!user && m.from && newCluster && (
@@ -183,15 +189,16 @@ function StreamingBubble({ text }: { text: string }) {
 
 function DefaultResponderSelect({ group, members }: { group: Group; members: Bot[] }) {
   const { dispatch } = useStore();
+  const { t } = useI18n();
   const responder = effectiveDefaultResponder(group, members);
   const value = responder.kind === "member" ? `member:${responder.botId}` : responder.kind;
   const lead = responder.kind === "member" ? members.find((member) => member.id === responder.botId) : undefined;
   const title =
     responder.kind === "everyone"
-      ? "Plain messages go to every room member; @mentions override this"
+      ? t("Plain messages go to every room member; @mentions override this")
       : responder.kind === "mentions"
-        ? "Only explicitly @mentioned bots respond"
-        : `Plain messages go to ${lead?.name ?? "the lead bot"}; @mentions override this`;
+        ? t("Only explicitly @mentioned bots respond")
+        : t("Plain messages go to {name}; @mentions override this", { name: lead?.name ?? t("the lead bot") });
 
   const change = (nextValue: string) => {
     let next: GroupDefaultResponder;
@@ -204,21 +211,21 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
   return (
     <div className="relative shrink-0" title={title}>
       <select
-        aria-label="Default responder"
+        aria-label={t("Default responder")}
         value={value}
         onChange={(event) => change(event.target.value)}
         className="h-8 max-w-[190px] appearance-none truncate rounded-full border border-hairline/40 bg-raised/60 py-1 pl-3 pr-7 text-[12.5px] font-medium text-ink outline-none hover:bg-raised focus:border-accent"
       >
-        <optgroup label="Room lead">
+        <optgroup label={t("Room lead")}>
           {members.map((member) => (
             <option key={member.id} value={`member:${member.id}`}>
-              Lead: {member.name}
+              {t("Lead: {name}", { name: member.name })}
             </option>
           ))}
         </optgroup>
-        <optgroup label="Room behavior">
-          <option value="everyone">Everyone responds</option>
-          <option value="mentions">Mentions only</option>
+        <optgroup label={t("Room behavior")}>
+          <option value="everyone">{t("Everyone responds")}</option>
+          <option value="mentions">{t("Mentions only")}</option>
         </optgroup>
       </select>
       <ChevronDown
@@ -239,6 +246,7 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
  * rejected folder must not stick in local state. */
 function RoomWorkingFolder({ group }: { group: Group }) {
   const { capabilities } = useDesktopCapabilities();
+  const { t } = useI18n();
   const home = capabilities.host.homeDir;
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -267,28 +275,28 @@ function RoomWorkingFolder({ group }: { group: Group }) {
 
   return (
     <div className="rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">Working folder</div>
-      <div className="mt-0.5 text-[13px] text-ink-secondary">Where every bot in this room runs its shell and file tools.</div>
+      <div className="text-[15px] font-medium text-ink">{t("Working folder")}</div>
+      <div className="mt-0.5 text-[13px] text-ink-secondary">{t("Where every bot in this room runs its shell and file tools.")}</div>
       {locked ? (
         <div className="mt-3">
           <div className="truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={shownCwd}>
-            {shownCwd ? shortPath(shownCwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
+            {shownCwd ? shortPath(shownCwd, home) : <span className="text-ink-secondary">{t("Each bot's own folder")}</span>}
           </div>
           <div className="mt-2 text-[12px] text-ink-secondary">
-            Fixed after this room's first turn. Create a new room and choose its folder before sending the first message to work somewhere else.
+            {t("Fixed after this room's first turn. Create a new room and choose its folder before sending the first message to work somewhere else.")}
           </div>
         </div>
       ) : canPick ? (
         <div className="mt-3 flex items-center gap-2">
           <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={group.cwd}>
-            {group.cwd ? shortPath(group.cwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
+            {group.cwd ? shortPath(group.cwd, home) : <span className="text-ink-secondary">{t("Each bot's own folder")}</span>}
           </div>
           <button onClick={() => void pick()} disabled={saving} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            <FolderOpen size={14} /> Choose…
+            <FolderOpen size={14} /> {t("Choose…")}
           </button>
           {group.cwd && (
             <button onClick={() => void save(null)} disabled={saving} className="shrink-0 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50">
-              Clear
+              {t("Clear")}
             </button>
           )}
         </div>
@@ -303,12 +311,12 @@ function RoomWorkingFolder({ group }: { group: Group }) {
         >
           <input
             className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 font-mono text-[12.5px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
-            placeholder="Each bot's own folder — or an absolute path"
+            placeholder={t("Each bot's own folder — or an absolute path")}
             value={draft ?? group.cwd ?? ""}
             onChange={(e) => setDraft(e.target.value)}
           />
           <button type="submit" disabled={saving || draft === null} className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            Save
+            {t("Save")}
           </button>
         </form>
       )}
@@ -321,13 +329,14 @@ function RoomWorkingFolder({ group }: { group: Group }) {
  * else the room folder a first turn would pin. Always present so the desk
  * is settable before any folder exists; quiet (icon only) until then. */
 function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: () => void }) {
+  const { t } = useI18n();
   const folder = group.pinnedCwd === undefined ? group.cwd : (group.pinnedCwd ?? undefined);
   if (!folder) {
     return (
       <button
         onClick={onToggle}
         className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-        title="Room working folder"
+        title={t("Room working folder")}
       >
         <Folder size={14} />
       </button>
@@ -338,7 +347,7 @@ function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: ()
     <button
       onClick={onToggle}
       className="flex max-w-[180px] items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
-      title={`Working folder: ${folder}`}
+      title={t("Working folder: {folder}", { folder })}
     >
       <Folder size={12} />
       <span className="truncate font-mono">{name}</span>
@@ -348,6 +357,7 @@ function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: ()
 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
+  const { t } = useI18n();
   const stream = useStreaming();
   const streaming = stream.streaming[group.threadId];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -489,7 +499,7 @@ export function GroupView({ group }: { group: Group }) {
           {members.map((b) => (
             <span
               key={b.id}
-              title={`${b.name}${group.busyBotId === b.id ? " — working…" : ""}`}
+              title={group.busyBotId === b.id ? t("{name} — working…", { name: b.name }) : b.name}
               className={cn(
                 "relative inline-flex rounded-full",
                 group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
@@ -525,7 +535,7 @@ export function GroupView({ group }: { group: Group }) {
                   setBulletinOpen(false);
                 }
               }}
-              placeholder="Room instructions — every bot in this room follows them (who does what, tone, goals, a task checklist…)"
+              placeholder={t("Room instructions — every bot in this room follows them (who does what, tone, goals, a task checklist…)")}
               rows={4}
               className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-ink-secondary focus:outline-none"
             />
@@ -534,11 +544,11 @@ export function GroupView({ group }: { group: Group }) {
           <button
             onClick={() => setBulletinOpen(true)}
             className="mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised/40"
-            title="Room bulletin — shared instructions for every bot here"
+            title={t("Room bulletin — shared instructions for every bot here")}
           >
             <Pin size={12} className="shrink-0 text-ink-secondary" />
             <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>
-              {group.bulletin.split("\n")[0] || "Add room instructions…"}
+              {group.bulletin.split("\n")[0] || t("Add room instructions…")}
             </span>
           </button>
         )}
@@ -558,7 +568,7 @@ export function GroupView({ group }: { group: Group }) {
         const pinned = group.messages.find((m) => m.id === group.pinnedMessageId && m.kind === "text");
         const text = pinned ? (pinned.text ?? "").replace(/\s+/g, " ").trim() : "";
         if (!pinned || !text) return null;
-        const sender = pinned.role === "user" ? "You" : (pinned.from?.name ?? "A bot");
+        const sender = pinned.role === "user" ? t("You") : (pinned.from?.name ?? t("A bot"));
         return (
           <div className="mx-auto w-full max-w-[900px] px-5">
             <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
@@ -566,15 +576,15 @@ export function GroupView({ group }: { group: Group }) {
               <button
                 onClick={() => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: pinned.id })}
                 className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
-                title="Jump to the pinned message"
+                title={t("Jump to the pinned message")}
               >
                 <span className="shrink-0 text-[11.5px] font-medium text-accent">{sender}</span>
                 <span className="truncate text-[12.5px] text-ink-secondary">{text}</span>
               </button>
               <button
                 onClick={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
-                aria-label="Unpin message"
-                title="Unpin"
+                aria-label={t("Unpin message")}
+                title={t("Unpin")}
                 className="shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink"
               >
                 <X size={13} />
@@ -616,7 +626,7 @@ export function GroupView({ group }: { group: Group }) {
           className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
           role="log"
           aria-live="polite"
-          aria-label={`Room ${group.name}`}
+          aria-label={t("Room {name}", { name: group.name })}
         >
           {group.messages.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
@@ -635,7 +645,9 @@ export function GroupView({ group }: { group: Group }) {
               </div>
               <div className="text-[17px] font-semibold text-ink">{group.name}</div>
               <div className="max-w-[380px] text-[14px] text-ink-secondary">
-                {groupResponseHint(group, members)}
+                {t(groupResponseHint(group, members), {
+                  name: defaultResponderName(group, members) ?? t("The lead bot"),
+                })}
               </div>
             </div>
           )}
@@ -645,7 +657,7 @@ export function GroupView({ group }: { group: Group }) {
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
               >
-                Show earlier messages ({hiddenCount} more)
+                {t("Show earlier messages ({count} more)", { count: hiddenCount })}
               </button>
             </div>
           )}
@@ -656,7 +668,7 @@ export function GroupView({ group }: { group: Group }) {
                 onClick={showLater}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
               >
-                Show later messages ({laterCount} more)
+                {t("Show later messages ({count} more)", { count: laterCount })}
               </button>
             </div>
           )}
@@ -690,10 +702,10 @@ export function GroupView({ group }: { group: Group }) {
               scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
             });
           }}
-          aria-label="Jump to latest messages"
+          aria-label={t("Jump to latest messages")}
           className="animate-pop-in absolute bottom-24 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
         >
-          <ArrowDown size={13} /> Jump to latest
+          <ArrowDown size={13} /> {t("Jump to latest")}
         </button>
       )}
 

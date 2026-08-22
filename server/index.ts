@@ -4398,7 +4398,7 @@ const server = createServer(async (req, res) => {
           const existing = await perBotLocalVmCountForModeChange();
           if (existing === null) {
             return json(res, 409, {
-              error: "start the container runtime and delete every per-bot VM before switching the Local VM source",
+              error: "start the container runtime and delete every per-bot Local VM before switching the Local VM source",
             });
           }
           if (existing > 0) {
@@ -4415,7 +4415,7 @@ const server = createServer(async (req, res) => {
             const existing = await perBotLocalVmCountForModeChange();
             if (existing === null) {
               return json(res, 409, {
-                error: "start the container runtime and delete every per-bot VM before switching to shared mode",
+              error: "start the container runtime and delete every per-bot Local VM before switching to shared mode",
               });
             }
             if (existing > 0) {

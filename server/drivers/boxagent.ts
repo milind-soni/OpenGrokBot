@@ -130,12 +130,14 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
         const startedAt = Date.now();
         let lastText = "";
         let pendingText = "";
+        /** Emit unflushed deltas as assistant_text and reset pendingText. */
         const flushAssistantText = () => {
           const text = pendingText;
           pendingText = "";
           if (!text.trim()) return;
           emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
         };
+        /** Stream a full-text snapshot as a delta and accumulate it for flush. */
         const ingest = (text: string) => {
           const delta = text.startsWith(lastText) ? text.slice(lastText.length) : text;
           lastText = text;

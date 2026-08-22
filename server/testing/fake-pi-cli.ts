@@ -91,7 +91,7 @@ const streamPermissionTurn = () => {
   // wait for the answer before finishing
 };
 
-// message → tool → message → tool → message — the order the driver must keep
+/** Scripted text → tool → text → tool → text turn for order-contract tests. */
 const streamInterleaveTurn = () => {
   send({ type: "agent_start" });
   send({ type: "turn_start" });

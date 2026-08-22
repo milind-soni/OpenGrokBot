@@ -284,6 +284,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
         child.stdin.write(JSON.stringify(obj) + "\n");
       };
 
+      /** Emit buffered assistant text as its own item, then clear it. */
       const flushAssistantText = () => {
         if (!assistantText.trim()) return;
         const text = assistantText;

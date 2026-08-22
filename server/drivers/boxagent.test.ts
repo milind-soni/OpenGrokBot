@@ -11,12 +11,14 @@ import { BoxAgentDriver } from "./boxagent.ts";
 const BOX = "box-1";
 const PROMPT = "p1";
 
+/** JSON Response helper for the in-process Box HTTP fake. */
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 type Poll = { events: unknown[]; status?: { promptRun: { status: string; result?: string } } };
 
+/** Stub fetch so each GET /events + /prompts pair advances one poll in `script`. */
 function installFakeBox(script: Poll[]) {
   let i = 0;
   const previous = globalThis.fetch;

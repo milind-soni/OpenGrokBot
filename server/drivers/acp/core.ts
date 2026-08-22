@@ -317,6 +317,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
         const stop = () => killCliTree(child);
 
+        /** Emit buffered assistant text as its own item, then clear it. */
         const flushAssistantText = () => {
           const text = state.text;
           if (!text.trim()) return;

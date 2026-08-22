@@ -100,7 +100,7 @@ export function VoiceSettings({
           <button
             onClick={() => void saveKey()}
             disabled={saving || !key.trim()}
-            className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} />Save</>}
           </button>
@@ -149,7 +149,7 @@ export function VoiceSettings({
               disabled={!ready}
               title={ready ? "Hear this voice" : "Pick a voice first"}
               aria-label="Hear this voice"
-              className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Volume2 size={14} /> Try
             </button>
@@ -171,7 +171,7 @@ export function VoiceSettings({
           onClick={() => onPatch({ speakReplies: !bot.speakReplies })}
           className={cn(
             "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
-            bot.speakReplies ? "bg-accent" : "bg-raised",
+            bot.speakReplies ? "bg-accent" : "bg-control",
           )}
         >
           <span

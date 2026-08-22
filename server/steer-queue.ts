@@ -78,7 +78,16 @@ export function drainSteeredMessages(
     queues.delete(threadId);
     const appended: Message[] = [];
     for (const item of entry.items) {
-      appended.push(store.appendMessage(threadId, { role: "user", kind: "text", text: item.text }));
+      // queueId is the pending-chip identity from the 202; append still
+      // assigns a fresh transcript id so replay/exclude keep using message.id.
+      appended.push(
+        store.appendMessage(threadId, {
+          role: "user",
+          kind: "text",
+          text: item.text,
+          queueId: item.messageId,
+        }),
+      );
     }
     const last = appended.at(-1);
     if (!last) continue;

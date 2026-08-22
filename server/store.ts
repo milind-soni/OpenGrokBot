@@ -103,6 +103,9 @@ export interface Message {
    * them; a true stranded by a restart is inert because the client only
    * shows the affordance while the bot is busy. */
   queued?: boolean;
+  /** steer-queue entry this drained user line came from. The client pending
+   * chip matches on this id, not on equal text. Absent on ordinary sends. */
+  queueId?: string;
 }
 
 export type GroupDefaultResponder =

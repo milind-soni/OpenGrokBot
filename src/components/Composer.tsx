@@ -157,7 +157,7 @@ export function Composer({
   const pendingChip = group
     ? queued
     : bot
-      ? state.pendingQueued?.[bot.threadId]?.join("\n")
+      ? state.pendingQueued?.[bot.threadId]?.map((entry) => entry.text).join("\n")
       : undefined;
   // a chip on its own is a message: the send control has to appear for it
   const hasContent = Boolean(text.trim()) || attachments.length > 0;

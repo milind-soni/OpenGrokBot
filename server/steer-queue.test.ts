@@ -75,7 +75,12 @@ describe("steer-queue module", () => {
     const run = vi.fn();
     drainSteeredMessages(store, run);
     expect(store.messages).toHaveLength(1);
-    expect(store.messages[0]).toMatchObject({ role: "user", kind: "text", text: "hold that thought" });
+    expect(store.messages[0]).toMatchObject({
+      role: "user",
+      kind: "text",
+      text: "hold that thought",
+      queueId: queued.id,
+    });
     expect(store.messages[0]!.queued).toBeUndefined();
     expect(run).toHaveBeenCalledTimes(1);
     expect(_queuedCount("thread-a")).toBe(0);
@@ -84,8 +89,8 @@ describe("steer-queue module", () => {
   it("holds the queue while the bot is busy and drains it once when idle", () => {
     const bot = fakeBot("bot-b", "thread-b", true);
     const store = fakeStore([bot]);
-    queueSteeredMessage(bot, "first note");
-    queueSteeredMessage(bot, "second note");
+    const first = queueSteeredMessage(bot, "first note");
+    const second = queueSteeredMessage(bot, "second note");
     const run = vi.fn();
 
     drainSteeredMessages(store, run);
@@ -103,6 +108,7 @@ describe("steer-queue module", () => {
     expect(prompt).toBe("first note\nsecond note");
     // appended at drain, last message so startTurn adds nothing new
     expect(store.messages.map((m) => m.text)).toEqual(["first note", "second note"]);
+    expect(store.messages.map((m) => m.queueId)).toEqual([first.id, second.id]);
     expect(userMessage.text).toBe("second note");
     expect(run.mock.calls[0][4]).toEqual(store.messages.map((m) => m.id));
     expect(store.messages.every((m) => !m.queued)).toBe(true);

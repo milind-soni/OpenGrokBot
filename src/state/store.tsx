@@ -83,6 +83,9 @@ export interface Message {
    * Rendered only while the bot is busy, so a flag stranded by a server
    * restart never shows a promise nothing will keep. */
   queued?: boolean;
+  /** steer-queue entry this drained user line came from. Pending chips
+   * match on this id, not on equal text. Absent on ordinary sends. */
+  queueId?: string;
 }
 
 export type GroupDefaultResponder =
@@ -353,8 +356,12 @@ export interface AppState {
     nonce: number;
     kind: Exclude<MausMotion, "none">;
   } | null;
-  /** 1:1 queue-fallback lines waiting for drain; keyed by threadId. */
-  pendingQueued: Record<string, string[]>;
+  /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
+   * Each entry is identified by the server queueId, not by text. */
+  pendingQueued: Record<string, Array<{ queueId: string; text: string }>>;
+  /** queueIds whose drain frame beat the POST continuation. One-shot:
+   * a late pendingQueued for the same id must not resurrect the chip. */
+  consumedQueueIds: Record<string, true>;
 }
 
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
@@ -397,8 +404,8 @@ export type Action =
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | { type: "send"; botId: string; text: string }
-  | { type: "pendingQueued"; threadId: string; text: string }
-  | { type: "consumePendingQueued"; threadId: string; text: string }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string }
+  | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "editMessage"; botId: string; messageId: string; text: string }
   | { type: "switchBranch"; botId: string; messageId: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
@@ -897,17 +904,30 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     // handled entirely by the async wrapper
     case "pendingQueued": {
+      if (state.consumedQueueIds[action.queueId]) {
+        const consumedQueueIds = { ...state.consumedQueueIds };
+        delete consumedQueueIds[action.queueId];
+        return { ...state, consumedQueueIds };
+      }
       const prev = state.pendingQueued[action.threadId] ?? [];
+      if (prev.some((entry) => entry.queueId === action.queueId)) return state;
       return {
         ...state,
-        pendingQueued: { ...state.pendingQueued, [action.threadId]: [...prev, action.text] },
+        pendingQueued: {
+          ...state.pendingQueued,
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text }],
+        },
       };
     }
     case "consumePendingQueued": {
-      const prev = state.pendingQueued[action.threadId];
-      if (!prev?.length) return state;
-      const at = prev.indexOf(action.text);
-      if (at < 0) return state;
+      const prev = state.pendingQueued[action.threadId] ?? [];
+      const at = prev.findIndex((entry) => entry.queueId === action.queueId);
+      if (at < 0) {
+        return {
+          ...state,
+          consumedQueueIds: { ...state.consumedQueueIds, [action.queueId]: true },
+        };
+      }
       const rest = prev.filter((_, i) => i !== at);
       const pendingQueued = { ...state.pendingQueued };
       if (rest.length) pendingQueued[action.threadId] = rest;
@@ -970,6 +990,7 @@ export const initialState: AppState = {
   error: null,
   mascotMotion: null,
   pendingQueued: {},
+  consumedQueueIds: {},
 };
 
 // ── API client ─────────────────────────────────────────────────────────
@@ -1137,8 +1158,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ text: action.text }),
           })
             .then((body) => {
-              if (body?.queued && typeof body.threadId === "string") {
-                rawDispatch({ type: "pendingQueued", threadId: body.threadId, text: action.text });
+              if (
+                body?.queued &&
+                typeof body.threadId === "string" &&
+                typeof body.queueId === "string"
+              ) {
+                rawDispatch({
+                  type: "pendingQueued",
+                  threadId: body.threadId,
+                  queueId: body.queueId,
+                  text: action.text,
+                });
               }
             })
             .catch(showError);
@@ -1425,8 +1455,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       switch (frame.kind) {
         case "message": {
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
-          if (frame.message?.role === "user" && frame.message.text) {
-            rawDispatch({ type: "consumePendingQueued", threadId: frame.threadId, text: frame.message.text });
+          if (frame.message?.role === "user" && typeof frame.message.queueId === "string") {
+            rawDispatch({
+              type: "consumePendingQueued",
+              threadId: frame.threadId,
+              queueId: frame.message.queueId,
+            });
           }
           // a settled assistant bubble replaces the in-flight stream
           if (frame.message?.role === "bot" && frame.message?.kind === "text") {

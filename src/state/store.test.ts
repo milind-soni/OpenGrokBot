@@ -121,12 +121,17 @@ describe("pending queued chip", () => {
 
   it("records queue-fallback text and drops it when that user line lands", () => {
     const withBot = reducer(initialState, { type: "botPatched", bot });
-    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", text: "later" });
-    expect(queued.pendingQueued).toEqual({ t1: ["later"] });
+    const queued = reducer(withBot, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "q1",
+      text: "later",
+    });
+    expect(queued.pendingQueued).toEqual({ t1: [{ queueId: "q1", text: "later" }] });
     const landed = reducer(queued, {
       type: "consumePendingQueued",
       threadId: "t1",
-      text: "later",
+      queueId: "q1",
     });
     expect(landed.pendingQueued).toEqual({});
   });
@@ -136,31 +141,83 @@ describe("pending queued chip", () => {
     const queued = reducer(withBot, {
       type: "pendingQueued",
       threadId: "t1",
+      queueId: "q-ml",
       text: "line one\nline two",
     });
-    expect(queued.pendingQueued).toEqual({ t1: ["line one\nline two"] });
+    expect(queued.pendingQueued).toEqual({ t1: [{ queueId: "q-ml", text: "line one\nline two" }] });
     const landed = reducer(queued, {
       type: "consumePendingQueued",
       threadId: "t1",
-      text: "line one\nline two",
+      queueId: "q-ml",
     });
     expect(landed.pendingQueued).toEqual({});
   });
 
   it("leaves the chip on the old thread after a task switch", () => {
     const withBot = reducer(initialState, { type: "botPatched", bot });
-    const queued = reducer(withBot, { type: "pendingQueued", threadId: "t1", text: "stay here" });
+    const queued = reducer(withBot, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "q-stay",
+      text: "stay here",
+    });
     const switched = reducer(queued, {
       type: "botPatched",
       bot: { ...bot, threadId: "t2", messages: [] },
     });
-    expect(switched.pendingQueued).toEqual({ t1: ["stay here"] });
+    expect(switched.pendingQueued).toEqual({ t1: [{ queueId: "q-stay", text: "stay here" }] });
     expect(switched.pendingQueued[switched.bots[0]!.threadId]).toBeUndefined();
     const drained = reducer(switched, {
       type: "consumePendingQueued",
       threadId: "t1",
-      text: "stay here",
+      queueId: "q-stay",
     });
     expect(drained.pendingQueued).toEqual({});
+  });
+
+  it("consumes only the matching queue id when two pending lines share text", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const first = reducer(withBot, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "qa",
+      text: "same",
+    });
+    const both = reducer(first, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "qb",
+      text: "same",
+    });
+    expect(both.pendingQueued).toEqual({
+      t1: [
+        { queueId: "qa", text: "same" },
+        { queueId: "qb", text: "same" },
+      ],
+    });
+    const afterOther = reducer(both, {
+      type: "consumePendingQueued",
+      threadId: "t1",
+      queueId: "qa",
+    });
+    expect(afterOther.pendingQueued).toEqual({ t1: [{ queueId: "qb", text: "same" }] });
+  });
+
+  it("does not add a chip when the drain frame arrives before the POST continuation", () => {
+    const withBot = reducer(initialState, { type: "botPatched", bot });
+    const drained = reducer(withBot, {
+      type: "consumePendingQueued",
+      threadId: "t1",
+      queueId: "q1",
+    });
+    expect(drained.pendingQueued).toEqual({});
+    const late = reducer(drained, {
+      type: "pendingQueued",
+      threadId: "t1",
+      queueId: "q1",
+      text: "later",
+    });
+    expect(late.pendingQueued).toEqual({});
+    expect(late.consumedQueueIds).toEqual({});
   });
 });
